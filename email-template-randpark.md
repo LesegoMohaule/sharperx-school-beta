@@ -14,7 +14,7 @@ For child privacy and safety, the pilot can be run with school approval, parent 
 
 I have prepared a short public beta information page here:
 
-[Website link]
+https://lesegomohaule.github.io/sharperx-school-beta/
 
 I would appreciate a short meeting or call to present the product and discuss whether Randpark High School would be open to a limited beta pilot.
 

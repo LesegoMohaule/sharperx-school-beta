@@ -2,6 +2,8 @@
 
 This is a static public beta website for the SharperX School Tutor pilot.
 
+Live site: https://lesegomohaule.github.io/sharperx-school-beta/
+
 ## Free hosting options
 
 - GitHub Pages: best for a polished public link and full design control.

@@ -340,7 +340,8 @@ p {
 }
 
 .pilot-section .section-heading,
-.pilot-section .steps {
+.pilot-section .steps,
+.pilot-pricing {
   width: min(1160px, 100%);
   margin-inline: auto;
 }
@@ -352,6 +353,60 @@ p {
 .steps article,
 .safety-grid article {
   padding: 22px;
+}
+
+.pilot-pricing {
+  display: grid;
+  grid-template-columns: minmax(0, 0.88fr) minmax(0, 1.12fr);
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.pilot-price-card,
+.usage-limits div {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--white);
+  box-shadow: var(--shadow);
+}
+
+.pilot-price-card {
+  padding: 24px;
+}
+
+.pilot-price-card h3 {
+  margin-bottom: 10px;
+  font-size: clamp(26px, 3vw, 36px);
+}
+
+.pilot-price-card p:last-child {
+  margin-bottom: 0;
+  color: var(--muted);
+}
+
+.usage-limits {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.usage-limits div {
+  display: grid;
+  align-content: center;
+  gap: 6px;
+  min-height: 150px;
+  padding: 18px;
+}
+
+.usage-limits strong {
+  color: var(--blue);
+  font-size: clamp(26px, 3vw, 34px);
+  line-height: 1;
+}
+
+.usage-limits span {
+  color: var(--muted);
+  font-weight: 800;
 }
 
 .safety-grid {
@@ -408,6 +463,14 @@ p {
   .steps {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .pilot-pricing {
+    grid-template-columns: 1fr;
+  }
+
+  .usage-limits {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 680px) {
@@ -458,7 +521,8 @@ p {
   }
 
   .feature-grid,
-  .steps {
+  .steps,
+  .usage-limits {
     grid-template-columns: 1fr;
   }
 

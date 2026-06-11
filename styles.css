@@ -409,6 +409,27 @@ p {
   font-weight: 800;
 }
 
+.top-up-note {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  align-items: center;
+  border: 1px solid color-mix(in srgb, var(--teal) 42%, var(--border));
+  border-radius: 8px;
+  padding: 16px 18px;
+  background: #ffffff;
+  box-shadow: var(--shadow);
+}
+
+.top-up-note strong {
+  color: var(--ink);
+}
+
+.top-up-note span {
+  color: var(--muted);
+}
+
 .safety-grid {
   grid-template-columns: 1fr;
 }

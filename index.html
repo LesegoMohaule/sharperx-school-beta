@@ -3,75 +3,363 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="robots" content="noindex, nofollow" />
-    <title>SharperX</title>
-    <style>
-      :root {
-        color-scheme: light;
-        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-        color: #14201f;
-        background: #f4f7f5;
-      }
-
-      * {
-        box-sizing: border-box;
-      }
-
-      body {
-        min-height: 100svh;
-        margin: 0;
-        display: grid;
-        place-items: center;
-        padding: 24px;
-        background:
-          linear-gradient(rgba(8, 127, 120, 0.08), rgba(8, 127, 120, 0.02)),
-          #f4f7f5;
-      }
-
-      main {
-        width: min(560px, 100%);
-        border: 1px solid #dce5e2;
-        border-radius: 8px;
-        padding: clamp(24px, 6vw, 42px);
-        background: white;
-        box-shadow: 0 18px 60px rgba(20, 32, 31, 0.12);
-        text-align: center;
-      }
-
-      .mark {
-        display: inline-grid;
-        place-items: center;
-        width: 58px;
-        height: 58px;
-        margin-bottom: 18px;
-        border-radius: 8px;
-        color: white;
-        background: #087f78;
-        font-weight: 900;
-      }
-
-      h1 {
-        margin: 0;
-        font-size: clamp(34px, 8vw, 54px);
-        line-height: 1;
-        letter-spacing: 0;
-      }
-
-      p {
-        margin: 16px auto 0;
-        max-width: 440px;
-        color: #5b6b70;
-        line-height: 1.65;
-      }
-    </style>
+    <title>SharperX School Tutor Beta</title>
+    <meta
+      name="description"
+      content="SharperX School Tutor Beta is a South African CAPS-aligned AI study assistant for high school learners, starting with Mathematics, Physical Sciences and Accounting."
+    />
+    <meta property="og:title" content="SharperX School Tutor Beta" />
+    <meta
+      property="og:description"
+      content="A beta pilot for CAPS-aligned AI tutoring: explain it, help me try it, then mark me."
+    />
+    <meta property="og:image" content="assets/hero-school-beta.jpg" />
+    <meta property="og:type" content="website" />
+    <link rel="preload" href="assets/hero-school-beta.jpg" as="image" />
+    <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
-    <main>
-      <div class="mark">SX</div>
-      <h1>SharperX is being built</h1>
-      <p>
-        The website is temporarily offline while the app, registration and payment systems are being prepared.
-      </p>
+    <div class="beta-notice" role="status">
+      SharperX is still in beta testing. Features, pricing and availability may change while the system is being tested.
+    </div>
+    <header class="site-header" data-header>
+      <a class="brand" href="#top" aria-label="SharperX School Tutor Beta home">
+        <span class="brand-mark">SX</span>
+        <span>
+          <strong>SharperX</strong>
+          <small>School Tutor Beta</small>
+        </span>
+      </a>
+      <button class="menu-button" type="button" data-menu-button aria-expanded="false" aria-controls="site-nav">
+        Menu
+      </button>
+      <nav id="site-nav" class="site-nav" data-nav>
+        <a href="#learners">Learners</a>
+        <a href="#pilot">Pilot</a>
+        <a href="#register">Register</a>
+        <a href="#safety">Safety</a>
+        <a href="#contact">Contact</a>
+      </nav>
+    </header>
+
+    <main id="top">
+      <section class="hero" aria-label="SharperX School Tutor Beta introduction">
+        <div class="hero-overlay"></div>
+        <div class="hero-content">
+          <p class="eyebrow">Beta pilot for South African high schools</p>
+          <h1>SharperX School Tutor Beta</h1>
+          <p class="hero-copy">
+            A CAPS-aligned AI study assistant that lets learners ask by photo, voice or text,
+            then learn through short explanations, guided practice and marked attempts.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="mailto:lesegomohaule@gmail.com?subject=SharperX%20School%20Tutor%20Beta%20Pilot">
+              Request a pilot
+            </a>
+            <a class="button secondary" href="#pilot">View pilot plan</a>
+          </div>
+          <p class="hero-note">Starting with Grade 12 Mathematics. Expanding to Grades 8-12 Maths, Physical Sciences and Accounting.</p>
+        </div>
+      </section>
+
+      <section class="intro-band" aria-label="Product summary">
+        <div class="intro-grid">
+          <div>
+            <p class="section-kicker">Simple promise</p>
+            <h2>Explain it, help me try it, then mark me.</h2>
+          </div>
+          <p>
+            SharperX is being built as a practical study companion for learners, parents and teachers.
+            It supports homework, revision and exam practice while keeping teachers in control of the real learning programme.
+          </p>
+        </div>
+      </section>
+
+      <section id="learners" class="section">
+        <div class="section-heading">
+          <p class="section-kicker">For learners</p>
+          <h2>Study help that meets the learner where they are</h2>
+          <p>
+            Learners can take a photo of a question, speak a voice note or type their working.
+            The app responds with short, step-by-step guidance and then asks the learner to try.
+          </p>
+        </div>
+        <div class="feature-grid">
+          <article class="feature-card">
+            <span class="icon">01</span>
+            <h3>Photo homework help</h3>
+            <p>Upload a question photo and get a clear explanation of the concept and first steps.</p>
+          </article>
+          <article class="feature-card">
+            <span class="icon">02</span>
+            <h3>Voice questions</h3>
+            <p>Ask long questions by voice note instead of typing, useful when learners are stuck.</p>
+          </article>
+          <article class="feature-card">
+            <span class="icon">03</span>
+            <h3>Practice mode</h3>
+            <p>Generate CAPS-style practice questions by grade, subject and topic.</p>
+          </article>
+          <article class="feature-card">
+            <span class="icon">04</span>
+            <h3>Mark my answer</h3>
+            <p>Learners enter their steps and final answer, then receive corrections and weak-area feedback.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section two-column" aria-label="Supported subjects">
+        <div>
+          <p class="section-kicker">Subjects</p>
+          <h2>Focused first, then expanded carefully</h2>
+          <p>
+            The first school pilot focuses on Mathematics so the tutoring workflow can become strong before broader rollout.
+            The same structure will then support Physical Sciences and Accounting.
+          </p>
+        </div>
+        <div class="subject-list">
+          <div>
+            <strong>Mathematics</strong>
+            <span>Grades 8-12, with Grade 12 first</span>
+          </div>
+          <div>
+            <strong>Physical Sciences</strong>
+            <span>Formulas, units, diagrams and exam practice</span>
+          </div>
+          <div>
+            <strong>Accounting</strong>
+            <span>Journals, ledgers, statements and marking practice</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="pilot" class="section pilot-section">
+        <div class="section-heading">
+          <p class="section-kicker">Beta pilot</p>
+          <h2>A controlled school pilot before public launch</h2>
+          <p>
+            The pilot is designed to be small, measurable and safe. The school can select a limited learner group,
+            collect feedback and decide whether the product is useful before any wider rollout.
+          </p>
+        </div>
+        <div class="steps">
+          <article>
+            <span>1</span>
+            <h3>School review</h3>
+            <p>Present the app, privacy approach, teacher role and pilot boundaries.</p>
+          </article>
+          <article>
+            <span>2</span>
+            <h3>Small learner group</h3>
+            <p>Start with a selected Mathematics group and agreed topics.</p>
+          </article>
+          <article>
+            <span>3</span>
+            <h3>Feedback cycle</h3>
+            <p>Track learner pain points, weak topics and teacher feedback.</p>
+          </article>
+          <article>
+            <span>4</span>
+            <h3>Report back</h3>
+            <p>Share findings with the school and improve the next beta version.</p>
+          </article>
+        </div>
+        <div class="pilot-pricing" aria-label="Six month trial pricing">
+          <div class="pilot-price-card">
+            <p class="section-kicker">6 month trial pricing</p>
+            <h3>R30 per learner per month</h3>
+            <p>
+              During the pilot period, each learner gets controlled monthly AI usage across all three subjects:
+              Mathematics, Physical Sciences and Accounting.
+            </p>
+          </div>
+          <div class="usage-limits">
+            <div>
+              <strong>300</strong>
+              <span>Typed text requests</span>
+            </div>
+            <div>
+              <strong>80</strong>
+              <span>Photo questions</span>
+            </div>
+            <div>
+              <strong>30</strong>
+              <span>Document uploads</span>
+            </div>
+            <div>
+              <strong>15 min</strong>
+              <span>Voice notes</span>
+            </div>
+          </div>
+          <div class="top-up-note">
+            <strong>Need more for the same month?</strong>
+            <span>
+              Learners can buy the same amount of credits again for R30. Each top-up lasts 30 days and does not roll over,
+              helping families control usage and payments.
+            </span>
+          </div>
+        </div>
+      </section>
+
+      <section id="register" class="section registration-section">
+        <div class="section-heading">
+          <p class="section-kicker">Registration and credits</p>
+          <h2>Parent or guardian registration</h2>
+          <p>
+            Registration is strictly for account owners who are 18 or older. The account owner registers their own
+            legal details, then adds each child and the phone number that may activate the app.
+          </p>
+        </div>
+        <div class="registration-grid">
+          <form class="registration-form" data-registration-form>
+            <label>
+              Account owner full legal name
+              <input name="full_name" autocomplete="name" required />
+            </label>
+            <label>
+              Account owner email
+              <input name="email" type="email" autocomplete="email" required />
+            </label>
+            <label>
+              Password
+              <input name="password" type="password" minlength="8" autocomplete="new-password" required />
+            </label>
+            <label>
+              ID or legal identification number
+              <input name="id_number" autocomplete="off" required />
+            </label>
+            <label>
+              Account owner phone number
+              <input name="phone_number" type="tel" autocomplete="tel" required />
+            </label>
+            <label>
+              Residential address
+              <textarea name="address" rows="3" required></textarea>
+            </label>
+            <div class="child-fields">
+              <strong>Child activation details</strong>
+              <label>
+                Child full name
+                <input name="child_full_name" required />
+              </label>
+              <label>
+                Child phone number to activate the app
+                <input name="child_phone_number" type="tel" required />
+              </label>
+              <label>
+                Grade
+                <select name="child_grade" required>
+                  <option value="8">Grade 8</option>
+                  <option value="9">Grade 9</option>
+                  <option value="10">Grade 10</option>
+                  <option value="11">Grade 11</option>
+                  <option value="12" selected>Grade 12</option>
+                </select>
+              </label>
+              <label>
+                School name
+                <input name="school_name" />
+              </label>
+            </div>
+            <label class="check-line">
+              <input name="confirmed_over_18" type="checkbox" required />
+              I confirm that I am 18 years or older and I am the responsible account owner.
+            </label>
+            <label class="check-line">
+              <input name="popia_consent" type="checkbox" required />
+              I consent to SharperX processing my details and my child’s activation details for registration, billing and app access.
+            </label>
+            <label class="check-line">
+              <input name="accepted_terms" type="checkbox" required />
+              I accept that SharperX is educational support and does not replace the school, teacher or official assessment.
+            </label>
+            <button class="button primary" type="submit">Register account</button>
+            <p class="form-status" data-registration-status aria-live="polite"></p>
+          </form>
+
+          <div class="payment-panel">
+            <p class="section-kicker">Buy credits</p>
+            <h3>R30 for 30 days</h3>
+            <p>
+              After registration or login, buy monthly credits or the same amount again as a top-up. Credits last 30 days
+              and do not roll over, helping families control usage and payments.
+            </p>
+            <form data-login-form class="login-form">
+              <label>
+                Email
+                <input name="email" type="email" autocomplete="email" required />
+              </label>
+              <label>
+                Password
+                <input name="password" type="password" autocomplete="current-password" required />
+              </label>
+              <button class="button secondary-dark" type="submit">Login for credits</button>
+            </form>
+            <div class="credit-actions">
+              <button class="button primary" type="button" data-buy-product="monthly_r30">Buy monthly R30 credits</button>
+              <button class="button outline" type="button" data-buy-product="topup_r30">Buy R30 top-up</button>
+            </div>
+            <p class="form-status" data-payment-status aria-live="polite"></p>
+          </div>
+        </div>
+      </section>
+
+      <section id="safety" class="section safety-section">
+        <div>
+          <p class="section-kicker">Safety and privacy</p>
+          <h2>Built as a support tool, not a replacement for teachers</h2>
+        </div>
+        <div class="safety-grid">
+          <article>
+            <h3>Teacher-led use</h3>
+            <p>SharperX supports practice and revision. It does not replace the teacher, textbook, school assessment or DBE memo.</p>
+          </article>
+          <article>
+            <h3>POPIA-aware controls</h3>
+            <p>Pilot access can be limited, learner details can be minimized, and parent or school consent can be included where required.</p>
+          </article>
+          <article>
+            <h3>Clear disclaimers</h3>
+            <p>AI answers are educational support and must be checked against teacher guidance, official curriculum and official memos.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section platform-section" aria-label="SharperX platform">
+        <div class="platform-copy">
+          <p class="section-kicker">Wider platform</p>
+          <h2>One interface for learning, electrical guidance and communication</h2>
+          <p>
+            SharperX is also being developed with VoIP calling and an electrical assistant mode. For schools,
+            the beta focus is the tutor mode: photo questions, voice questions, practice, marking and progress feedback.
+          </p>
+        </div>
+      </section>
+
+      <section id="contact" class="section contact-section">
+        <div>
+          <p class="section-kicker">Contact</p>
+          <h2>Request a short beta pilot discussion</h2>
+          <p>
+            I am available to present the app, demonstrate the learner flow and discuss a safe pilot structure for the school.
+          </p>
+        </div>
+        <div class="contact-card">
+          <strong>Lesego Mohaule</strong>
+          <span>Founder, SharperX</span>
+          <a href="mailto:lesegomohaule@gmail.com">lesegomohaule@gmail.com</a>
+          <a class="button primary full" href="mailto:lesegomohaule@gmail.com?subject=SharperX%20School%20Tutor%20Beta%20Pilot">
+            Email Lesego
+          </a>
+        </div>
+      </section>
     </main>
+
+    <footer class="site-footer">
+      <p>SharperX School Tutor Beta. Educational support only. Not a replacement for teachers, official assessments or DBE memoranda.</p>
+      <p>&copy; <span data-year></span> SharperX. All rights reserved.</p>
+    </footer>
+
+    <script src="script.js"></script>
   </body>
 </html>

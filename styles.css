@@ -33,9 +33,22 @@ a {
   color: inherit;
 }
 
-.site-header {
+.beta-notice {
   position: sticky;
   top: 0;
+  z-index: 30;
+  padding: 9px clamp(18px, 4vw, 54px);
+  color: #ffffff;
+  background: #063f3d;
+  font-size: 13px;
+  font-weight: 850;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.site-header {
+  position: sticky;
+  top: 35px;
   z-index: 20;
   display: flex;
   align-items: center;
@@ -607,6 +620,7 @@ p {
 @media (max-width: 680px) {
   .site-header {
     align-items: flex-start;
+    top: 52px;
   }
 
   .menu-button {

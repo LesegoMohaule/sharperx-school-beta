@@ -218,6 +218,13 @@ p {
   background: rgba(255, 255, 255, 0.12);
 }
 
+.button.secondary-dark,
+.button.outline {
+  border: 1px solid var(--teal);
+  color: var(--teal);
+  background: white;
+}
+
 .button.full {
   width: 100%;
 }
@@ -434,6 +441,104 @@ p {
   grid-template-columns: 1fr;
 }
 
+.registration-section {
+  width: 100%;
+  max-width: none;
+  padding-inline: clamp(20px, 6vw, 86px);
+  background: #f9fbfb;
+}
+
+.registration-section .section-heading,
+.registration-grid {
+  width: min(1160px, 100%);
+  margin-inline: auto;
+}
+
+.registration-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(320px, 0.8fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.registration-form,
+.payment-panel {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 22px;
+  background: white;
+  box-shadow: var(--shadow);
+}
+
+.registration-form label,
+.login-form label {
+  display: grid;
+  gap: 6px;
+  color: var(--ink);
+  font-weight: 800;
+}
+
+.registration-form input,
+.registration-form textarea,
+.registration-form select,
+.login-form input {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 12px;
+  color: var(--ink);
+  background: #fff;
+  font: inherit;
+}
+
+.child-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px;
+  background: #f5faf8;
+}
+
+.child-fields strong {
+  grid-column: 1 / -1;
+}
+
+.check-line {
+  grid-template-columns: auto 1fr !important;
+  align-items: start;
+  font-weight: 700 !important;
+}
+
+.check-line input {
+  width: auto;
+  margin-top: 4px;
+}
+
+.login-form,
+.credit-actions {
+  display: grid;
+  gap: 10px;
+}
+
+.form-status {
+  min-height: 24px;
+  margin: 0;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.form-status.is-error {
+  color: var(--coral);
+}
+
+.form-status.is-success {
+  color: var(--teal);
+}
+
 .platform-section {
   min-height: 330px;
   display: grid;
@@ -486,6 +591,11 @@ p {
   }
 
   .pilot-pricing {
+    grid-template-columns: 1fr;
+  }
+
+  .registration-grid,
+  .child-fields {
     grid-template-columns: 1fr;
   }
 

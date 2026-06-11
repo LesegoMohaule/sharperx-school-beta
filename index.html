@@ -33,6 +33,7 @@
       <nav id="site-nav" class="site-nav" data-nav>
         <a href="#learners">Learners</a>
         <a href="#pilot">Pilot</a>
+        <a href="#register">Register</a>
         <a href="#safety">Safety</a>
         <a href="#contact">Contact</a>
       </nav>
@@ -193,6 +194,109 @@
               Learners can buy the same amount of credits again for R30. Each top-up lasts 30 days and does not roll over,
               helping families control usage and payments.
             </span>
+          </div>
+        </div>
+      </section>
+
+      <section id="register" class="section registration-section">
+        <div class="section-heading">
+          <p class="section-kicker">Registration and credits</p>
+          <h2>Parent or guardian registration</h2>
+          <p>
+            Registration is strictly for account owners who are 18 or older. The account owner registers their own
+            legal details, then adds each child and the phone number that may activate the app.
+          </p>
+        </div>
+        <div class="registration-grid">
+          <form class="registration-form" data-registration-form>
+            <label>
+              Account owner full legal name
+              <input name="full_name" autocomplete="name" required />
+            </label>
+            <label>
+              Account owner email
+              <input name="email" type="email" autocomplete="email" required />
+            </label>
+            <label>
+              Password
+              <input name="password" type="password" minlength="8" autocomplete="new-password" required />
+            </label>
+            <label>
+              ID or legal identification number
+              <input name="id_number" autocomplete="off" required />
+            </label>
+            <label>
+              Account owner phone number
+              <input name="phone_number" type="tel" autocomplete="tel" required />
+            </label>
+            <label>
+              Residential address
+              <textarea name="address" rows="3" required></textarea>
+            </label>
+            <div class="child-fields">
+              <strong>Child activation details</strong>
+              <label>
+                Child full name
+                <input name="child_full_name" required />
+              </label>
+              <label>
+                Child phone number to activate the app
+                <input name="child_phone_number" type="tel" required />
+              </label>
+              <label>
+                Grade
+                <select name="child_grade" required>
+                  <option value="8">Grade 8</option>
+                  <option value="9">Grade 9</option>
+                  <option value="10">Grade 10</option>
+                  <option value="11">Grade 11</option>
+                  <option value="12" selected>Grade 12</option>
+                </select>
+              </label>
+              <label>
+                School name
+                <input name="school_name" />
+              </label>
+            </div>
+            <label class="check-line">
+              <input name="confirmed_over_18" type="checkbox" required />
+              I confirm that I am 18 years or older and I am the responsible account owner.
+            </label>
+            <label class="check-line">
+              <input name="popia_consent" type="checkbox" required />
+              I consent to SharperX processing my details and my child’s activation details for registration, billing and app access.
+            </label>
+            <label class="check-line">
+              <input name="accepted_terms" type="checkbox" required />
+              I accept that SharperX is educational support and does not replace the school, teacher or official assessment.
+            </label>
+            <button class="button primary" type="submit">Register account</button>
+            <p class="form-status" data-registration-status aria-live="polite"></p>
+          </form>
+
+          <div class="payment-panel">
+            <p class="section-kicker">Buy credits</p>
+            <h3>R30 for 30 days</h3>
+            <p>
+              After registration or login, buy monthly credits or the same amount again as a top-up. Credits last 30 days
+              and do not roll over, helping families control usage and payments.
+            </p>
+            <form data-login-form class="login-form">
+              <label>
+                Email
+                <input name="email" type="email" autocomplete="email" required />
+              </label>
+              <label>
+                Password
+                <input name="password" type="password" autocomplete="current-password" required />
+              </label>
+              <button class="button secondary-dark" type="submit">Login for credits</button>
+            </form>
+            <div class="credit-actions">
+              <button class="button primary" type="button" data-buy-product="monthly_r30">Buy monthly R30 credits</button>
+              <button class="button outline" type="button" data-buy-product="topup_r30">Buy R30 top-up</button>
+            </div>
+            <p class="form-status" data-payment-status aria-live="polite"></p>
           </div>
         </div>
       </section>

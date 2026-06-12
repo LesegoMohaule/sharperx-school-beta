@@ -1,7 +1,7 @@
 const menuButton = document.querySelector("[data-menu-button]");
 const nav = document.querySelector("[data-nav]");
 const year = document.querySelector("[data-year]");
-const API_BASE_URL = window.SHARPERX_API_BASE_URL || "https://api.sharperx.co.za";
+const API_BASE_URL = window.SHARPERX_API_BASE_URL || "https://api.46.225.173.118.nip.io";
 
 if (year) {
   year.textContent = new Date().getFullYear().toString();
@@ -25,12 +25,21 @@ const registrationForm = document.querySelector("[data-registration-form]");
 const registrationStatus = document.querySelector("[data-registration-status]");
 const loginForm = document.querySelector("[data-login-form]");
 const paymentStatus = document.querySelector("[data-payment-status]");
+const pageParams = new URLSearchParams(window.location.search);
 
 function setStatus(element, message, type = "") {
   if (!element) return;
   element.textContent = message;
   element.classList.toggle("is-error", type === "error");
   element.classList.toggle("is-success", type === "success");
+}
+
+if (pageParams.get("payment") === "success") {
+  setStatus(paymentStatus, "Payment received. Credits will be allocated after PayFast confirms the transaction.", "success");
+} else if (pageParams.get("payment") === "cancelled") {
+  setStatus(paymentStatus, "Payment was cancelled. You can try again when ready.", "error");
+} else if (pageParams.get("payment") === "manual") {
+  setStatus(paymentStatus, "Manual payment reference created. Contact support if credits are not allocated.", "success");
 }
 
 async function postJson(path, payload, token = null) {

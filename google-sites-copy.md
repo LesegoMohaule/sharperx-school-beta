@@ -8,13 +8,13 @@ SharperX AI Study Tutor
 
 ## Hero Section
 
-For everyone, especially high school learners
+Beta study support for learners and parents
 
 SharperX AI Study Tutor
 
 CAPS-aligned support for Maths, Physical Sciences and Accounting. Ask by photo, voice or text, then learn through guided steps, practice questions and marked attempts.
 
-Learners can use the study tools, while registration and payments stay with account owners who are 18 or older.
+Learners and parents can choose to use SharperX directly. Registration and payments stay with account owners who are 18 or older.
 
 Button: Register as an adult account owner
 
@@ -22,7 +22,7 @@ Button: Register as an adult account owner
 
 Explain it, help me try it, then mark me.
 
-SharperX is being built as a practical study companion for anyone who wants structured study support. It is especially useful for high school students preparing for Maths, Physical Sciences and Accounting.
+SharperX is being built as a practical study companion for anyone who wants structured study support. It is especially useful for high school learners and parents working through Maths, Physical Sciences and Accounting.
 
 ## For Learners
 
@@ -70,9 +70,9 @@ Each learner gets controlled monthly AI usage across Mathematics, Physical Scien
 
 Built as a support tool, not a replacement for real study.
 
-- Study support: SharperX supports practice and revision. It does not replace textbooks, classroom teaching, assessments or DBE memos.
+- Study support: SharperX supports practice and revision. It does not replace textbooks, teaching, assessments or official memos.
 - Adult account controls: Registration, payments and credit purchases are handled by account owners who are 18 or older.
-- Clear disclaimers: AI answers are educational support and should be checked against textbooks, teacher guidance, official curriculum and DBE memos.
+- Clear disclaimers: AI answers are educational support and should be checked against textbooks, teacher guidance, official curriculum and official memos.
 
 ## Support
 

@@ -2,8 +2,9 @@
 
 This is a static public beta website for SharperX AI Study Tutor.
 
-The site positions SharperX as a CAPS-aligned study assistant for everyone, especially high school students doing Maths,
-Physical Sciences and Accounting. Registration, credits and payments are for account owners who are 18 or older.
+The site positions SharperX as a beta CAPS-aligned study assistant that learners and parents can choose to use directly,
+especially for high school Maths, Physical Sciences and Accounting. Registration, credits and payments are for account
+owners who are 18 or older.
 
 Live site: GitHub Pages deployment for this repository.
 

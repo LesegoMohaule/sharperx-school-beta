@@ -1,10 +1,13 @@
-# SharperX School Tutor Beta Website
+# SharperX AI Study Tutor Website
 
-This is a static public beta website for the SharperX School Tutor pilot.
+This is a static public beta website for SharperX AI Study Tutor.
 
-Live site: https://lesegomohaule.github.io/sharperx-school-beta/
+The site positions SharperX as a CAPS-aligned study assistant for everyone, especially high school students doing Maths,
+Physical Sciences and Accounting. Registration, credits and payments are for account owners who are 18 or older.
 
-## Free hosting options
+Live site: GitHub Pages deployment for this repository.
+
+## Hosting options
 
 - GitHub Pages: best for a polished public link and full design control.
 - Google Sites: best if you want to edit visually inside your Google account.
@@ -14,8 +17,7 @@ Live site: https://lesegomohaule.github.io/sharperx-school-beta/
 - `index.html` - landing page
 - `styles.css` - page styling
 - `script.js` - mobile menu and footer year
-- `assets/hero-school-beta.jpg` - optimized hero image
-- `email-template-randpark.md` - email you can send to the headmaster
+- `assets/hero-study-tutor.jpg` - optimized hero image
 - `google-sites-copy.md` - copy sections for Google Sites
 
 ## Local preview

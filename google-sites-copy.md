@@ -4,26 +4,25 @@ Use this if you want to recreate the page manually in Google Sites.
 
 ## Site Title
 
-SharperX School Tutor Beta
+SharperX AI Study Tutor
 
 ## Hero Section
 
-Beta pilot for South African high schools
+For everyone, especially high school learners
 
-SharperX School Tutor Beta
+SharperX AI Study Tutor
 
-A CAPS-aligned AI study assistant that lets learners ask by photo, voice or text, then learn through short explanations, guided practice and marked attempts.
+CAPS-aligned support for Maths, Physical Sciences and Accounting. Ask by photo, voice or text, then learn through guided steps, practice questions and marked attempts.
 
-Starting with Grade 12 Mathematics. Expanding to Grades 8-12 Maths, Physical Sciences and Accounting.
+Learners can use the study tools, while registration and payments stay with account owners who are 18 or older.
 
-Button: Request a pilot  
-Link: mailto:lesegomohaule@gmail.com?subject=SharperX%20School%20Tutor%20Beta%20Pilot
+Button: Register as an adult account owner
 
 ## Simple Promise
 
 Explain it, help me try it, then mark me.
 
-SharperX is being built as a practical study companion for learners, parents and teachers. It supports homework, revision and exam practice while keeping teachers in control of the real learning programme.
+SharperX is being built as a practical study companion for anyone who wants structured study support. It is especially useful for high school students preparing for Maths, Physical Sciences and Accounting.
 
 ## For Learners
 
@@ -40,39 +39,46 @@ Features:
 
 ## Subjects
 
-Focused first, then expanded carefully.
+Maths, Science and Accounting support.
 
-The first school pilot focuses on Mathematics so the tutoring workflow can become strong before broader rollout. The same structure will then support Physical Sciences and Accounting.
+SharperX focuses on CAPS-style questions and memo-like step marking, starting with Grade 12 and expanding across Grades 8-12.
 
 - Mathematics: Grades 8-12, with Grade 12 first
 - Physical Sciences: Formulas, units, diagrams and exam practice
 - Accounting: Journals, ledgers, statements and marking practice
 
-## Beta Pilot
+## Credits
 
-A controlled school pilot before public launch.
+Monthly learner credits.
 
-The pilot is designed to be small, measurable and safe. The school can select a limited learner group, collect feedback and decide whether the product is useful before any wider rollout.
+SharperX uses paid 30-day credits for controlled AI usage. Only account owners who are 18 or older may register, buy credits or make payments.
 
-Pilot steps:
+Credit steps:
 
-1. School review: Present the app, privacy approach, teacher role and pilot boundaries.
-2. Small learner group: Start with a selected Mathematics group and agreed topics.
-3. Feedback cycle: Track learner pain points, weak topics and teacher feedback.
-4. Report back: Share findings with the school and improve the next beta version.
+1. Register: An adult account owner creates the account with their own legal details.
+2. Add learner: Add the learner details and the phone number that may activate the app.
+3. Buy credits: Buy monthly credits or a top-up through the adult account.
+4. Start studying: The learner can ask questions, practise and submit steps for marking.
+
+Current beta pricing:
+
+R35 per learner for 30 days.
+
+Each learner gets controlled monthly AI usage across Mathematics, Physical Sciences and Accounting.
 
 ## Safety and Privacy
 
-Built as a support tool, not a replacement for teachers.
+Built as a support tool, not a replacement for real study.
 
-- Teacher-led use: SharperX supports practice and revision. It does not replace the teacher, textbook, school assessment or DBE memo.
-- POPIA-aware controls: Pilot access can be limited, learner details can be minimized, and parent or school consent can be included where required.
-- Clear disclaimers: AI answers are educational support and must be checked against teacher guidance, official curriculum and official memos.
+- Study support: SharperX supports practice and revision. It does not replace textbooks, classroom teaching, assessments or DBE memos.
+- Adult account controls: Registration, payments and credit purchases are handled by account owners who are 18 or older.
+- Clear disclaimers: AI answers are educational support and should be checked against textbooks, teacher guidance, official curriculum and DBE memos.
 
-## Contact
+## Support
 
-Request a short beta pilot discussion.
+Support for accounts and payments.
 
-Lesego Mohaule  
-Founder, SharperX  
+For help with registration, credits, payments or app access, email SharperX support.
+
+SharperX
 lesegomohaule@gmail.com

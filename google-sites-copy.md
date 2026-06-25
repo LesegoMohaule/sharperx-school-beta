@@ -66,6 +66,15 @@ R35 per learner for 30 days.
 
 Each learner gets controlled monthly AI usage across Mathematics, Physical Sciences and Accounting.
 
+- 13.5 million combined characters for typed requests and AI answers
+- 40 photo questions
+
+Voice input helps learners ask questions without laborious typing on a mobile-phone keyboard. It is a faster input method,
+not a separate advertised usage allowance.
+
+The 30-day access period starts on the day it is purchased, regardless of the day of the month. Each R35 top-up adds
+another 30 days to the learner's access period.
+
 ## Safety and Privacy
 
 Built as a support tool, not a replacement for real study.

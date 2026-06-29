@@ -1,358 +1,77 @@
 <!doctype html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>SharperX AI Study Tutor</title>
-    <meta
-      name="description"
-      content="SharperX is a beta CAPS-aligned AI study assistant that learners and parents can choose to use directly, especially for high school Mathematics, Physical Sciences and Accounting."
-    />
-    <meta property="og:title" content="SharperX AI Study Tutor" />
-    <meta
-      property="og:description"
-      content="CAPS-aligned AI study support: explain it, help me try it, then mark me."
-    />
-    <meta property="og:image" content="assets/hero-study-tutor.jpg" />
-    <meta property="og:type" content="website" />
-    <link rel="preload" href="assets/hero-study-tutor.jpg" as="image" />
-    <link rel="stylesheet" href="styles.css" />
-  </head>
-  <body>
-    <div class="beta-notice" role="status">
-      SharperX is still in beta testing. Learners and parents choose to use it directly; features, pricing and availability may change while the system is being tested.
-    </div>
-    <header class="site-header" data-header>
-      <a class="brand" href="#top" aria-label="SharperX home">
-        <span class="brand-mark">SX</span>
-        <span>
-          <strong>SharperX</strong>
-          <small>AI Study Tutor</small>
-        </span>
-      </a>
-      <button class="menu-button" type="button" data-menu-button aria-expanded="false" aria-controls="site-nav">
-        Menu
-      </button>
-      <nav id="site-nav" class="site-nav" data-nav>
-        <a href="#learners">Learners</a>
-        <a href="#subjects">Subjects</a>
-        <a href="#pricing">Credits</a>
-        <a href="#register">Register</a>
-        <a href="#safety">Safety</a>
-        <a href="#support">Support</a>
-      </nav>
-    </header>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>SharperX School Beta Offline</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: #07111f;
+      color: #f7fbff;
+    }
 
-    <main id="top">
-      <section class="hero" aria-label="SharperX introduction">
-        <div class="hero-overlay"></div>
-        <div class="hero-content">
-          <p class="eyebrow">Beta study support for learners and parents</p>
-          <h1>SharperX AI Study Tutor</h1>
-          <p class="hero-copy">
-            CAPS-aligned support for Maths, Physical Sciences and Accounting. Ask by photo, voice or text,
-            then learn through guided steps, practice questions and marked attempts.
-          </p>
-          <div class="hero-actions">
-            <a class="button primary" href="#register">
-              Register as an adult account owner
-            </a>
-            <a class="button secondary" href="#pricing">View credits</a>
-          </div>
-          <p class="hero-note">Learners and parents can choose to use SharperX directly. Registration and payments stay with account owners who are 18 or older.</p>
-        </div>
-      </section>
+    * {
+      box-sizing: border-box;
+    }
 
-      <section class="intro-band" aria-label="Product summary">
-        <div class="intro-grid">
-          <div>
-            <p class="section-kicker">Simple promise</p>
-            <h2>Explain it, help me try it, then mark me.</h2>
-          </div>
-          <p>
-            SharperX is being built as a practical study companion for anyone who wants structured study support.
-            It is especially useful for high school learners and parents working through Maths, Physical Sciences and Accounting.
-          </p>
-        </div>
-      </section>
+    body {
+      min-height: 100vh;
+      margin: 0;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+      background:
+        radial-gradient(circle at top left, rgba(55, 189, 248, 0.2), transparent 32rem),
+        linear-gradient(135deg, #07111f 0%, #0e1b31 52%, #07111f 100%);
+    }
 
-      <section id="learners" class="section">
-        <div class="section-heading">
-          <p class="section-kicker">For learners</p>
-          <h2>Study help that meets the learner where they are</h2>
-          <p>
-            Learners can take a photo of a question, speak a voice note or type their working.
-            The app responds with short, step-by-step guidance and then asks the learner to try.
-          </p>
-        </div>
-        <div class="feature-grid">
-          <article class="feature-card">
-            <span class="icon">01</span>
-            <h3>Photo homework help</h3>
-            <p>Upload a question photo and get a clear explanation of the concept and first steps.</p>
-          </article>
-          <article class="feature-card">
-            <span class="icon">02</span>
-            <h3>Voice questions</h3>
-            <p>Ask long questions by voice note instead of typing, useful when learners are stuck.</p>
-          </article>
-          <article class="feature-card">
-            <span class="icon">03</span>
-            <h3>Practice mode</h3>
-            <p>Generate CAPS-style practice questions by grade, subject and topic.</p>
-          </article>
-          <article class="feature-card">
-            <span class="icon">04</span>
-            <h3>Mark my answer</h3>
-            <p>Learners enter their steps and final answer, then receive corrections and weak-area feedback.</p>
-          </article>
-        </div>
-      </section>
+    main {
+      width: min(640px, 100%);
+      padding: clamp(28px, 6vw, 56px);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 28px;
+      background: rgba(255, 255, 255, 0.08);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
+      text-align: center;
+      backdrop-filter: blur(18px);
+    }
 
-      <section id="subjects" class="section two-column" aria-label="Supported subjects">
-        <div>
-          <p class="section-kicker">Subjects</p>
-          <h2>Maths, Science and Accounting support</h2>
-          <p>
-            SharperX focuses on CAPS-style questions and memo-like step marking, starting with Grade 12 and expanding
-            across Grades 8-12.
-          </p>
-        </div>
-        <div class="subject-list">
-          <div>
-            <strong>Mathematics</strong>
-            <span>Grades 8-12, with Grade 12 first</span>
-          </div>
-          <div>
-            <strong>Physical Sciences</strong>
-            <span>Formulas, units, diagrams and exam practice</span>
-          </div>
-          <div>
-            <strong>Accounting</strong>
-            <span>Journals, ledgers, statements and marking practice</span>
-          </div>
-        </div>
-      </section>
+    p:first-child {
+      display: inline-flex;
+      margin: 0 0 18px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.12);
+      color: #bae6fd;
+      font-size: 0.82rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
 
-      <section id="pricing" class="section pricing-section">
-        <div class="section-heading">
-          <p class="section-kicker">Credits</p>
-          <h2>Monthly learner credits</h2>
-          <p>
-            SharperX uses paid 30-day credits for controlled AI usage. Only account owners who are 18 or older
-            may register, buy credits or make payments.
-          </p>
-        </div>
-        <div class="steps">
-          <article>
-            <span>1</span>
-            <h3>Register</h3>
-            <p>An adult account owner creates the account with their own legal details.</p>
-          </article>
-          <article>
-            <span>2</span>
-            <h3>Add learner</h3>
-            <p>Add the learner details and the phone number that may activate the app.</p>
-          </article>
-          <article>
-            <span>3</span>
-            <h3>Buy credits</h3>
-            <p>Buy monthly credits or a top-up through the adult account.</p>
-          </article>
-          <article>
-            <span>4</span>
-            <h3>Start studying</h3>
-            <p>The learner can ask questions, practise and submit steps for marking.</p>
-          </article>
-        </div>
-        <div class="credit-pricing" aria-label="Monthly credit pricing">
-          <div class="credit-price-card">
-            <p class="section-kicker">Current beta pricing</p>
-            <h3>R35 per learner for 30 days</h3>
-            <p>
-              The 30-day access period starts on the day it is purchased, regardless of the day of the month.
-            </p>
-          </div>
-          <div class="usage-limits">
-            <div>
-              <strong>13.5 million</strong>
-              <span>Combined characters for typed requests and AI answers</span>
-            </div>
-            <div>
-              <strong>40</strong>
-              <span>Photo questions</span>
-            </div>
-          </div>
-          <div class="top-up-note">
-            <strong>Voice input and top-ups</strong>
-            <span>
-              Voice input helps learners ask questions without laborious mobile-keyboard typing. Each R35 top-up adds
-              another 30 days to the learner's access period.
-            </span>
-          </div>
-        </div>
-      </section>
+    h1 {
+      margin: 0;
+      font-size: clamp(2rem, 6vw, 4rem);
+      line-height: 0.95;
+    }
 
-      <section id="register" class="section registration-section">
-        <div class="section-heading">
-          <p class="section-kicker">Registration and credits</p>
-          <h2>Adult account owner registration</h2>
-          <p>
-            Registration is strictly for account owners who are 18 or older. The account owner registers their own
-            legal details, then adds each learner and the phone number that may activate the app.
-          </p>
-        </div>
-        <div class="registration-grid">
-          <form class="registration-form" data-registration-form>
-            <label>
-              Account owner full legal name
-              <input name="full_name" autocomplete="name" required />
-            </label>
-            <label>
-              Account owner email
-              <input name="email" type="email" autocomplete="email" required />
-            </label>
-            <label>
-              Password
-              <input name="password" type="password" minlength="8" autocomplete="new-password" required />
-            </label>
-            <label>
-              ID or legal identification number
-              <input name="id_number" autocomplete="off" required />
-            </label>
-            <label>
-              Account owner phone number
-              <input name="phone_number" type="tel" autocomplete="tel" required />
-            </label>
-            <label>
-              Residential address
-              <textarea name="address" rows="3" required></textarea>
-            </label>
-            <div class="child-fields">
-              <strong>Learner activation details</strong>
-              <label>
-                Learner full name
-                <input name="child_full_name" required />
-              </label>
-              <label>
-                Learner phone number to activate the app
-                <input name="child_phone_number" type="tel" required />
-              </label>
-              <label>
-                Grade
-                <select name="child_grade" required>
-                  <option value="8">Grade 8</option>
-                  <option value="9">Grade 9</option>
-                  <option value="10">Grade 10</option>
-                  <option value="11">Grade 11</option>
-                  <option value="12" selected>Grade 12</option>
-                </select>
-              </label>
-            </div>
-            <label class="check-line">
-              <input name="confirmed_over_18" type="checkbox" required />
-              I confirm that I am 18 years or older and I am the responsible account owner.
-            </label>
-            <label class="check-line">
-              <input name="popia_consent" type="checkbox" required />
-              I consent to SharperX processing my details and the learner's activation details for registration, billing and app access.
-            </label>
-            <label class="check-line">
-              <input name="accepted_terms" type="checkbox" required />
-              I accept that SharperX is educational support and does not replace textbooks, teachers, official curriculum material or assessments.
-            </label>
-            <button class="button primary" type="submit">Register account</button>
-            <p class="form-status" data-registration-status aria-live="polite"></p>
-          </form>
-
-          <div class="payment-panel">
-            <p class="section-kicker">Buy credits</p>
-            <h3>R35 for 30 days</h3>
-            <p>
-              After registration or login, buy 30 days of access or add a top-up. The first 30 days start on the purchase
-              date, regardless of the day of the month, and every R35 top-up adds another 30 days.
-            </p>
-            <form data-login-form class="login-form">
-              <label>
-                Email
-                <input name="email" type="email" autocomplete="email" required />
-              </label>
-              <label>
-                Password
-                <input name="password" type="password" autocomplete="current-password" required />
-              </label>
-              <button class="button secondary-dark" type="submit">Login for credits</button>
-            </form>
-            <div class="credit-actions">
-              <button class="button primary" type="button" data-buy-product="monthly_r35">Buy monthly R35 credits</button>
-              <button class="button outline" type="button" data-buy-product="topup_r35">Buy R35 top-up</button>
-            </div>
-            <p class="form-status" data-payment-status aria-live="polite"></p>
-          </div>
-        </div>
-      </section>
-
-      <section id="safety" class="section safety-section">
-        <div>
-          <p class="section-kicker">Safety and privacy</p>
-          <h2>Built as a support tool, not a replacement for real study</h2>
-        </div>
-        <div class="safety-grid">
-          <article>
-            <h3>Study support</h3>
-            <p>SharperX supports practice and revision. It does not replace textbooks, teaching, assessments or official memos.</p>
-          </article>
-          <article>
-            <h3>Adult account controls</h3>
-            <p>Registration, payments and credit purchases are handled by account owners who are 18 or older.</p>
-          </article>
-          <article>
-            <h3>Clear disclaimers</h3>
-            <p>AI answers are educational support and should be checked against textbooks, teacher guidance, official curriculum and official memos.</p>
-          </article>
-        </div>
-      </section>
-
-      <section class="section platform-section" aria-label="SharperX platform">
-        <div class="platform-copy">
-          <p class="section-kicker">Wider platform</p>
-          <h2>One interface for learning, electrical guidance and communication</h2>
-          <p>
-            SharperX is also being developed with VoIP calling and an electrical assistant mode. For high school study,
-            the tutor mode focuses on photo questions, voice questions, practice, marking and progress feedback.
-          </p>
-        </div>
-      </section>
-
-      <section id="support" class="section contact-section">
-        <div>
-          <p class="section-kicker">Support</p>
-          <h2>Support for accounts and payments</h2>
-          <p>
-            For help with registration, credits, payments or app access, email SharperX support.
-          </p>
-        </div>
-        <div class="contact-card">
-          <strong>SharperX</strong>
-          <span>Business support</span>
-          <a href="mailto:lesegomohaule@gmail.com">lesegomohaule@gmail.com</a>
-          <a class="button primary full" href="mailto:lesegomohaule@gmail.com?subject=SharperX%20Support">
-            Email SharperX
-          </a>
-        </div>
-      </section>
-    </main>
-
-    <footer class="site-footer">
-      <p>SharperX AI Study Tutor. Educational support only. Not a replacement for teachers, official assessments or official memoranda.</p>
-      <nav class="footer-links" aria-label="Legal policies">
-        <a href="terms-and-conditions.html">Terms and Conditions</a>
-        <a href="refund-policy.html">Refund Policy</a>
-        <a href="shipping-policy.html">Shipping Policy</a>
-      </nav>
-      <p>&copy; <span data-year></span> SharperX. All rights reserved.</p>
-    </footer>
-
-    <script src="script.js"></script>
-  </body>
+    p:last-child {
+      margin: 22px auto 0;
+      max-width: 36rem;
+      color: #d8e7f5;
+      font-size: clamp(1rem, 2.5vw, 1.2rem);
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p>Beta offline</p>
+    <h1>SharperX School Beta is currently offline.</h1>
+    <p>This beta page has been taken down. Please check back later or contact the SharperTime team for access.</p>
+  </main>
+</body>
 </html>

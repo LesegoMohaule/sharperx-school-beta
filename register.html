@@ -26,22 +26,22 @@
       </div>
 
       <div class="registration-preview">
-        <div class="section-heading compact"><p class="section-kicker">Registration preview</p><h2>What will be required at launch</h2><p>The form below is shown for transparency only. It is disabled until the platform launch.</p></div>
+        <div class="section-heading compact"><p class="section-kicker">Registration preview</p><h2>What will be required at launch</h2><p>The account fields and submission are disabled until launch. You can still select the consent boxes to preview their checked state.</p></div>
         <form class="registration-form" data-registration-form data-registration-closed="true" aria-describedby="registration-closed-status">
-          <fieldset disabled>
-            <div class="form-grid two"><label>Name<input name="first_name" autocomplete="given-name" required></label><label>Surname<input name="surname" autocomplete="family-name" required></label></div>
-            <div class="form-grid two"><label>Email address<input name="email" type="email" autocomplete="email" required></label><label>Phone number<input name="phone_number" type="tel" autocomplete="tel" required></label></div>
-            <label>ID number<input name="id_number" inputmode="numeric" minlength="13" maxlength="13" autocomplete="off" required></label>
-            <label>House/street number and street name<input name="address_line_1" autocomplete="address-line1" required></label>
-            <label>Complex, unit, building or second line<input name="address_line_2" autocomplete="address-line2"></label>
-            <div class="form-grid two"><label>Suburb<input name="suburb" autocomplete="address-level3" required></label><label>City<input name="city" autocomplete="address-level2" required></label></div>
-            <div class="form-grid three"><label>Province<input name="province" autocomplete="address-level1"></label><label>Code<input name="postal_code" autocomplete="postal-code" required></label><label>Country<input name="country" autocomplete="country-name" value="South Africa" required></label></div>
-            <div class="form-grid two"><label>Password<input name="password" type="password" autocomplete="new-password" required></label><label>Confirm password<input name="confirm_password" type="password" autocomplete="new-password" required></label></div>
-            <button class="button secondary-dark" type="button" data-strong-password>Suggest strong password</button>
+          <fieldset class="registration-fields-preview">
+            <div class="form-grid two"><label>Name<input name="first_name" autocomplete="given-name" disabled required></label><label>Surname<input name="surname" autocomplete="family-name" disabled required></label></div>
+            <div class="form-grid two"><label>Email address<input name="email" type="email" autocomplete="email" disabled required></label><label>Phone number<input name="phone_number" type="tel" autocomplete="tel" disabled required></label></div>
+            <label>ID number<input name="id_number" inputmode="numeric" minlength="13" maxlength="13" autocomplete="off" disabled required></label>
+            <label>House/street number and street name<input name="address_line_1" autocomplete="address-line1" disabled required></label>
+            <label>Complex, unit, building or second line<input name="address_line_2" autocomplete="address-line2" disabled></label>
+            <div class="form-grid two"><label>Suburb<input name="suburb" autocomplete="address-level3" disabled required></label><label>City<input name="city" autocomplete="address-level2" disabled required></label></div>
+            <div class="form-grid three"><label>Province<input name="province" autocomplete="address-level1" disabled></label><label>Code<input name="postal_code" autocomplete="postal-code" disabled required></label><label>Country<input name="country" autocomplete="country-name" value="South Africa" disabled required></label></div>
+            <div class="form-grid two"><label>Password<input name="password" type="password" autocomplete="new-password" disabled required></label><label>Confirm password<input name="confirm_password" type="password" autocomplete="new-password" disabled required></label></div>
+            <button class="button secondary-dark" type="button" data-strong-password disabled>Suggest strong password</button>
             <p class="password-hint">Use at least 10 characters with uppercase, lowercase, number and symbol.</p>
             <label class="check-line"><input name="popia_consent" type="checkbox" required><span>I consent to SharperTime processing my personal information, including my contact and address details, for account setup, access and support.</span></label>
             <label class="check-line"><input name="accepted_terms" type="checkbox" required><span>I agree to the <a href="terms-and-conditions.html">Terms and Conditions</a>, <a href="privacy-policy.html">Privacy Policy</a> and <a href="disclaimer.html">Disclaimers</a>.</span></label>
-            <button class="button primary full" type="submit">Registration opens at launch</button>
+            <button class="button primary full" type="submit" disabled>Registration opens at launch</button>
           </fieldset>
           <p class="form-status is-success" id="registration-closed-status" data-registration-status role="status">Registration is closed until the platform launches.</p>
         </form>

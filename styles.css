@@ -180,3 +180,7 @@ p { line-height: 1.68; }
 .registration-form .check-line { grid-template-columns: auto minmax(0, 1fr) !important; gap: 10px; align-items: start; }
 .registration-form .check-line input { width: auto; margin-top: 3px; }
 .registration-form .check-line span { min-width: 0; line-height: 1.5; }
+.registration-form .check-line { color: var(--ink); opacity: 1; }
+.registration-form .check-line input { appearance: none; width: 18px; height: 18px; margin: 2px 0 0; border: 2px solid var(--teal-dark); border-radius: 4px; background: #fff; cursor: pointer; }
+.registration-form .check-line input:checked { background-color: var(--teal-dark); background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3 8.5 6.5 12 13 4.5' fill='none' stroke='white' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E"); background-position: center; background-repeat: no-repeat; background-size: 14px 14px; }
+.registration-form .check-line input:focus-visible { outline: 3px solid rgba(57,224,206,.35); outline-offset: 2px; }

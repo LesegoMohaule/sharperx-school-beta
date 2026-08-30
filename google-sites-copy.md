@@ -12,7 +12,7 @@ SharperTime is a focused AI learning platform for Grade 12 Mathematics. It helps
 
 Launch status: The platform is launching soon. Registration and paid access will open when the launch is ready.
 
-Buttons: Watch the product demo / Explore the application
+Buttons: Watch the product demo / Explore the application / See launch status
 
 ## Product promise
 

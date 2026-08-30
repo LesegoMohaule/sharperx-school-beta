@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Create Account | SharperTime</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="./"><span class="brand-mark">SX</span><span><strong>SharperTime</strong><small>Create account</small></span></a>
+    <nav class="site-nav is-inline">
+      <a href="./">Home</a>
+      <a href="login.html" class="nav-action">Login</a>
+    </nav>
+  </header>
+
+  <main class="auth-main">
+    <section class="auth-card">
+      <div class="section-heading compact">
+        <p class="section-kicker">Register first</p>
+        <h1>Create your account</h1>
+        <p>Anyone can create an account. After registration, verify your email with the OTP sent to your inbox before logging in.</p>
+      </div>
+
+      <form class="registration-form" data-registration-form>
+        <div class="form-grid two">
+          <label>Name<input name="first_name" autocomplete="given-name" required></label>
+          <label>Surname<input name="surname" autocomplete="family-name" required></label>
+        </div>
+        <div class="form-grid two">
+          <label>Email address<input name="email" type="email" autocomplete="email" required></label>
+          <label>Phone number<input name="phone_number" type="tel" autocomplete="tel" required></label>
+        </div>
+        <label>ID number<input name="id_number" inputmode="numeric" minlength="13" maxlength="13" autocomplete="off" required></label>
+
+        <div class="address-autofill">
+          <label>Find address with Google Maps
+            <input data-address-search placeholder="Start typing your address" autocomplete="off">
+          </label>
+          <small>Google Maps autocomplete is enabled when a Maps API key is configured. You can still type the address manually.</small>
+        </div>
+
+        <label>House/street number and street name<input name="address_line_1" autocomplete="address-line1" required></label>
+        <label>Complex, unit, building or second line<input name="address_line_2" autocomplete="address-line2"></label>
+        <div class="form-grid two">
+          <label>Suburb<input name="suburb" autocomplete="address-level3" required></label>
+          <label>City<input name="city" autocomplete="address-level2" required></label>
+        </div>
+        <div class="form-grid three">
+          <label>Province<input name="province" autocomplete="address-level1"></label>
+          <label>Code<input name="postal_code" autocomplete="postal-code" required></label>
+          <label>Country<input name="country" autocomplete="country-name" value="South Africa" required></label>
+        </div>
+        <input name="google_place_id" type="hidden">
+
+        <div class="form-grid two">
+          <label>Password
+            <input name="password" type="password" autocomplete="new-password" passwordrules="minlength: 10; required: upper; required: lower; required: digit; required: special;" required>
+          </label>
+          <label>Confirm password
+            <input name="confirm_password" type="password" autocomplete="new-password" required>
+          </label>
+        </div>
+        <button class="button secondary-dark" type="button" data-strong-password>Suggest strong password</button>
+        <p class="password-hint">Use at least 10 characters with uppercase, lowercase, number and symbol. Browser password managers may also offer a Google strong-password suggestion.</p>
+
+        <label class="check-line"><input name="popia_consent" type="checkbox" required> I consent to SharperTime processing my account, contact, address, usage and payment records for service delivery and support.</label>
+        <label class="check-line"><input name="accepted_terms" type="checkbox" required> I accept the <a href="terms-and-conditions.html">terms</a>, <a href="privacy-policy.html">privacy policy</a> and <a href="disclaimer.html">disclaimers</a>.</label>
+
+        <div class="captcha-box" data-captcha-container></div>
+        <button class="button primary full" type="submit">Create account</button>
+        <p class="form-status" data-registration-status></p>
+      </form>
+
+      <form class="registration-form otp-panel is-hidden" data-otp-form>
+        <h2>Verify email</h2>
+        <p>Enter the OTP sent to your email address.</p>
+        <label>Email address<input name="email" type="email" autocomplete="email" required></label>
+        <label>OTP code<input name="otp_code" inputmode="numeric" autocomplete="one-time-code" required></label>
+        <button class="button primary full" type="submit">Verify email</button>
+        <p class="form-status" data-otp-status></p>
+      </form>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>

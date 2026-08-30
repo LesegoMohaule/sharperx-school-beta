@@ -3,75 +3,191 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="robots" content="noindex, nofollow">
-  <title>SharperX School Beta Offline</title>
-  <style>
-    :root {
-      color-scheme: light dark;
-      font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: #07111f;
-      color: #f7fbff;
-    }
-
-    * {
-      box-sizing: border-box;
-    }
-
-    body {
-      min-height: 100vh;
-      margin: 0;
-      display: grid;
-      place-items: center;
-      padding: 24px;
-      background:
-        radial-gradient(circle at top left, rgba(55, 189, 248, 0.2), transparent 32rem),
-        linear-gradient(135deg, #07111f 0%, #0e1b31 52%, #07111f 100%);
-    }
-
-    main {
-      width: min(640px, 100%);
-      padding: clamp(28px, 6vw, 56px);
-      border: 1px solid rgba(255, 255, 255, 0.14);
-      border-radius: 28px;
-      background: rgba(255, 255, 255, 0.08);
-      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.35);
-      text-align: center;
-      backdrop-filter: blur(18px);
-    }
-
-    p:first-child {
-      display: inline-flex;
-      margin: 0 0 18px;
-      padding: 8px 14px;
-      border-radius: 999px;
-      background: rgba(255, 255, 255, 0.12);
-      color: #bae6fd;
-      font-size: 0.82rem;
-      font-weight: 700;
-      letter-spacing: 0.08em;
-      text-transform: uppercase;
-    }
-
-    h1 {
-      margin: 0;
-      font-size: clamp(2rem, 6vw, 4rem);
-      line-height: 0.95;
-    }
-
-    p:last-child {
-      margin: 22px auto 0;
-      max-width: 36rem;
-      color: #d8e7f5;
-      font-size: clamp(1rem, 2.5vw, 1.2rem);
-      line-height: 1.6;
-    }
-  </style>
+  <meta name="description" content="SharperTime is a focused AI-powered Grade 12 Mathematics learning platform for African learners, combining guided practice, diagnostic marking, multimodal input and short lesson videos.">
+  <meta name="theme-color" content="#061518">
+  <meta property="og:title" content="SharperTime | Practical AI Mathematics Learning">
+  <meta property="og:description" content="Ask, practise, get a hint, submit your work and improve with a focused Grade 12 Mathematics learning platform.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://lesegomohaule.github.io/sharperx-school-beta/">
+  <meta property="og:image" content="https://lesegomohaule.github.io/sharperx-school-beta/assets/hero-study-tutor.jpg">
+  <link rel="canonical" href="https://lesegomohaule.github.io/sharperx-school-beta/">
+  <title>SharperTime | Practical AI Mathematics Learning</title>
+  <link rel="stylesheet" href="styles.css">
 </head>
 <body>
+  <div class="site-announcement">
+    <span class="announcement-dot" aria-hidden="true"></span>
+    <span>SharperTime application showcase · Grade 12 Mathematics launch</span>
+    <a href="pitch-deck.html">Read the application deck <span aria-hidden="true">→</span></a>
+  </div>
+
+  <header class="site-header">
+    <a class="brand" href="./" aria-label="SharperTime home">
+      <span class="brand-mark">SX</span>
+      <span><strong>SharperTime</strong><small>Practical AI mathematics learning</small></span>
+    </a>
+    <button class="menu-button" type="button" data-menu-button aria-expanded="false" aria-controls="primary-nav">Menu</button>
+    <nav class="site-nav" id="primary-nav" data-nav aria-label="Primary navigation">
+      <a href="#product">Product</a>
+      <a href="#evidence">Evidence</a>
+      <a href="#roadmap">Roadmap</a>
+      <a href="#pricing">Access</a>
+      <a href="login.html" class="nav-link-muted">Sign in</a>
+      <a href="register.html" class="nav-action">Get access</a>
+    </nav>
+  </header>
+
   <main>
-    <p>Beta offline</p>
-    <h1>SharperX School Beta is currently offline.</h1>
-    <p>This beta page has been taken down. Please check back later or contact the SharperTime team for access.</p>
+    <section class="hero" id="top">
+      <div class="hero-grid section-shell">
+        <div class="hero-content">
+          <p class="eyebrow">Built in South Africa · Designed for African learners</p>
+          <h1>Make difficult maths feel workable.</h1>
+          <p class="hero-copy">SharperTime is a focused AI learning platform for Grade 12 Mathematics. It helps a learner ask a question, practise at the right difficulty, get a hint, submit their work and understand the correction.</p>
+          <div class="hero-actions">
+            <a class="button primary" href="demo.html">Watch the product demo <span aria-hidden="true">↗</span></a>
+            <a class="button secondary" href="pitch-deck.html">Explore the application</a>
+          </div>
+          <div class="hero-proof" aria-label="Product highlights">
+            <span><i>01</i> Windows + Android pathway</span>
+            <span><i>02</i> Multimodal mathematics</span>
+            <span><i>03</i> Short lesson videos</span>
+          </div>
+        </div>
+
+        <div class="hero-art" aria-label="SharperTime learning loop preview">
+          <div class="hero-art-glow"></div>
+          <div class="hero-art-panel">
+            <div class="hero-art-topline"><span class="signal"></span><span>SHARPertime / GRADE 12</span><span class="topline-tag">LIVE BUILD</span></div>
+            <div class="hero-art-title">The learner stays in the loop.</div>
+            <div class="loop-list">
+              <div class="loop-item is-active"><span>01</span><div><strong>Ask</strong><small>Text, voice, photo or graph</small></div><b>↗</b></div>
+              <div class="loop-item"><span>02</span><div><strong>Practise</strong><small>Choose a topic and difficulty</small></div><b>↗</b></div>
+              <div class="loop-item"><span>03</span><div><strong>Get feedback</strong><small>See the error, not only the answer</small></div><b>↗</b></div>
+              <div class="loop-item"><span>04</span><div><strong>Learn</strong><small>Return to a short worked lesson</small></div><b>↗</b></div>
+            </div>
+            <div class="hero-art-foot"><span>Focused launch</span><strong>Grade 12 Mathematics</strong></div>
+          </div>
+        </div>
+      </div>
+      <div class="hero-grid-lines" aria-hidden="true"></div>
+    </section>
+
+    <section class="signal-strip" aria-label="SharperTime product signals">
+      <div class="signal-strip-inner section-shell">
+        <div><strong>01</strong><span>Working product</span><small>Windows and Android experience</small></div>
+        <div><strong>02</strong><span>Guided learning</span><small>Hints, attempts and marking</small></div>
+        <div><strong>03</strong><span>Built for maths</span><small>Equations, working, graphs and diagrams</small></div>
+        <div><strong>04</strong><span>Content engine</span><small>Short lessons connected to revision</small></div>
+      </div>
+    </section>
+
+    <section class="section section-split" id="product">
+      <div class="section-heading">
+        <p class="section-kicker">The product</p>
+        <h2>A learning loop designed around the learner’s work.</h2>
+        <p>SharperTime is not built to rush to a final answer. It is built to help learners make a better attempt, recognise the gap and try again with useful guidance.</p>
+        <a class="text-link" href="demo.html">See the real app flow <span aria-hidden="true">→</span></a>
+      </div>
+      <div class="feature-grid feature-grid-two">
+        <article class="feature-card feature-card-dark"><span class="card-number">01</span><h3>Ask naturally</h3><p>Start with typed mathematics, a voice question, a textbook photo or a handwritten graph.</p></article>
+        <article class="feature-card"><span class="card-number">02</span><h3>Practise with intent</h3><p>Select a topic and difficulty, then work through a question instead of consuming a solution.</p></article>
+        <article class="feature-card"><span class="card-number">03</span><h3>Get diagnostic marking</h3><p>Submit an attempt and receive correction that explains what went wrong and what to do next.</p></article>
+        <article class="feature-card feature-card-accent"><span class="card-number">04</span><h3>Learn in context</h3><p>Use short, worked-example lessons to reinforce a concept and return to practice.</p></article>
+      </div>
+    </section>
+
+    <section class="section multimodal-section">
+      <div class="multimodal-panel">
+        <div class="section-heading light-heading">
+          <p class="section-kicker">Multimodal by design</p>
+          <h2>School mathematics is more than a text-chat problem.</h2>
+          <p>Real learners work with pages, symbols, rough working, graphs and spoken questions. SharperTime is being built around those inputs and the feedback they require.</p>
+        </div>
+        <div class="input-orbit" aria-label="Multimodal input types">
+          <span class="orbit-chip orbit-chip-one">Typed maths</span>
+          <span class="orbit-chip orbit-chip-two">Voice questions</span>
+          <span class="orbit-chip orbit-chip-three">Textbook photos</span>
+          <span class="orbit-chip orbit-chip-four">Handwritten graphs</span>
+          <div class="orbit-core"><span>AI</span><strong>Maths<br>context</strong></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section evidence-section" id="evidence">
+      <div class="section-heading evidence-heading">
+        <p class="section-kicker">Evidence room</p>
+        <h2>See the work. Press play. Read the plan.</h2>
+        <p>A working product, a real lesson sample and the application deck are available here for review.</p>
+      </div>
+      <div class="evidence-grid">
+        <article class="evidence-card evidence-card-featured">
+          <div class="evidence-art evidence-art-deck"><span class="evidence-label">GOOGLE AFRICA<br>APPLIED AI LAB</span><strong>SharperTime</strong><small>Application deck</small><span class="evidence-arrow">↗</span></div>
+          <div class="evidence-body"><p class="card-kicker">01 · Strategy</p><h3>The application deck</h3><p>Product problem, learning workflow, multimodal opportunity, launch model and roadmap in one concise case.</p><a class="text-link" href="pitch-deck.html">Open deck <span aria-hidden="true">→</span></a></div>
+        </article>
+        <article class="evidence-card">
+          <div class="evidence-art evidence-art-demo"><img src="assets/media/demo-poster.jpg" alt="SharperTime product demonstration preview"><span class="video-badge">▶ 05:00</span></div>
+          <div class="evidence-body"><p class="card-kicker">02 · Product</p><h3>Product demonstration</h3><p>A five-minute walkthrough of topic choice, practice, hints and diagnostic correction.</p><a class="text-link" href="demo.html">Watch demo <span aria-hidden="true">→</span></a></div>
+        </article>
+        <article class="evidence-card">
+          <div class="evidence-art evidence-art-calculus"><img src="assets/media/calculus-poster.jpg" alt="Differential calculus lesson preview"><span class="video-badge">▶ 05:00</span></div>
+          <div class="evidence-body"><p class="card-kicker">03 · Content</p><h3>Differential Calculus</h3><p>A sample worked-example lesson showing the content engine in a calm, classroom-ready format.</p><a class="text-link" href="calculus.html">Play lesson <span aria-hidden="true">→</span></a></div>
+        </article>
+      </div>
+    </section>
+
+    <section class="section roadmap-section" id="roadmap">
+      <div class="section-heading">
+        <p class="section-kicker">The plan</p>
+        <h2>Focused launch first. Disciplined expansion next.</h2>
+        <p>The immediate job is to prove a simple learning loop with Grade 12 Mathematics, measure what helps, and expand from evidence.</p>
+      </div>
+      <div class="roadmap-grid">
+        <article class="roadmap-card roadmap-now"><span class="roadmap-status">NOW</span><h3>Build and prove</h3><p>Working Windows and Android experience for Grade 12 Mathematics, with guided practice, multimodal input and lesson videos.</p><span class="roadmap-line"></span></article>
+        <article class="roadmap-card"><span class="roadmap-status">SEP 2026</span><h3>Launch access</h3><p>Website and Google Play launch, local learner outreach, demos and a focused subscription model.</p><span class="roadmap-line"></span></article>
+        <article class="roadmap-card"><span class="roadmap-status">2027+</span><h3>Scale what works</h3><p>Add more grades and curriculum coverage, expand device support, then introduce live tutoring and a shared learning canvas.</p><span class="roadmap-line"></span></article>
+      </div>
+    </section>
+
+    <section class="section why-google-section">
+      <div class="why-google-inner">
+        <div class="section-heading light-heading">
+          <p class="section-kicker">Why Google Africa Applied AI Lab</p>
+          <h2>Make multimodal learning more accurate, affordable and scalable.</h2>
+          <p>Google AI support could help SharperTime improve the quality of mathematics understanding while keeping the learner experience simple and the operating model responsible.</p>
+        </div>
+        <div class="why-google-list">
+          <div><span>01</span><strong>Gemini</strong><p>Stronger handling of handwriting, images, diagrams, graphs and richer tutoring interactions.</p></div>
+          <div><span>02</span><strong>Efficient models</strong><p>Lower-cost routing for routine tasks, question classification and feedback workflows.</p></div>
+          <div><span>03</span><strong>Google tooling</strong><p>Faster lesson creation, content iteration, evaluation and a path to broader distribution.</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section pricing-section" id="pricing">
+      <div class="section-heading">
+        <p class="section-kicker">Access and credits</p>
+        <h2>A simple launch model for learners and families.</h2>
+        <p>Register, verify your email, then use the account dashboard to access the current PayFast checkout options.</p>
+      </div>
+      <div class="credit-pricing">
+        <article class="credit-price-card"><span class="price-tag">TUTOR</span><h3>R35 <small>/ 30 days</small></h3><p>Grade 12 Mathematics tutor access with controlled AI usage for guided practice, hints and feedback.</p><a class="button primary full" href="login.html">Login to buy access</a></article>
+        <article class="credit-price-card credit-price-card-dark"><span class="price-tag">LESSON LIBRARY</span><h3>R30 <small>/ 30 days</small></h3><p>Access to lesson-video streaming, including worked-example content such as the Differential Calculus sample.</p><a class="button secondary-light full" href="login.html">Login to access videos</a></article>
+      </div>
+    </section>
+
+    <section class="section final-cta">
+      <div class="cta-panel">
+        <div><p class="section-kicker">Built to be useful</p><h2>Start with one learner, one question and a better next step.</h2></div>
+        <div class="cta-actions"><a class="button primary" href="register.html">Create an account</a><a class="button outline-light" href="pitch-deck.html">Review the evidence</a></div>
+      </div>
+    </section>
   </main>
+
+  <footer class="site-footer">
+    <div class="footer-main"><div><a class="brand footer-brand" href="./"><span class="brand-mark">SX</span><span><strong>SharperTime</strong><small>Sharper Solutions. Sharper Futures.</small></span></a><p class="footer-note">A practical AI mathematics learning platform built by Sharper X (Pty) Ltd in Johannesburg, South Africa.</p></div><div class="footer-links"><div><strong>Explore</strong><a href="demo.html">Product demo</a><a href="calculus.html">Calculus lesson</a><a href="pitch-deck.html">Application deck</a></div><div><strong>Account</strong><a href="register.html">Register</a><a href="login.html">Sign in</a><a href="account.html">Dashboard</a></div><div><strong>Legal</strong><a href="terms-and-conditions.html">Terms</a><a href="privacy-policy.html">Privacy</a><a href="refund-policy.html">Refunds</a><a href="shipping-policy.html">Digital delivery</a></div></div></div>
+    <div class="footer-bottom"><span>© <span data-year></span> Sharper X (Pty) Ltd</span><span>Educational support only · No guaranteed results</span></div>
+  </footer>
+  <script src="script.js"></script>
 </body>
 </html>

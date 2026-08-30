@@ -1,0 +1,37 @@
+WEBVTT
+
+00:00.000 --> 00:25.000
+Welcome to SharperTime Grade twelve Mathematics. In this five-minute lesson, we focus on four connected ideas in differential calculus: the derivative as a gradient, the power rule, the equation of a tangent, and stationary points on a cubic graph. We will use one simple example so that every step connects clearly to the next.
+
+00:25.000 --> 00:50.000
+Start with the meaning of a derivative. Between two points on a curve, a secant line gives an average gradient. At one chosen point, the tangent line gives the instantaneous gradient. The derivative is the function that tells us that tangent gradient, and therefore the rate at which the original function is changing.
+
+00:50.000 --> 01:15.000
+For an average gradient, use change in y divided by change in x. On the graph of y equals x squared, take A at one comma one and B at three comma nine. The gradient is nine minus one, divided by three minus one. That gives four, which is the gradient of the secant line.
+
+01:15.000 --> 01:40.000
+To move from an average gradient to a derivative, imagine the second point moving closer and closer to the first. The horizontal separation, h, approaches zero, and the secant approaches the tangent. This is the limit idea behind the derivative definition: f prime of x equals the limit of f of x plus h minus f of x, over h.
+
+01:40.000 --> 02:05.000
+In Grade twelve, once the derivative idea is understood, polynomial questions are handled efficiently with the power rule. For a term a x to the power n, multiply by the exponent, then reduce that exponent by one. So x to the fourth becomes four x cubed, minus three x squared becomes minus six x, and a constant differentiates to zero.
+
+02:05.000 --> 02:30.000
+Now apply the rule to the cubic function f of x equals x cubed minus three x. Differentiate each term separately. The derivative of x cubed is three x squared, and the derivative of minus three x is minus three. Therefore f prime of x equals three x squared minus three. This derivative gives the tangent gradient at every x-value.
+
+02:30.000 --> 02:55.000
+Suppose we want the gradient of the original graph at x equals zero. First evaluate the derivative there. Three times zero squared minus three is negative three. The point on the original graph is also zero comma zero. So the tangent at the origin has gradient negative three. Notice how the derivative provides the gradient immediately.
+
+02:55.000 --> 03:20.000
+With the point and gradient known, use the straight-line form y minus y one equals m times x minus x one. Substitute the point zero comma zero and m equals negative three. This gives y minus zero equals negative three times x minus zero, so the tangent equation simplifies to y equals negative three x.
+
+03:20.000 --> 03:45.000
+Stationary points occur where the tangent is horizontal, so the gradient is zero. Set the derivative equal to zero: three x squared minus three equals zero. Then x squared equals one, giving x equals negative one or positive one. Substituting into the original function gives the stationary points negative one comma two and one comma negative two.
+
+03:45.000 --> 04:10.000
+Classify the stationary points by checking the sign of the derivative. Before x equals negative one, the derivative is positive, so the graph increases. Between negative one and one it is negative, so the graph decreases. After one it is positive again. Therefore negative one comma two is a local maximum, and one comma negative two is a local minimum.
+
+04:10.000 --> 04:35.000
+For a cubic sketch, follow a consistent workflow. Differentiate, solve f prime of x equals zero, calculate the y-values, and classify the stationary points. Then add the intercepts and end behaviour. Calculus converts the important changes in a cubic graph into values you can calculate and plot accurately.
+
+04:35.000 --> 05:00.000
+To summarise: the derivative is the tangent gradient. The power rule differentiates polynomial terms quickly. A tangent equation uses that gradient and a point on the graph. Stationary points come from solving f prime of x equals zero and classifying the gradient change. These ideas prepare you for cubic graphs and optimisation.

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Login | SharperTime</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="./"><span class="brand-mark">SX</span><span><strong>SharperTime</strong><small>Account login</small></span></a>
+    <nav class="site-nav is-inline">
+      <a href="./">Home</a>
+      <a href="register.html" class="nav-action">Register</a>
+    </nav>
+  </header>
+
+  <main class="auth-main">
+    <section class="auth-card narrow">
+      <div class="section-heading compact">
+        <p class="section-kicker">Login</p>
+        <h1>Welcome back</h1>
+        <p>Enter your email address and password. If you forgot your password, request a secure reset link by email.</p>
+      </div>
+
+      <form class="login-form" data-login-form>
+        <label>Email address<input name="email" type="email" autocomplete="email" required></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+        <button class="button primary full" type="submit">Login</button>
+        <button class="button secondary-dark full" type="button" data-show-forgot>Forgot password</button>
+        <p class="form-status" data-login-status></p>
+      </form>
+
+      <form class="login-form is-hidden" data-forgot-form>
+        <h2>Reset password</h2>
+        <p>Enter your account email. A secure reset link will be sent if the account exists.</p>
+        <label>Email address<input name="email" type="email" autocomplete="email" required></label>
+        <button class="button primary full" type="submit">Send reset link</button>
+        <p class="form-status" data-forgot-status></p>
+      </form>
+
+      <form class="login-form is-hidden" data-reset-form>
+        <h2>Create new password</h2>
+        <label>New password<input name="password" type="password" autocomplete="new-password" required></label>
+        <label>Confirm new password<input name="confirm_password" type="password" autocomplete="new-password" required></label>
+        <button class="button primary full" type="submit">Save new password</button>
+        <p class="form-status" data-reset-status></p>
+      </form>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>

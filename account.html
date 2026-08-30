@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="description" content="Manage SharperTime Grade 12 Mathematics tutor and lesson-library access.">
+  <title>Account | SharperTime</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="brand" href="./"><span class="brand-mark">SX</span><span><strong>SharperTime</strong><small>Account balance</small></span></a>
+    <nav class="site-nav is-inline">
+      <a href="./">Home</a>
+      <a href="demo.html">Demo</a>
+      <a href="calculus.html">Lesson</a>
+      <a href="login.html">Login</a>
+      <button class="link-button" type="button" data-logout>Logout</button>
+    </nav>
+  </header>
+
+  <main class="auth-main">
+    <section class="auth-card">
+      <div class="section-heading compact">
+        <p class="section-kicker">Your account</p>
+        <h1>Credits and access</h1>
+        <p>Manage Grade 12 Mathematics tutor access and lesson-video access. Balances update after login and after PayFast confirms payment.</p>
+      </div>
+
+      <p class="form-status" data-payment-status></p>
+      <div class="balance-grid" data-account-dashboard>
+        <article><span>Service access</span><strong data-balance="service_access_label">Login required</strong></article>
+        <article><span>AI characters remaining</span><strong data-balance="characters_remaining">0</strong></article>
+        <article><span>Photo questions remaining</span><strong data-balance="photo_questions_remaining">0</strong></article>
+        <article><span>Document uploads remaining</span><strong data-balance="document_uploads_remaining">0</strong></article>
+        <article><span>Tutor days left</span><strong data-balance="tutor_days_remaining">0</strong></article>
+        <article><span>Video days left</span><strong data-balance="video_days_remaining">0</strong></article>
+      </div>
+
+      <div class="credit-pricing account-products">
+        <article class="credit-price-card">
+          <h3>Grade 12 Mathematics tutor</h3>
+          <p>R35 adds 30 days of guided Grade 12 Mathematics tutor access and the controlled AI usage allocation for the launch product.</p>
+          <button class="button primary full" type="button" data-buy-product="tutor_topup_r35">Pay R35 with PayFast</button>
+        </article>
+        <article class="credit-price-card">
+          <h3>Access lesson videos</h3>
+          <p>R30 adds 30 days of lesson-video streaming access. This does not unlock tutor modes unless tutor access is also active.</p>
+          <button class="button secondary-dark full" type="button" data-buy-product="videos_r30">Pay R30 with PayFast</button>
+        </article>
+      </div>
+    </section>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>

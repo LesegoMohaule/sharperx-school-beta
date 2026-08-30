@@ -1,32 +1,32 @@
-# SharperX AI Study Tutor Website
+# SharperTime website
 
-This is a static public beta website for SharperX AI Study Tutor.
+SharperTime is a focused AI-powered Grade 12 Mathematics learning platform for African learners. The public website presents the working product, a sample lesson and the application case for the Google Africa Applied AI Lab.
 
-The site positions SharperX as a beta CAPS-aligned study assistant that learners and parents can choose to use directly,
-especially for high school Maths, Physical Sciences and Accounting. Registration, credits and payments are for account
-owners who are 18 or older.
+## Live website
 
-Live site: GitHub Pages deployment for this repository.
+GitHub Pages: https://lesegomohaule.github.io/sharperx-school-beta/
 
-## Hosting options
+## Public evidence pages
 
-- GitHub Pages: best for a polished public link and full design control.
-- Google Sites: best if you want to edit visually inside your Google account.
+- `demo.html` - five-minute product demonstration with native browser playback
+- `calculus.html` - Grade 12 Differential Calculus lesson with native playback and subtitles
+- `pitch-deck.html` - in-browser PDF viewer, PowerPoint browser preview and downloads
 
-## Files
+## Local assets
 
-- `index.html` - landing page
-- `styles.css` - page styling
-- `script.js` - mobile menu and footer year
-- `assets/hero-study-tutor.jpg` - optimized hero image
-- `google-sites-copy.md` - copy sections for Google Sites
+- `assets/media/sharpertime-google-africa-applied-ai-lab-demo-5min.mp4`
+- `assets/media/sharpertime-grade12-differential-calculus-5min-lesson.mp4`
+- `assets/media/sharpertime-google-africa-applied-ai-lab-pitch-deck.pptx`
+- `assets/media/sharpertime-google-africa-applied-ai-lab-pitch-deck.pdf`
+
+## Account and payments
+
+The account flow retains the PayFast checkout integration for Grade 12 Mathematics tutor access and lesson-video access. Server secrets such as the PayFast passphrase, SMTP password, API keys and reCAPTCHA secret must never be placed in this static repository.
 
 ## Local preview
-
-Open `index.html` in a browser, or run a simple local server:
 
 ```powershell
 python -m http.server 8080
 ```
 
-Then open `http://localhost:8080`.
+Then open http://localhost:8080.

@@ -2,8 +2,6 @@ const menuButton = document.querySelector("[data-menu-button]");
 const nav = document.querySelector("[data-nav]");
 const year = document.querySelector("[data-year]");
 const API_BASE_URL = window.SHARPERX_API_BASE_URL || "https://api.46.225.173.118.nip.io";
-const RECAPTCHA_SITE_KEY = window.SHARPERX_RECAPTCHA_SITE_KEY || "";
-const GOOGLE_MAPS_API_KEY = window.SHARPERX_GOOGLE_MAPS_API_KEY || "";
 const pageParams = new URLSearchParams(window.location.search);
 
 if (year) year.textContent = new Date().getFullYear().toString();
@@ -104,69 +102,6 @@ document.querySelector("[data-strong-password]")?.addEventListener("click", () =
   if (confirm) confirm.value = value;
 });
 
-function captchaResponse() {
-  if (!window.grecaptcha || !RECAPTCHA_SITE_KEY) return "";
-  return grecaptcha.getResponse();
-}
-
-function setupCaptcha() {
-  const container = document.querySelector("[data-captcha-container]");
-  if (!container) return;
-  if (!RECAPTCHA_SITE_KEY) {
-    container.textContent = "Captcha site key is not configured yet.";
-    container.classList.add("captcha-warning");
-    return;
-  }
-  const script = document.createElement("script");
-  script.src = "https://www.google.com/recaptcha/api.js";
-  script.async = true;
-  script.defer = true;
-  document.head.appendChild(script);
-  const widget = document.createElement("div");
-  widget.className = "g-recaptcha";
-  widget.dataset.sitekey = RECAPTCHA_SITE_KEY;
-  container.appendChild(widget);
-}
-
-function setupGoogleAddressAutocomplete() {
-  const input = document.querySelector("[data-address-search]");
-  if (!input || !GOOGLE_MAPS_API_KEY) return;
-  window.initSharperXAddressAutocomplete = () => {
-    const autocomplete = new google.maps.places.Autocomplete(input, {
-      componentRestrictions: { country: "za" },
-      fields: ["address_components", "place_id"],
-      types: ["address"],
-    });
-    autocomplete.addListener("place_changed", () => fillAddressFromPlace(autocomplete.getPlace()));
-  };
-  const script = document.createElement("script");
-  script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GOOGLE_MAPS_API_KEY)}&libraries=places&callback=initSharperXAddressAutocomplete`;
-  script.async = true;
-  script.defer = true;
-  document.head.appendChild(script);
-}
-
-function fillAddressFromPlace(place) {
-  const components = place.address_components || [];
-  const byType = (type, short = false) => {
-    const item = components.find((component) => component.types.includes(type));
-    return item ? (short ? item.short_name : item.long_name) : "";
-  };
-  const street = [byType("street_number"), byType("route")].filter(Boolean).join(" ");
-  setField("address_line_1", street);
-  setField("suburb", byType("sublocality_level_1") || byType("sublocality") || byType("neighborhood"));
-  setField("city", byType("locality") || byType("postal_town") || byType("administrative_area_level_2"));
-  setField("province", byType("administrative_area_level_1"));
-  setField("postal_code", byType("postal_code"));
-  setField("country", byType("country"));
-  setField("google_place_id", place.place_id || "");
-}
-
-function setField(name, value) {
-  const field = document.querySelector(`[name='${name}']`);
-  if (field && value) field.value = value;
-}
-
 const registrationForm = document.querySelector("[data-registration-form]");
 const registrationStatus = document.querySelector("[data-registration-status]");
 const otpForm = document.querySelector("[data-otp-form]");
@@ -174,6 +109,10 @@ const otpStatus = document.querySelector("[data-otp-status]");
 
 registrationForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
+  if (registrationForm.dataset.registrationClosed === "true") {
+    setStatus(registrationStatus, "SharperTime is launching soon. Registration is not open yet.", "error");
+    return;
+  }
   const form = new FormData(registrationForm);
   const password = String(form.get("password") || "");
   const confirmPassword = String(form.get("confirm_password") || "");
@@ -190,7 +129,6 @@ registrationForm?.addEventListener("submit", async (event) => {
   payload.popia_consent = form.get("popia_consent") === "on";
   payload.accepted_terms = form.get("accepted_terms") === "on";
   payload.marketing_consent = false;
-  payload.captcha_token = captchaResponse();
 
   try {
     setStatus(registrationStatus, "Creating account...");
@@ -325,7 +263,5 @@ if (pageParams.get("payment") === "success") {
   setStatus(paymentStatus, "Manual payment reference created. Contact support if access is not allocated.", "success");
 }
 
-setupCaptcha();
-setupGoogleAddressAutocomplete();
 loadAccountDashboard();
 setupOfficeViewer();

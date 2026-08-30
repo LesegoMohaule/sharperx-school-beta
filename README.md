@@ -6,6 +6,8 @@ SharperTime is a focused AI-powered Grade 12 Mathematics learning platform for A
 
 GitHub Pages: https://lesegomohaule.github.io/sharperx-school-beta/
 
+The platform is launching soon. Registration and paid access are currently closed; the public site is available for product, lesson and application review.
+
 ## Public evidence pages
 
 - `demo.html` - five-minute product demonstration with native browser playback
@@ -21,7 +23,7 @@ GitHub Pages: https://lesegomohaule.github.io/sharperx-school-beta/
 
 ## Account and payments
 
-The account flow retains the PayFast checkout integration for Grade 12 Mathematics tutor access and lesson-video access. Server secrets such as the PayFast passphrase, SMTP password, API keys and reCAPTCHA secret must never be placed in this static repository.
+The account flow retains the PayFast checkout integration for Grade 12 Mathematics tutor access and lesson-video access for existing account holders. New registration is currently closed. Server secrets such as the PayFast passphrase, SMTP password and API keys must never be placed in this static repository.
 
 ## Local preview
 

@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#000000">
+  <title>SharperX lesson video</title>
+  <style>
+    :root { color-scheme: dark; background: #000; }
+    * { box-sizing: border-box; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      margin: 0;
+      overflow: hidden;
+      background: #000;
+      color: #fff;
+      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    }
+    #player {
+      position: fixed;
+      inset: 0;
+      width: 100vw;
+      height: var(--visible-height, 100dvh);
+      min-height: 0;
+      background: #000;
+    }
+    #lesson-video {
+      display: block;
+      width: 100vw;
+      height: 100%;
+      background: #000;
+      object-fit: contain;
+    }
+    #lesson-video:fullscreen,
+    #lesson-video:-webkit-full-screen {
+      width: 100vw;
+      height: 100vh;
+      height: 100dvh;
+      object-fit: contain;
+      background: #000;
+    }
+    #toolbar {
+      position: absolute;
+      top: max(10px, env(safe-area-inset-top));
+      right: max(10px, env(safe-area-inset-right));
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      max-width: calc(100vw - 20px);
+      padding: 8px 10px;
+      border-radius: 10px;
+      background: rgb(0 0 0 / 62%);
+      backdrop-filter: blur(5px);
+    }
+    #lesson-title {
+      max-width: min(55vw, 540px);
+      overflow: hidden;
+      font-size: 14px;
+      font-weight: 600;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    #fullscreen-button {
+      min-height: 40px;
+      border: 0;
+      border-radius: 8px;
+      padding: 0 13px;
+      background: #0e7490;
+      color: #fff;
+      font: inherit;
+      font-weight: 700;
+      white-space: nowrap;
+    }
+    #status {
+      position: absolute;
+      inset: 50% 16px auto;
+      transform: translateY(-50%);
+      margin: 0 auto;
+      max-width: 520px;
+      padding: 14px 18px;
+      border-radius: 10px;
+      background: rgb(15 23 42 / 92%);
+      color: #fff;
+      text-align: center;
+      line-height: 1.5;
+    }
+    #status[hidden] { display: none; }
+    @media (orientation: landscape) {
+      #toolbar { top: max(6px, env(safe-area-inset-top)); right: max(8px, env(safe-area-inset-right)); }
+    }
+  </style>
+</head>
+<body>
+  <main id="player" aria-label="Grade 12 Mathematics lesson video">
+    <video id="lesson-video" controls playsinline webkit-playsinline preload="metadata"></video>
+    <div id="toolbar">
+      <span id="lesson-title">Grade 12 Mathematics lesson</span>
+      <button id="fullscreen-button" type="button">Full screen</button>
+    </div>
+    <p id="status" role="status" hidden></p>
+  </main>
+  <script>
+    (() => {
+      const params = new URLSearchParams(window.location.search);
+      const videoId = params.get("video_id") || "";
+      const token = params.get("token") || "";
+      const title = params.get("title") || "Grade 12 Mathematics lesson";
+      const video = document.getElementById("lesson-video");
+      const status = document.getElementById("status");
+      const titleElement = document.getElementById("lesson-title");
+      const updateViewportHeight = () => {
+        const visibleHeight = window.visualViewport?.height || window.innerHeight;
+        document.documentElement.style.setProperty("--visible-height", `${visibleHeight}px`);
+      };
+
+      updateViewportHeight();
+      window.addEventListener("resize", updateViewportHeight, { passive: true });
+      window.visualViewport?.addEventListener("resize", updateViewportHeight, { passive: true });
+      titleElement.textContent = title;
+      document.title = `${title} | SharperX`;
+
+      const showStatus = (message) => {
+        status.textContent = message;
+        status.hidden = false;
+      };
+
+      if (!/^math-g12-[A-Za-z0-9_-]+$/.test(videoId) || !/^[A-Za-z0-9_-]+$/.test(token)) {
+        showStatus("This lesson link is incomplete. Return to SharperTime practice and open the video again.");
+        return;
+      }
+
+      const apiOrigin = "https://api.46.225.173.118.nip.io";
+      const streamPath = `/api/lesson-videos/stream/${encodeURIComponent(videoId)}`;
+      video.src = `${apiOrigin}${streamPath}?token=${encodeURIComponent(token)}`;
+      video.addEventListener("loadedmetadata", () => { status.hidden = true; }, { once: true });
+      video.addEventListener("error", () => {
+        showStatus("The lesson video could not be loaded. Reopen it from practice to refresh its access link.");
+      });
+      document.getElementById("fullscreen-button").addEventListener("click", async () => {
+        try {
+          const playback = video.play();
+          if (video.requestFullscreen) await video.requestFullscreen();
+          else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+          await playback;
+        } catch (_) {
+          showStatus("Use the video controls to start playback, then choose Full screen.");
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

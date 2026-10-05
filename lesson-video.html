@@ -143,10 +143,16 @@
           const playback = video.play();
           if (video.requestFullscreen) await video.requestFullscreen();
           else if (video.webkitEnterFullscreen) video.webkitEnterFullscreen();
+          if (screen.orientation?.lock) {
+            try { await screen.orientation.lock("landscape"); } catch (_) { /* Some browsers do not allow orientation locking. */ }
+          }
           await playback;
         } catch (_) {
           showStatus("Use the video controls to start playback, then choose Full screen.");
         }
+      });
+      document.addEventListener("fullscreenchange", () => {
+        if (!document.fullscreenElement && screen.orientation?.unlock) screen.orientation.unlock();
       });
     })();
   </script>

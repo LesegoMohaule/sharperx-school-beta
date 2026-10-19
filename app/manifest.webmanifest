@@ -1,0 +1,19 @@
+{
+  "name": "SharperTime Mathematics",
+  "short_name": "SharperTime",
+  "description": "Ask, practise, prepare for tests, and review mathematics lessons.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#f4f7f6",
+  "theme_color": "#0e766e",
+  "icons": [
+    {
+      "src": "./icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}

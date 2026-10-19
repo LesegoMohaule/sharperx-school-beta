@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0e766e">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="SharperTime">
+  <meta name="robots" content="noindex, nofollow">
+  <meta name="description" content="SharperTime mathematics learning workspace.">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="./icon.svg">
+  <link rel="stylesheet" href="./styles.css">
+  <script>window.MathJax = { tex: { inlineMath: [["\\(", "\\)"], ["$", "$"]], displayMath: [["\\[", "\\]"], ["$$", "$$"]] }, options: { skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"] } };</script>
+  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
+  <title>SharperTime workspace</title>
+</head>
+<body>
+  <div id="authScreen" class="auth-screen">
+    <a class="auth-brand" href="../" aria-label="SharperTime home">
+      <img src="../assets/brand/sharperx-logo.png" alt="">
+      <span><strong>SharperTime</strong><small>Mathematics workspace</small></span>
+    </a>
+    <section class="auth-card" aria-labelledby="authTitle">
+      <p class="eyebrow">Your learning space</p>
+      <h1 id="authTitle">Sign in to SharperTime</h1>
+      <p class="muted">Use your existing SharperTime account. Your AI key stays on the SharperTime server.</p>
+      <form id="loginForm" class="form-stack">
+        <label>Email or username<input name="email" type="text" autocomplete="username" required></label>
+        <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+        <button class="button primary" type="submit">Sign in</button>
+        <p id="loginStatus" class="status" role="status" aria-live="polite"></p>
+      </form>
+      <div class="auth-links"><a href="../login.html">Account help</a><a href="../privacy-policy.html">Privacy</a></div>
+    </section>
+  </div>
+
+  <div id="workspace" class="workspace" hidden>
+    <header class="topbar">
+      <a class="brand" href="../" aria-label="SharperTime home">
+        <img src="../assets/brand/sharperx-logo.png" alt="">
+        <span><strong>SharperTime</strong><small>Learn by doing</small></span>
+      </a>
+      <div class="topbar-tools">
+        <label class="grade-quick">Grade <select id="globalGrade" aria-label="Current grade"><option>8</option><option>9</option><option>10</option><option>11</option><option selected>12</option></select></label>
+        <span id="accountLabel" class="account-label"></span>
+        <button id="logoutButton" class="button subtle" type="button">Sign out</button>
+      </div>
+    </header>
+
+    <div class="workspace-grid">
+      <nav class="side-nav" aria-label="Workspace">
+        <p class="nav-label">LEARN</p>
+        <button class="nav-item is-active" type="button" data-view="ask"><span aria-hidden="true">✦</span> Ask</button>
+        <button class="nav-item" type="button" data-view="practice"><span aria-hidden="true">◉</span> Practice</button>
+        <button class="nav-item" type="button" data-view="exam"><span aria-hidden="true">▤</span> Test / exam prep</button>
+        <button class="nav-item" type="button" data-view="lessons"><span aria-hidden="true">▷</span> Lesson videos</button>
+        <button class="nav-item" type="button" data-view="reports"><span aria-hidden="true">▧</span> Saved reports</button>
+        <div class="nav-bottom"><a href="../">Visit sharperx.co.za <span aria-hidden="true">↗</span></a></div>
+      </nav>
+
+      <main class="main-panel" id="mainPanel">
+        <section class="view is-visible" data-view-panel="ask" aria-labelledby="askTitle">
+          <header class="view-heading">
+            <div><p class="eyebrow">Ask</p><h1 id="askTitle">What would you like help with?</h1><p class="muted">Ask a question, upload a paper, or show your working. You stay in control of the attempt.</p></div>
+          </header>
+          <div class="ask-layout">
+            <div class="conversation-column">
+              <div id="chatMessages" class="chat-messages" aria-live="polite">
+                <article class="message assistant-message welcome-message"><span class="message-kind">SharperTime</span><p>Type a maths question or instruction. You can also upload a question paper, attach a photo, record a voice note, or use the canvas.</p></article>
+              </div>
+              <section id="paperTools" class="paper-tools" hidden aria-label="Uploaded question paper">
+                <div class="paper-tools-heading"><div><strong id="paperFileName">Question paper ready</strong><small id="paperStatus">Select a question number to preview its page.</small></div><button id="clearPaperButton" class="icon-button" type="button" aria-label="Clear paper from this session">×</button></div>
+                <div class="paper-question-row"><label>Question number<input id="paperQuestionNumber" type="text" placeholder="For example 2(b)" maxlength="20"></label><button id="showPaperQuestionButton" class="button secondary" type="button">Show question</button></div>
+                <div id="paperSnapshotCard" class="paper-snapshot-card" hidden>
+                  <div class="snapshot-heading"><strong id="paperSnapshotTitle">Selected question</strong><button id="openPaperSnapshot" class="button subtle" type="button">View full page</button></div>
+                  <img id="paperSnapshotImage" alt="Full page of the uploaded paper containing the selected question">
+                  <p id="paperQuestionText" class="paper-question-text"></p>
+                </div>
+              </section>
+              <div id="sourceLinks" class="paper-source-links" aria-live="polite"></div>
+              <form id="askForm" class="composer">
+                <div class="composer-tools">
+                  <button class="tool-button" type="button" data-file-trigger="photoInput" aria-label="Attach a photo">＋<span>Photo</span></button>
+                  <button class="tool-button" type="button" data-file-trigger="paperInput" aria-label="Upload a question paper">▤<span>Paper</span></button>
+                  <button class="tool-button" type="button" data-file-trigger="memoInput" aria-label="Upload a marking memo">▧<span>Memo</span></button>
+                  <button id="voiceButton" class="tool-button" type="button" aria-label="Record a voice note">🎙<span>Voice</span></button>
+                  <button class="tool-button" type="button" data-open-canvas="ask-write">✎ / ☝<span>Write</span></button>
+                  <button class="tool-button" type="button" data-open-canvas="ask-graph">✎ / ☝<span>Draw graph</span></button>
+                </div>
+                <label class="composer-label" for="askInput">Your question or instruction</label>
+                <textarea id="askInput" rows="3" placeholder="Type a question or instruction. Add your working if you want it marked." maxlength="20000"></textarea>
+                <div class="composer-footer"><span id="voiceStatus" class="muted" role="status"></span><button id="sendAskButton" class="button primary send-button" type="submit">Send <span aria-hidden="true">➤</span></button></div>
+                <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
+                <input id="paperInput" type="file" accept=".pdf,application/pdf" hidden>
+                <input id="memoInput" type="file" accept=".pdf,application/pdf" hidden>
+              </form>
+            </div>
+            <aside class="ask-help-panel">
+              <div class="help-card"><span class="help-icon">01</span><h2>Work it out</h2><p>Get a hint or explanation first. Submit your attempt when you want it marked.</p></div>
+              <div class="help-card"><span class="help-icon">02</span><h2>Use your paper</h2><p>Upload a question paper once, then select questions from it during this session.</p></div>
+              <div class="help-card"><span class="help-icon">03</span><h2>Keep your work</h2><p>Save feedback and worked solutions as a textbook-style PDF report.</p></div>
+              <p class="source-note">DBE and past-paper links remain available on the <a href="../">SharperX website</a>.</p>
+            </aside>
+          </div>
+        </section>
+
+        <section class="view" data-view-panel="practice" aria-labelledby="practiceTitle" hidden>
+          <header class="view-heading"><div><p class="eyebrow">Practice</p><h1 id="practiceTitle">Choose a topic and subtopic</h1><p class="muted">Topics, subtopics, and question records come from the server question bank for the selected grade.</p></div></header>
+          <div class="filter-card practice-filters">
+            <label>Grade<select id="practiceGrade"><option>8</option><option>9</option><option>10</option><option>11</option><option selected>12</option></select></label>
+            <label>Topic<select id="practiceTopic" disabled><option value="">Choose grade first</option></select></label>
+            <label>Subtopic<select id="practiceSubtopic" disabled><option value="">Choose a topic first</option></select></label>
+            <button id="loadPracticeQuestions" class="button primary" type="button">View questions</button>
+          </div>
+          <p id="practiceStatus" class="status" role="status" aria-live="polite"></p>
+          <div class="practice-layout">
+            <div id="practiceQuestionList" class="question-list" aria-label="Questions"></div>
+            <article id="practiceQuestionCard" class="question-card" hidden>
+              <div class="question-card-top"><span id="practiceQuestionMeta" class="eyebrow"></span><button id="practiceFullScreen" class="button subtle" type="button" hidden>View full screen</button></div>
+              <h2>Question</h2><div id="practiceQuestionText" class="math-content"></div><div id="practiceVisuals" class="question-visuals"></div>
+              <div class="hint-actions"><button id="practiceHintButton" class="button secondary" type="button">Show a hint</button><button id="practiceFormulaButton" class="button subtle" type="button">Show formulae</button><button id="practiceCanvasButton" class="button subtle" type="button">Open canvas</button></div>
+              <div id="practiceHints" class="hint-content" hidden></div>
+              <label class="answer-label">Your working and answer<textarea id="practiceAnswer" rows="7" placeholder="Show each step. Keep your final answer on the last line."></textarea></label>
+              <div class="answer-actions"><button id="markPracticeAnswer" class="button primary" type="button">Send for marking</button><span id="practiceMarkStatus" class="status" role="status"></span></div>
+              <div id="practiceFeedback" class="feedback-card" hidden></div>
+            </article>
+          </div>
+        </section>
+
+        <section class="view" data-view-panel="exam" aria-labelledby="examTitle" hidden>
+          <header class="view-heading"><div><p class="eyebrow">Test / exam prep</p><h1 id="examTitle">Build a paper from the server bank</h1><p class="muted">Choose a grade and topics, then work through the generated assessment at your pace.</p></div></header>
+          <div id="examSetup" class="exam-setup">
+            <div class="filter-card exam-filters"><label>Grade<select id="examGrade"><option>8</option><option>9</option><option>10</option><option>11</option><option selected>12</option></select></label><label>Assessment<select id="examType"><option value="test">Test</option><option value="exam">Exam</option></select></label><label>Session mode<select id="examSessionMode"><option value="guided">Guided practice</option><option value="strict">Strict mock exam</option></select></label><button id="loadExamTopics" class="button secondary" type="button">Load topics</button><button id="generateExam" class="button primary" type="button" disabled>Generate assessment</button></div>
+            <p id="examStatus" class="status" role="status" aria-live="polite"></p>
+            <div id="examTopicChoices" class="topic-choice-grid"></div>
+            <p id="examPaperSummary" class="paper-summary" hidden></p>
+            <button id="startExamSession" class="button primary" type="button" hidden>Start assessment</button>
+          </div>
+          <article id="examWorkspace" class="question-card exam-workspace" hidden>
+            <div class="question-card-top"><span id="examProgress" class="eyebrow"></span><div class="question-top-actions"><button id="examFullScreen" class="button subtle" type="button" hidden>View full screen</button><button id="examCanvasButton" class="button subtle" type="button">Open canvas</button></div></div>
+            <h2 id="examQuestionTitle">Question</h2><div id="examQuestionText" class="math-content"></div><div id="examQuestionVisuals" class="question-visuals"></div>
+            <div class="exam-guidance"><button id="examGuidanceButton" class="button secondary" type="button">Ask for a hint</button><div id="examGuidanceText" class="hint-content" hidden></div></div>
+            <label class="answer-label">Your working<textarea id="examAnswer" rows="8" placeholder="Enter your working for this question."></textarea></label>
+            <div class="answer-actions"><button id="saveExamAnswer" class="button secondary" type="button">Save answer</button><button id="previousExamQuestion" class="button subtle" type="button">Previous</button><button id="nextExamQuestion" class="button subtle" type="button">Next</button><button id="submitExam" class="button primary" type="button">Submit assessment</button></div>
+          </article>
+          <div id="examResult" class="feedback-card" hidden></div>
+        </section>
+
+        <section class="view" data-view-panel="lessons" aria-labelledby="lessonsTitle" hidden>
+          <header class="view-heading"><div><p class="eyebrow">Lesson videos</p><h1 id="lessonsTitle">Learn from a worked example</h1><p class="muted">Browse available lesson videos for the selected grade.</p></div><label>Grade<select id="lessonGrade"><option>8</option><option>9</option><option>10</option><option>11</option><option selected>12</option></select></label></header>
+          <p id="lessonStatus" class="status" role="status"></p><div id="lessonCatalog" class="lesson-catalog"></div><div id="lessonPlayer" class="lesson-player" hidden></div>
+          <p class="source-note">For free DBE lesson videos, <a href="https://www.education.gov.za/Informationfor/Learners/VideoTutorials.aspx" target="_blank" rel="noopener noreferrer">open the DBE lesson videos page ↗</a></p>
+        </section>
+
+        <section class="view" data-view-panel="reports" aria-labelledby="reportsTitle" hidden>
+          <header class="view-heading"><div><p class="eyebrow">Saved reports</p><h1 id="reportsTitle">Your study reports</h1><p class="muted">Reports downloaded in this browser are kept on this device.</p></div></header>
+          <div id="savedReports" class="saved-reports"></div>
+        </section>
+      </main>
+    </div>
+    <nav class="mobile-nav" aria-label="Main navigation">
+      <button type="button" data-view="ask" class="is-active"><span>✦</span>Ask</button><button type="button" data-view="practice"><span>◉</span>Practice</button><button type="button" data-view="exam"><span>▤</span>Prep</button><button type="button" data-view="lessons"><span>▷</span>Lessons</button><button type="button" data-view="reports"><span>▧</span>Reports</button>
+    </nav>
+  </div>
+
+  <dialog id="imageDialog" class="image-dialog" aria-label="Question diagram or paper page">
+    <div class="dialog-toolbar"><button class="button secondary" type="button" data-close-dialog>Close</button><strong id="imageDialogTitle">Question image</strong><button id="imageFitButton" class="button subtle" type="button">Fit</button></div>
+    <div id="imageViewport" class="image-viewport"><img id="fullImage" alt="Question image"></div>
+    <p class="image-help">Pinch or scroll to zoom · Drag to pan · Fit to reset</p>
+  </dialog>
+
+  <dialog id="canvasDialog" class="canvas-dialog" aria-label="Writing canvas">
+    <div class="dialog-toolbar canvas-toolbar"><strong id="canvasTitle">Canvas</strong><div class="canvas-actions"><button id="undoCanvas" class="button subtle" type="button">Undo</button><button id="clearCanvas" class="button subtle" type="button">Clear</button><button id="toggleQuestionSidebar" class="button subtle" type="button" hidden>Show Q</button><button id="canvasPanButton" class="button subtle" type="button" aria-pressed="false">☝ Pan</button><button id="canvasFitButton" class="button subtle" type="button">Fit</button><button class="button subtle" type="button" data-close-dialog>Cancel</button><button id="finishCanvas" class="button primary" type="button">Use canvas</button></div></div>
+    <div class="canvas-layout"><div class="drawing-surface"><canvas id="workingCanvas" aria-label="Write or draw your answer"></canvas></div><aside id="canvasQuestionSidebar" class="canvas-question-sidebar" hidden><button id="closeCanvasQuestion" class="icon-button" type="button" aria-label="Hide question">×</button><h2>Question</h2><div id="canvasQuestionText" class="math-content"></div><img id="canvasQuestionImage" alt="Question page" hidden></aside></div>
+    <p class="image-help">Write or draw with a finger, stylus, mouse, or trackpad. Use the pan tool or a two-finger pinch to move and zoom.</p>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

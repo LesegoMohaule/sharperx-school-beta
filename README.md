@@ -1,12 +1,20 @@
-# SharperTime website
+# SharperTime website and web app
 
 SharperTime is a focused AI-powered Grade 12 Mathematics learning platform for African learners. The public website presents the working product, a sample lesson and the application case for the Google Africa Applied AI Lab.
 
-## Live website
+## Public website
 
-GitHub Pages: https://lesegomohaule.github.io/sharperx-school-beta/
+The repository contains the SharperTime public website and the installable mathematics workspace in app/.
 
 The platform is launching soon. Registration and paid access are currently closed; the public site is available for product, lesson and application review.
+
+## Device-agnostic web app
+
+Open https://sharperx.co.za/app/ after the website is deployed. The responsive Progressive Web App supports desktop browsers, Android phones and tablets, and iPhone/iPad browsers. Learners can sign in with their existing SharperTime account, use Ask, load question-bank practice for Grades 8–12, generate guided or strict test/exam sessions, browse available lesson videos, upload a paper and select a question, write on the canvas, and save PDF reports on the current device.
+
+The question bank, marking, paper OCR/snapshots, lesson catalog and AI requests stay on the existing SharperTime API. The browser contains no AI key. Offline mode caches the app shell only; authenticated learning features need a network connection.
+
+The API CORS policy must allow https://sharperx.co.za and https://www.sharperx.co.za before the custom-domain app can call it. GitHub Pages hosting must also be enabled for this repository before the updated site is publicly served.
 
 ## Public evidence pages
 

@@ -2328,9 +2328,7 @@ async function startPhoneCanvas() {
       clearInterval(phoneCanvasHeartbeat);
       phoneCanvasHeartbeat = 0;
       if (phoneCanvasSession) {
-        phoneCanvasSetStatus("Phone connection ended. You can start another connection.", "error");
-        $("#phoneCanvasPairCode").textContent = "------";
-        $("#phoneCanvasPairQr").replaceChildren();
+        phoneCanvasSetStatus("Connection ended before the phone joined. Your code is still available; tap Use phone to try again.", "error");
       }
       phoneCanvasSession = null;
       phoneCanvasSocket = null;
@@ -2546,6 +2544,10 @@ window.addEventListener("resize", () => { if ($("#canvasDialog").open) resizeCan
 
 $("#usePhoneCanvas").addEventListener("click", async () => {
   const panel = $("#phoneCanvasPairPanel");
+  if (!panel.hidden && !phoneCanvasSession) {
+    await startPhoneCanvas();
+    return;
+  }
   panel.hidden = !panel.hidden;
   $("#usePhoneCanvas").setAttribute("aria-expanded", String(!panel.hidden));
   if (!panel.hidden) await startPhoneCanvas();

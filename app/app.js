@@ -1,13 +1,38 @@
-import { API_BASE_URL, apiRequest, getAccessToken, getJson, postForm, postJson, setAccessToken, uploadForm } from "./api.js";
+import { API_BASE_URL, apiRequest, getAccessToken, getJson, postForm, postJson, setAccessToken, uploadForm } from "./api.js?v=15";
+import qrcode from "./vendor/qrcode-generator.js?v=17";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+const APP_VIEWS = new Set(["ask", "practice", "exam", "lessons", "reports"]);
+const savedView = sessionStorage.getItem("sharperx_web_current_view");
+const PRACTICE_SESSION_KEYS = {
+  grade: "sharperx_web_practice_grade",
+  topic: "sharperx_web_practice_topic_id",
+  subtopic: "sharperx_web_practice_subtopic_id",
+  question: "sharperx_web_practice_question_id",
+  inspectionPrefix: "sharperx_web_practice_inspection_",
+  photosPrefix: "sharperx_web_practice_photos_",
+};
+
+function practiceQuestionStorageKey(prefix, questionId = state.currentPracticeQuestion?.question_id || state.currentPracticeQuestion?.bank_question_id || state.currentPracticeQuestion?.id || "") {
+  return questionId ? `${prefix}${encodeURIComponent(String(questionId))}` : "";
+}
+
+function updateAppViewportHeight() {
+  const height = window.visualViewport?.height || window.innerHeight;
+  document.documentElement.style.setProperty("--app-viewport-height", `${Math.round(height)}px`);
+}
+
+updateAppViewportHeight();
+window.addEventListener("resize", updateAppViewportHeight, { passive: true });
+window.visualViewport?.addEventListener("resize", updateAppViewportHeight, { passive: true });
+
 const state = {
   user: null,
-  grade: 12,
-  view: "ask",
+  grade: formatGrade(sessionStorage.getItem("sharperx_web_grade") || 12),
+  view: APP_VIEWS.has(savedView) ? savedView : "ask",
   inspectionId: sessionStorage.getItem("sharperx_web_inspection_id") || "",
-  practiceInspectionId: sessionStorage.getItem("sharperx_web_practice_inspection_id") || "",
+  practiceInspectionId: "",
   examInspectionId: sessionStorage.getItem("sharperx_web_exam_inspection_id") || "",
   paperDocumentId: sessionStorage.getItem("sharperx_web_paper_id") || "",
   memoDocumentId: sessionStorage.getItem("sharperx_web_memo_id") || "",
@@ -16,6 +41,8 @@ const state = {
   paperPageImage: "",
   askPhotos: [],
   topicCatalogs: new Map(),
+  practiceTopics: [],
+  practiceSubtopics: [],
   practiceQuestions: [],
   currentPracticeQuestion: null,
   hintIndex: 0,
@@ -32,6 +59,15 @@ const state = {
   canvasQuestion: null,
   canvasReturnFocus: null,
   attachedCanvasPhotoId: "",
+  practiceAnswerPhotoIds: [],
+  practiceAnswerPhotoPreviews: [],
+  practiceVoiceRecorder: null,
+  practiceVoiceChunks: [],
+  practiceVoiceTranscript: "",
+  practiceVoiceMath: "",
+  practiceEditorReady: false,
+  practiceEditorState: null,
+  practiceKeyboardMode: "Alphabet",
   reportObjectUrls: new Set(),
   recorder: null,
   audioChunks: [],
@@ -86,18 +122,32 @@ function formatGrade(value) {
 function showWorkspace() {
   $("#authScreen").hidden = true;
   $("#workspace").hidden = false;
+  document.documentElement.classList.remove("checking-session");
   $("#accountLabel").textContent = state.user?.full_name || state.user?.email || "";
-  $("#globalGrade").value = String(state.grade);
+  ["#globalGrade", "#practiceGrade", "#examGrade", "#lessonGrade"].forEach((selector) => {
+    $(selector).value = String(state.grade);
+  });
   restorePaperSession();
-  loadSavedReports();
   registerServiceWorker();
   renderSourceLinks();
+  activateView(state.view);
   restoreExamSession();
+}
+
+function clearPracticeSessionSelection() {
+  for (const key of Object.values(PRACTICE_SESSION_KEYS)) sessionStorage.removeItem(key);
+  state.practiceQuestions = [];
+  state.currentPracticeQuestion = null;
+  state.practiceTopics = [];
+  state.practiceSubtopics = [];
+  $("#practiceQuestionList").replaceChildren();
+  $("#practiceQuestionCard").hidden = true;
 }
 
 function showAuth() {
   $("#workspace").hidden = true;
   $("#authScreen").hidden = false;
+  document.documentElement.classList.remove("checking-session");
 }
 
 async function checkSession() {
@@ -114,8 +164,9 @@ async function checkSession() {
 
 $("#loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
-  const button = $("#loginForm button[type='submit']");
-  const form = new FormData(event.currentTarget);
+  const loginForm = event.currentTarget;
+  const button = $("button[type='submit']", loginForm);
+  const form = new FormData(loginForm);
   button.disabled = true;
   setStatus($("#loginStatus"), "Signing in…");
   try {
@@ -123,10 +174,10 @@ $("#loginForm").addEventListener("submit", async (event) => {
       email: String(form.get("email") || "").trim(),
       password: String(form.get("password") || ""),
     }, { auth: false });
-    if (!result.access_token) throw new Error("The server did not return a sign-in token.");
+    if (!result.access_token) throw new Error("Sign in could not be completed. Please try again.");
     setAccessToken(result.access_token);
     state.user = result.user || {};
-    event.currentTarget.reset();
+    loginForm.reset();
     showWorkspace();
     showToast("Signed in");
   } catch (error) {
@@ -140,19 +191,25 @@ $("#logoutButton").addEventListener("click", async () => {
   try { await postJson("/api/auth/logout", {}); } catch { /* local sign-out still completes */ }
   setAccessToken("");
   state.user = null;
+  clearPracticeSessionSelection();
   showAuth();
 });
 
 function activateView(viewName) {
+  if (!APP_VIEWS.has(viewName)) return;
   state.view = viewName;
+  sessionStorage.setItem("sharperx_web_current_view", viewName);
   $$("[data-view]").forEach((button) => button.classList.toggle("is-active", button.dataset.view === viewName));
   $$("[data-view-panel]").forEach((panel) => {
     const active = panel.dataset.viewPanel === viewName;
     panel.hidden = !active;
     panel.classList.toggle("is-visible", active);
   });
-  if (viewName === "practice") loadPracticeTopics(formatGrade($("#practiceGrade").value)).catch((error) => setStatus($("#practiceStatus"), error.message, "error"));
-  if (viewName === "exam" && !state.examTopics.length) loadExamTopics().catch((error) => setStatus($("#examStatus"), error.message, "error"));
+  if (viewName === "practice" && !state.practiceTopics.length) {
+    loadPracticeTopics(formatGrade($("#practiceGrade").value), { restore: true })
+      .catch((error) => setStatus($("#practiceStatus"), error.message, "error"));
+  }
+  if (viewName === "exam" && !state.examTopics.length && !state.examSessionId) loadExamTopics().catch((error) => setStatus($("#examStatus"), error.message, "error"));
   if (viewName === "lessons") loadLessons().catch((error) => setStatus($("#lessonStatus"), error.message, "error"));
   if (viewName === "reports") loadSavedReports();
 }
@@ -161,6 +218,8 @@ $$('[data-view]').forEach((button) => button.addEventListener("click", () => act
 
 $("#globalGrade").addEventListener("change", (event) => {
   state.grade = formatGrade(event.currentTarget.value);
+  sessionStorage.setItem("sharperx_web_grade", String(state.grade));
+  if (formatGrade($("#practiceGrade").value) !== state.grade) clearPracticeSessionSelection();
   $("#practiceGrade").value = String(state.grade);
   $("#examGrade").value = String(state.grade);
   $("#lessonGrade").value = String(state.grade);
@@ -209,15 +268,18 @@ function appendMessage(text, { mine = false, kind = "", imageUrl = "", actions =
 
 function ensureInspection(context = "ask") {
   const stateKey = context === "practice" ? "practiceInspectionId" : context === "exam" ? "examInspectionId" : "inspectionId";
-  const storageKey = context === "practice" ? "sharperx_web_practice_inspection_id" : context === "exam" ? "sharperx_web_exam_inspection_id" : "sharperx_web_inspection_id";
+  const storageKey = context === "practice"
+    ? practiceQuestionStorageKey(PRACTICE_SESSION_KEYS.inspectionPrefix)
+    : context === "exam" ? "sharperx_web_exam_inspection_id" : "sharperx_web_inspection_id";
   if (state[stateKey]) return Promise.resolve(state[stateKey]);
+  if (context === "practice" && !storageKey) throw new Error("Select a practice question before attaching work.");
   const form = new FormData();
   form.set("client_name", state.user?.full_name || state.user?.email || "SharperTime learner");
   form.set("site_address", "SharperTime mathematics workspace");
   form.set("inspection_type", "mathematics");
   return uploadForm("/api/inspections/create", form).then((result) => {
     const id = result.id || result.inspection_id;
-    if (!id) throw new Error("The server did not return a workspace id for uploads.");
+    if (!id) throw new Error("The upload could not be started. Please try again.");
     state[stateKey] = id;
     sessionStorage.setItem(storageKey, id);
     return id;
@@ -245,7 +307,7 @@ async function uploadPaper(file, kind) {
     form.set("document", file, file.name);
     const result = await uploadForm(`/api/inspections/${encodeURIComponent(inspectionId)}/upload-document`, form);
     const documentId = result.id || result.document_id;
-    if (!documentId) throw new Error("The server accepted the file but did not return its document id.");
+    if (!documentId) throw new Error("The file could not be processed. Please try again.");
     if (kind === "memo") {
       state.memoDocumentId = documentId;
       sessionStorage.setItem("sharperx_web_memo_id", documentId);
@@ -287,9 +349,9 @@ $("#showPaperQuestionButton").addEventListener("click", async () => {
       memo_document_id: state.memoDocumentId || null,
     });
     const pageBase64 = result.image_png_base64 || result.question_png_base64 || result.full_page_png_base64 || result.page_png_base64 || "";
-    if (!pageBase64) throw new Error("The server did not return the full page containing that question.");
+    if (!pageBase64) throw new Error("The full page containing that question could not be prepared.");
     const questionText = result.question_text || result.extracted_question_text || "";
-    if (!questionText.trim()) throw new Error("The server could not read the selected question text. Try a clearer paper scan or a different question number.");
+    if (!questionText.trim()) throw new Error("The selected question text could not be read. Try a clearer paper scan or a different question number.");
     state.paperPageImage = `data:image/png;base64,${pageBase64}`;
     state.selectedPaperQuestion = {
       number: result.question_number || result.extracted_question_number || questionNumber,
@@ -361,13 +423,14 @@ async function sendAsk(event) {
       photo_reading_confirmed: false,
       question_paper_document_id: selected ? state.paperDocumentId : null,
       question_paper_question_number: selected ? selected.number : null,
+      marking_memo_reference: selected && selected.memoText ? selected.memoText.slice(0, 30000) : null,
     };
-    if (selected && selected.memoText) payload.question = `${selected.text}\n\nMarking reference is available on the server. Use it to verify marking without reproducing it verbatim.`;
     setStatus($("#voiceStatus"), "Sending to SharperTime…");
     const result = await postJson("/api/education/tutor/ask", payload);
+    requireLunaXhigh(result, "Ask");
     const responseText = readTutorText(result);
     appendMessage(responseText, {
-      kind: result.answer_type || result.mode || "Tutor response",
+      kind: "Tutor response",
       actions: [{ label: "Save PDF report", onClick: () => saveReport("Ask feedback", shownText, responseText) }],
     });
     setStatus($("#voiceStatus"), "");
@@ -385,7 +448,16 @@ function readTutorText(result) {
   const value = candidates.find((candidate) => typeof candidate === "string" && candidate.trim());
   if (value) return value;
   if (result.result && typeof result.result === "string") return result.result;
-  return JSON.stringify(result, null, 2);
+  return "I couldn't prepare a response. Please try again.";
+}
+
+function requireLunaXhigh(result, operation) {
+  const model = String(result?.ai_model || result?.model || "").trim().toLowerCase();
+  const effort = String(result?.ai_reasoning_effort || result?.reasoning_effort || "").trim().toLowerCase();
+  const status = String(result?.ai_status || result?.status || "").trim().toLowerCase();
+  if (model !== "gpt-6-luna" || effort !== "xhigh" || status !== "completed") {
+    throw new Error(`${operation} could not be completed. Your work is still here; please retry.`);
+  }
 }
 
 $("#askForm").addEventListener("submit", sendAsk);
@@ -566,10 +638,10 @@ function replaceOptions(select, options, placeholder) {
   select.disabled = options.length === 0;
 }
 
-async function loadPracticeTopics(grade) {
+async function loadPracticeTopics(grade, { restore = false } = {}) {
   const topicSelect = $("#practiceTopic");
   const subtopicSelect = $("#practiceSubtopic");
-  setStatus($("#practiceStatus"), "Loading topics from the server question bank…");
+  setStatus($("#practiceStatus"), "Loading topics…");
   topicSelect.disabled = true;
   subtopicSelect.disabled = true;
   try {
@@ -577,40 +649,78 @@ async function loadPracticeTopics(grade) {
     state.practiceTopics = topics;
     replaceOptions(topicSelect, topics.map((topic) => ({ label: `${topic.name} · ${topic.count}`, value: topic.id })), "Select a topic");
     replaceOptions(subtopicSelect, [], "Select a topic first");
-    setStatus($("#practiceStatus"), `${topics.length} server topics available for Grade ${grade}.`, "success");
+    setStatus($("#practiceStatus"), `${topics.length} topics available for Grade ${grade}.`, "success");
+    if (restore && formatGrade(sessionStorage.getItem(PRACTICE_SESSION_KEYS.grade) || state.grade) === formatGrade(grade)) {
+      const savedTopicId = sessionStorage.getItem(PRACTICE_SESSION_KEYS.topic) || "";
+      if (savedTopicId && topics.some((topic) => String(topic.id) === savedTopicId)) {
+        topicSelect.value = savedTopicId;
+        await loadPracticeSubtopics(grade, savedTopicId, { restore: true });
+      }
+    }
   } catch (error) {
     setStatus($("#practiceStatus"), error.message, "error");
   }
 }
 
-$("#practiceGrade").addEventListener("change", (event) => {
-  state.grade = formatGrade(event.currentTarget.value);
-  $("#globalGrade").value = String(state.grade);
-  renderSourceLinks();
-  loadPracticeTopics(state.grade);
-  $("#practiceQuestionList").replaceChildren();
-  $("#practiceQuestionCard").hidden = true;
-});
-
-$("#practiceTopic").addEventListener("change", async (event) => {
-  const grade = formatGrade($("#practiceGrade").value);
-  const topicId = event.currentTarget.value;
-  const topic = state.practiceTopics?.find((item) => item.id === topicId);
+async function loadPracticeSubtopics(grade, topicId, { restore = false } = {}) {
+  const topic = state.practiceTopics?.find((item) => String(item.id) === String(topicId));
   const subtopicSelect = $("#practiceSubtopic");
   replaceOptions(subtopicSelect, [], "Loading subtopics…");
   if (!topicId) return;
   try {
-    const subtopics = await getJson(`/api/education/math-question-bank/subtopics?grade=${grade}&topic_id=${encodeURIComponent(topicId)}`);
+    const subtopics = await getJson(`/api/education/math-question-bank/subtopics?grade=${formatGrade(grade)}&topic_id=${encodeURIComponent(topicId)}`);
     state.practiceSubtopics = subtopics || [];
     replaceOptions(subtopicSelect, state.practiceSubtopics.map((item) => ({
       label: `${item.subtopic || item.name || item.subtopic_id} · ${item.question_count ?? ""}`.replace(/\s·\s$/, ""),
       value: String(item.subtopic_id || item.id || ""),
     })), "Select a subtopic");
     setStatus($("#practiceStatus"), `${state.practiceSubtopics.length} subtopics available for ${topic?.name || "this topic"}.`, "success");
+    if (restore) {
+      const savedSubtopicId = sessionStorage.getItem(PRACTICE_SESSION_KEYS.subtopic) || "";
+      if (savedSubtopicId && state.practiceSubtopics.some((item) => String(item.subtopic_id || item.id || "") === savedSubtopicId)) {
+        subtopicSelect.value = savedSubtopicId;
+        await loadPracticeQuestionList({ restore: true });
+      }
+    }
   } catch (error) {
     replaceOptions(subtopicSelect, [], "Subtopics could not be loaded");
     setStatus($("#practiceStatus"), error.message, "error");
   }
+}
+
+$("#practiceGrade").addEventListener("change", (event) => {
+  state.grade = formatGrade(event.currentTarget.value);
+  sessionStorage.setItem("sharperx_web_grade", String(state.grade));
+  clearPracticeSessionSelection();
+  sessionStorage.setItem(PRACTICE_SESSION_KEYS.grade, String(state.grade));
+  $("#globalGrade").value = String(state.grade);
+  renderSourceLinks();
+  loadPracticeTopics(state.grade);
+});
+
+$("#practiceTopic").addEventListener("change", async (event) => {
+  const grade = formatGrade($("#practiceGrade").value);
+  const topicId = event.currentTarget.value;
+  state.practiceQuestions = [];
+  state.currentPracticeQuestion = null;
+  $("#practiceQuestionList").replaceChildren();
+  $("#practiceQuestionCard").hidden = true;
+  sessionStorage.setItem(PRACTICE_SESSION_KEYS.grade, String(grade));
+  sessionStorage.setItem(PRACTICE_SESSION_KEYS.topic, topicId);
+  sessionStorage.removeItem(PRACTICE_SESSION_KEYS.subtopic);
+  sessionStorage.removeItem(PRACTICE_SESSION_KEYS.question);
+  await loadPracticeSubtopics(grade, topicId);
+});
+
+$("#practiceSubtopic").addEventListener("change", (event) => {
+  sessionStorage.setItem(PRACTICE_SESSION_KEYS.grade, String(formatGrade($("#practiceGrade").value)));
+  sessionStorage.setItem(PRACTICE_SESSION_KEYS.topic, $("#practiceTopic").value);
+  sessionStorage.setItem(PRACTICE_SESSION_KEYS.subtopic, event.currentTarget.value);
+  sessionStorage.removeItem(PRACTICE_SESSION_KEYS.question);
+  state.practiceQuestions = [];
+  state.currentPracticeQuestion = null;
+  $("#practiceQuestionList").replaceChildren();
+  $("#practiceQuestionCard").hidden = true;
 });
 
 async function loadAllQuestions(grade, topicId, subtopicId) {
@@ -619,32 +729,40 @@ async function loadAllQuestions(grade, topicId, subtopicId) {
   for (let offset = 0; ; offset += pageSize) {
     const params = new URLSearchParams({ grade: String(grade), topic_id: topicId, subtopic_id: subtopicId, limit: String(pageSize), offset: String(offset) });
     const page = await getJson(`/api/education/math-question-bank/questions?${params}`);
-    if (!Array.isArray(page)) throw new Error("The server returned an invalid question list.");
+    if (!Array.isArray(page)) throw new Error("The question list could not be loaded. Please try again.");
     questions.push(...page);
     if (page.length < pageSize) break;
   }
   return questions;
 }
 
-$("#loadPracticeQuestions").addEventListener("click", async () => {
+async function loadPracticeQuestionList({ restore = false } = {}) {
   const grade = formatGrade($("#practiceGrade").value);
   const topicId = $("#practiceTopic").value;
   const subtopicId = $("#practiceSubtopic").value;
-  if (!topicId || !subtopicId) return setStatus($("#practiceStatus"), "Select a topic and subtopic first.", "error");
+  if (!topicId || !subtopicId) {
+    setStatus($("#practiceStatus"), "Select a topic and subtopic first.", "error");
+    return;
+  }
   const button = $("#loadPracticeQuestions");
-  button.disabled = true;
-  setStatus($("#practiceStatus"), "Loading every question for this server subtopic…");
+  if (button) button.disabled = true;
+  setStatus($("#practiceStatus"), "Loading questions…");
   try {
     state.practiceQuestions = await loadAllQuestions(grade, topicId, subtopicId);
     renderPracticeQuestionList();
-    setStatus($("#practiceStatus"), `${state.practiceQuestions.length} questions loaded from the server question bank.`, "success");
-    if (state.practiceQuestions[0]) await selectPracticeQuestion(state.practiceQuestions[0]);
+    setStatus($("#practiceStatus"), `${state.practiceQuestions.length} questions loaded.`, "success");
+    const savedQuestionId = restore ? sessionStorage.getItem(PRACTICE_SESSION_KEYS.question) : "";
+    const selected = state.practiceQuestions.find((question) => String(question.question_id || question.bank_question_id || question.id || "") === String(savedQuestionId || ""));
+    const question = selected || state.practiceQuestions[0];
+    if (question) await selectPracticeQuestion(question);
   } catch (error) {
     setStatus($("#practiceStatus"), error.message, "error");
   } finally {
-    button.disabled = false;
+    if (button) button.disabled = false;
   }
-});
+}
+
+$("#loadPracticeQuestions").addEventListener("click", () => loadPracticeQuestionList());
 
 function questionLabel(question) {
   return question.accessible_text || question.question_text || question.text || "Question";
@@ -668,7 +786,7 @@ function renderPracticeQuestionList() {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "question-list-button";
-    button.dataset.questionId = question.question_id || question.id || "";
+    button.dataset.questionId = question.question_id || question.bank_question_id || question.id || "";
     const title = document.createElement("strong");
     title.textContent = `Question ${index + 1} · ${question.marks || 0} marks`;
     const text = document.createElement("span");
@@ -686,7 +804,137 @@ function collectVisuals(question) {
   return [];
 }
 
-function diagramImageSource(visual) {
+function renderVisualReviewProgress(container) {
+  container.replaceChildren();
+  const status = document.createElement("div");
+  status.className = "visual-review-progress";
+  status.setAttribute("role", "status");
+  status.setAttribute("aria-live", "polite");
+  status.innerHTML = '<span class="visual-review-hourglass" aria-hidden="true">⌛</span><div class="visual-review-copy"><strong>Diagram being generated, please wait.</strong><span>Preparing a complete diagram for this question.</span></div><div class="visual-review-progress-track" aria-hidden="true"><span></span></div>';
+  container.append(status);
+}
+
+const REQUIRED_QUESTION_VISUAL_REVIEW_VERSION = "2026-10-20.4";
+
+function questionVisualCacheKey(question) {
+  const id = question.question_id || question.bank_question_id || question.id;
+  return id ? `sharperx_visual_${REQUIRED_QUESTION_VISUAL_REVIEW_VERSION}_${encodeURIComponent(id)}` : "";
+}
+
+function questionVisualCacheSignature(question) {
+  return JSON.stringify({
+    bank_version: question.bank_version || "",
+    question_text: questionLabel(question),
+    visuals: collectVisuals(question),
+  });
+}
+
+function readCachedQuestionVisuals(question) {
+  const key = questionVisualCacheKey(question);
+  if (!key) return null;
+  try {
+    const cached = JSON.parse(sessionStorage.getItem(key) || "null");
+    if (cached?.signature !== questionVisualCacheSignature(question) || !Array.isArray(cached.visuals)) return null;
+    if (missingQuestionGeometry(question, cached.visuals).length) {
+      sessionStorage.removeItem(key);
+      return null;
+    }
+    return cached.visuals;
+  } catch {
+    return null;
+  }
+}
+
+function cacheQuestionVisuals(question, visuals) {
+  const key = questionVisualCacheKey(question);
+  if (!key || !Array.isArray(visuals)) return;
+  try {
+    sessionStorage.setItem(key, JSON.stringify({ signature: questionVisualCacheSignature(question), visuals }));
+  } catch { /* The persistent API cache remains available when browser storage is full. */ }
+}
+
+function statedQuestionGeometry(question) {
+  const text = questionLabel(question).replace(/\\(?:left|right)\b/g, "");
+  const points = new Map();
+  const coordinatePattern = /\b([A-Z])\s*\(\s*(-?\d+(?:\.\d+)?)\s*[,;]\s*(-?\d+(?:\.\d+)?)\s*\)/g;
+  for (const match of text.matchAll(coordinatePattern)) {
+    points.set(match[1].toUpperCase(), { label: match[1].toUpperCase(), x: Number(match[2]), y: Number(match[3]) });
+  }
+  const segments = new Set();
+  const segmentPattern = /\bperpendicular\s+to\s+(?:(?:line|segment)\s+)?([A-Z])\s*([A-Z])\b/gi;
+  for (const match of text.matchAll(segmentPattern)) {
+    segments.add([...match[1].toUpperCase() + match[2].toUpperCase()].sort().join(""));
+  }
+  return { points: [...points.values()], segments: [...segments] };
+}
+
+function missingQuestionGeometry(question, visuals) {
+  const required = statedQuestionGeometry(question);
+  if (!required.points.length && !required.segments.length) return [];
+
+  const points = [];
+  const segments = new Set();
+  const number = (value) => (typeof value === "number" && Number.isFinite(value)
+    ? value
+    : typeof value === "string" && value.trim() && Number.isFinite(Number(value)) ? Number(value) : null);
+  const list = (value) => Array.isArray(value) ? value : [];
+  const pointName = (value) => {
+    if (typeof value === "string") return value.trim().toUpperCase();
+    if (value && typeof value === "object") return String(value.label || value.id || value.name || "").trim().toUpperCase();
+    return "";
+  };
+  for (const visual of visuals || []) {
+    const diagram = visual?.diagram || visual?.visual || visual || {};
+    const shape = diagram.shape && typeof diagram.shape === "object" ? diagram.shape : {};
+    const graph = diagram.graph && typeof diagram.graph === "object" ? diagram.graph : {};
+    for (const candidate of [...list(shape.points), ...list(graph.points)]) {
+      if (!candidate || typeof candidate !== "object") continue;
+      points.push({
+        label: pointName(candidate),
+        x: number(candidate.x),
+        y: number(candidate.y),
+      });
+    }
+    const addCentre = (centre, fallbackLabel = "") => {
+      if (Array.isArray(centre) && centre.length >= 2) {
+        points.push({ label: fallbackLabel.toUpperCase(), x: number(centre[0]), y: number(centre[1]) });
+      } else if (centre && typeof centre === "object") {
+        points.push({
+          label: pointName(centre) || fallbackLabel.toUpperCase(),
+          x: number(centre.x),
+          y: number(centre.y),
+        });
+      }
+    };
+    addCentre(shape.center ?? shape.centre, shape.center_label || shape.centre_label || "");
+    for (const circle of [...list(shape.circles), ...list(graph.circles)]) {
+      if (circle && typeof circle === "object") {
+        addCentre(circle.center ?? circle.centre, circle.center_label || circle.centre_label || circle.label || "");
+      }
+    }
+    for (const segment of [...list(shape.segments), ...list(graph.segments)]) {
+      if (!segment || typeof segment !== "object") continue;
+      const from = pointName(segment.from ?? segment.start);
+      const to = pointName(segment.to ?? segment.end);
+      if (from && to) segments.add([...from + to].sort().join(""));
+    }
+  }
+
+  const missing = [];
+  for (const expected of required.points) {
+    const represented = points.some((point) => point.label === expected.label
+      && point.x !== null && point.y !== null
+      && Math.abs(point.x - expected.x) <= 1e-6
+      && Math.abs(point.y - expected.y) <= 1e-6);
+    if (!represented) missing.push(`point ${expected.label}(${expected.x};${expected.y})`);
+  }
+  for (const segment of required.segments) {
+    if (!segments.has(segment)) missing.push(`segment ${segment}`);
+  }
+  return missing;
+}
+
+function diagramImageSource(visual, questionText = "") {
   const diagram = visual?.diagram || visual?.visual || visual || {};
   const base64 = diagram.image_base64 || diagram.png_base64 || visual?.image_base64 || "";
   if (base64) return base64.startsWith("data:") ? base64 : `data:image/png;base64,${base64}`;
@@ -696,25 +944,234 @@ function diagramImageSource(visual) {
   if (typeof url === "string" && url.trim()) {
     try { return new URL(url, API_BASE_URL).href; } catch { return ""; }
   }
+  const svgMarkup = structuredQuestionVisualSvg(visual, questionText);
+  if (svgMarkup) return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svgMarkup)}`;
   return "";
 }
 
-async function preparePracticeVisuals(question) {
-  let visuals = collectVisuals(question);
-  if (!visuals.length || !question.question_id) return visuals;
-  try {
-    const prepared = await postJson(`/api/education/math-question-bank/questions/${encodeURIComponent(question.question_id)}/visuals/prepare`, {});
-    if (Array.isArray(prepared.question_visuals) && prepared.question_visuals.length) visuals = prepared.question_visuals;
-    else if (Array.isArray(prepared.visuals) && prepared.visuals.length) visuals = prepared.visuals;
-    else if (prepared.diagram) visuals = [{ role: "question", diagram: prepared.diagram }];
-  } catch {
-    // If visual review is unavailable, preserve and display the bank's validated source visual.
+function structuredQuestionVisualSvg(visual, questionText = "") {
+  const diagram = visual?.diagram || visual?.visual || visual || {};
+  const kind = String(diagram.kind || "").toLowerCase();
+  const graph = diagram.graph && typeof diagram.graph === "object" ? diagram.graph : {};
+  const shape = diagram.shape && typeof diagram.shape === "object" ? diagram.shape : {};
+  const graphCircles = Array.isArray(graph.circles) ? graph.circles : [];
+  const shapeCircles = Array.isArray(shape.circles) ? shape.circles : [];
+  const points = Array.isArray(graph.points) ? graph.points : Array.isArray(shape.points) ? shape.points : [];
+  const segments = Array.isArray(graph.segments) ? graph.segments : Array.isArray(shape.segments) ? shape.segments : [];
+  const isGraph = ["function_graph", "trig_graph"].includes(kind);
+  const isGeometry = kind === "geometry_2d";
+  if (!isGraph && !isGeometry) return "";
+
+  const numberOrNull = (value) => {
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string" && value.trim() && Number.isFinite(Number(value))) return Number(value);
+    return null;
+  };
+  const readCentre = (circle, fallback) => {
+    const value = circle?.centre ?? circle?.center ?? fallback;
+    if (Array.isArray(value) && value.length >= 2) {
+      const x = numberOrNull(value[0]); const y = numberOrNull(value[1]);
+      return x === null || y === null ? null : { x, y, label: String(circle?.centre_label || circle?.center_label || circle?.label || "") };
+    }
+    if (value && typeof value === "object") {
+      const x = numberOrNull(value.x); const y = numberOrNull(value.y);
+      return x === null || y === null ? null : { x, y, label: String(value.label || circle?.centre_label || circle?.center_label || circle?.label || "") };
+    }
+    return null;
+  };
+  let circles = [];
+  if (isGraph) {
+    circles = graphCircles.map((circle) => ({
+      ...readCentre(circle, null),
+      radius: numberOrNull(circle?.radius),
+    })).filter((circle) => circle.x !== undefined && circle.radius > 0);
+  } else if (String(shape.type || "").toLowerCase() === "circle") {
+    const centre = readCentre({}, shape.center);
+    const rings = shapeCircles.length ? shapeCircles : [{ radius: shape.radius }];
+    circles = rings.map((circle) => ({
+      ...centre,
+      radius: numberOrNull(circle?.radius),
+      label: String(circle?.centre_label || centre?.label || ""),
+    })).filter((circle) => circle.x !== undefined && circle.radius > 0);
   }
-  return visuals;
+  const validPoints = points.map((point) => ({
+    x: numberOrNull(point?.x), y: numberOrNull(point?.y), label: String(point?.label || "").trim(),
+  })).filter((point) => point.x !== null && point.y !== null);
+  if (!circles.length && !validPoints.length && !segments.length) return "";
+
+  const contextText = String(questionText || visual?.question_text || "");
+  const centreMatch = contextText.match(/\b([A-Z])\s+is\s+the\s+cent(?:re|er)\b/i);
+  const defaultCentreLabel = centreMatch?.[1] || "C";
+  circles = circles.map((circle) => ({ ...circle, label: circle.label || defaultCentreLabel }));
+  const extentX = [];
+  const extentY = [];
+  circles.forEach((circle) => { extentX.push(circle.x - circle.radius, circle.x + circle.radius); extentY.push(circle.y - circle.radius, circle.y + circle.radius); });
+  validPoints.forEach((point) => { extentX.push(point.x); extentY.push(point.y); });
+  const fallbackMinX = extentX.length ? Math.min(...extentX) - 1 : -5;
+  const fallbackMaxX = extentX.length ? Math.max(...extentX) + 1 : 5;
+  const fallbackMinY = extentY.length ? Math.min(...extentY) - 1 : -5;
+  const fallbackMaxY = extentY.length ? Math.max(...extentY) + 1 : 5;
+  let xMin = numberOrNull(graph.x_min ?? shape.x_min) ?? fallbackMinX;
+  let xMax = numberOrNull(graph.x_max ?? shape.x_max) ?? fallbackMaxX;
+  let yMin = numberOrNull(graph.y_min ?? shape.y_min) ?? fallbackMinY;
+  let yMax = numberOrNull(graph.y_max ?? shape.y_max) ?? fallbackMaxY;
+  if (xMax <= xMin) { xMin -= 1; xMax += 1; }
+  if (yMax <= yMin) { yMin -= 1; yMax += 1; }
+
+  const width = 760; const height = 420;
+  const plot = { x: 86, y: 48, width: 600, height: 310 };
+  const scale = Math.min(plot.width / (xMax - xMin), plot.height / (yMax - yMin));
+  const usedWidth = (xMax - xMin) * scale; const usedHeight = (yMax - yMin) * scale;
+  const plotX = plot.x + (plot.width - usedWidth) / 2;
+  const plotY = plot.y + (plot.height - usedHeight) / 2;
+  const mapX = (x) => plotX + (x - xMin) * scale;
+  const mapY = (y) => plotY + (yMax - y) * scale;
+  const xAxisY = yMin <= 0 && yMax >= 0 ? mapY(0) : plotY + usedHeight;
+  const yAxisX = xMin <= 0 && xMax >= 0 ? mapX(0) : plotX;
+  const ticks = (source, min, max) => {
+    const authored = Array.isArray(source) ? source.map(numberOrNull).filter((value) => value !== null && value >= min && value <= max) : [];
+    if (authored.length) return [...new Set(authored)].sort((a, b) => a - b);
+    return Array.from({ length: 5 }, (_, index) => min + (max - min) * index / 4);
+  };
+  const xTicks = ticks(graph.x_ticks, xMin, xMax);
+  const yTicks = ticks(graph.y_ticks, yMin, yMax);
+  const xLabels = Array.isArray(graph.x_tick_labels) ? graph.x_tick_labels : [];
+  const yLabels = Array.isArray(graph.y_tick_labels) ? graph.y_tick_labels : [];
+  const parts = [
+    `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img">`,
+    `<title>${escapeHtml(String(diagram.title || "Mathematical diagram"))}</title>`,
+    `<rect width="${width}" height="${height}" fill="#fff"/>`,
+  ];
+  if (graph.show_grid === true) {
+    xTicks.forEach((x) => parts.push(`<line x1="${mapX(x)}" y1="${plotY}" x2="${mapX(x)}" y2="${plotY + usedHeight}" stroke="#e5e7eb"/>`));
+    yTicks.forEach((y) => parts.push(`<line x1="${plotX}" y1="${mapY(y)}" x2="${plotX + usedWidth}" y2="${mapY(y)}" stroke="#e5e7eb"/>`));
+  }
+  const axisStyle = 'stroke="#111827" stroke-width="2"';
+  parts.push(`<line x1="${plotX}" y1="${xAxisY}" x2="${plotX + usedWidth}" y2="${xAxisY}" ${axisStyle}/>`,
+    `<line x1="${yAxisX}" y1="${plotY + usedHeight}" x2="${yAxisX}" y2="${plotY}" ${axisStyle}/>`);
+  if (graph.show_axis_tick_labels !== false && graph.show_axis_numbers !== false) {
+    xTicks.forEach((value, index) => {
+      const x = mapX(value); const label = String(xLabels[index] ?? Number(value.toFixed(3)));
+      parts.push(`<line x1="${x}" y1="${xAxisY - 4}" x2="${x}" y2="${xAxisY + 4}" stroke="#111827"/>`,
+        `<text x="${x}" y="${Math.min(height - 25, xAxisY + 21)}" text-anchor="middle" font-family="Georgia,serif" font-size="12" fill="#111827">${escapeHtml(label)}</text>`);
+    });
+    yTicks.forEach((value, index) => {
+      const y = mapY(value); const label = String(yLabels[index] ?? Number(value.toFixed(3)));
+      parts.push(`<line x1="${yAxisX - 4}" y1="${y}" x2="${yAxisX + 4}" y2="${y}" stroke="#111827"/>`,
+        `<text x="${yAxisX - 9}" y="${y + 4}" text-anchor="end" font-family="Georgia,serif" font-size="12" fill="#111827">${escapeHtml(label)}</text>`);
+    });
+  }
+  parts.push(`<text x="${plotX + usedWidth + 12}" y="${xAxisY + 5}" font-family="Georgia,serif" font-size="16" fill="#111827">${escapeHtml(String(graph.x_label || "x"))}</text>`,
+    `<text x="${yAxisX - 7}" y="${Math.max(18, plotY - 8)}" font-family="Georgia,serif" font-size="16" fill="#111827">${escapeHtml(String(graph.y_label || "y"))}</text>`);
+
+  circles.forEach((circle) => parts.push(`<circle cx="${mapX(circle.x)}" cy="${mapY(circle.y)}" r="${circle.radius * scale}" fill="none" stroke="#111827" stroke-width="2.4"/>`));
+  const namedPoints = new Map();
+  circles.forEach((circle) => namedPoints.set(circle.label.toUpperCase(), { x: circle.x, y: circle.y, label: circle.label, isCentre: true }));
+  validPoints.forEach((point) => { if (point.label) namedPoints.set(point.label.toUpperCase(), point); });
+  segments.forEach((segment) => {
+    const from = String(segment?.from || segment?.start || "").toUpperCase();
+    const to = String(segment?.to || segment?.end || "").toUpperCase();
+    const a = namedPoints.get(from); const b = namedPoints.get(to);
+    if (a && b) parts.push(`<line x1="${mapX(a.x)}" y1="${mapY(a.y)}" x2="${mapX(b.x)}" y2="${mapY(b.y)}" stroke="#111827" stroke-width="2.2"/>`);
+  });
+  const pair = contextText.match(/\bperpendicular\s+to\s+([A-Z])([A-Z])\b/i);
+  if (pair && namedPoints.has(pair[1].toUpperCase()) && namedPoints.has(pair[2].toUpperCase()) && !segments.length) {
+    const a = namedPoints.get(pair[1].toUpperCase()); const b = namedPoints.get(pair[2].toUpperCase());
+    parts.push(`<line x1="${mapX(a.x)}" y1="${mapY(a.y)}" x2="${mapX(b.x)}" y2="${mapY(b.y)}" stroke="#111827" stroke-width="2.2"/>`);
+  }
+  const allPoints = [...circles.map((circle) => ({ x: circle.x, y: circle.y, label: circle.label })), ...validPoints];
+  const drawn = new Set();
+  allPoints.forEach((point) => {
+    const key = `${point.x}:${point.y}`;
+    if (drawn.has(key)) return;
+    drawn.add(key);
+    const x = mapX(point.x); const y = mapY(point.y); const label = point.label || "";
+    parts.push(`<circle cx="${x}" cy="${y}" r="4.2" fill="#fff" stroke="#111827" stroke-width="2"/>`);
+    if (label) parts.push(`<text x="${x + 9}" y="${y - 8}" font-family="Georgia,serif" font-size="15" fill="#111827">${escapeHtml(label)}</text>`);
+  });
+  parts.push("</svg>");
+  return parts.join("");
+}
+
+async function preparePracticeVisuals(question) {
+  const sourceVisuals = collectVisuals(question);
+  const questionId = question.question_id || question.bank_question_id || question.id;
+  const sessionCachedVisuals = readCachedQuestionVisuals(question);
+  if (sessionCachedVisuals !== null) return { visuals: sessionCachedVisuals, reviewMessage: "" };
+  if (!questionId) {
+    return {
+      visuals: [],
+      reviewMessage: sourceVisuals.length ? "The diagram is still being prepared. Please try again shortly." : "",
+    };
+  }
+
+  try {
+    const prepared = await postJson(`/api/education/math-question-bank/questions/${encodeURIComponent(questionId)}/visuals/prepare`, {});
+    let returnedVisuals = null;
+    if (Array.isArray(prepared.question_visuals)) returnedVisuals = prepared.question_visuals;
+    else if (Array.isArray(prepared.visuals)) returnedVisuals = prepared.visuals;
+    else if (prepared.diagram) returnedVisuals = [{ role: "question", diagram: prepared.diagram }];
+
+    const status = String(prepared.refinement_status || "unknown").toLowerCase();
+    const visuals = returnedVisuals ?? [];
+    const requirements = statedQuestionGeometry(question);
+    const hasExplicitGeometry = requirements.points.length > 0 || requirements.segments.length > 0;
+    const completeStatuses = ["verified", "corrected", "generated", "cached"];
+    const completeBankFallback = ["unavailable", "validation_failed", "fallback"].includes(status) && visuals.length > 0;
+
+    if (hasExplicitGeometry) {
+      const missing = missingQuestionGeometry(question, visuals);
+      if (missing.length) {
+        return {
+          visuals: [],
+          reviewMessage: "The diagram is still being prepared. Please try again shortly.",
+        };
+      }
+      if (prepared.refinement_version !== REQUIRED_QUESTION_VISUAL_REVIEW_VERSION
+        || (!completeStatuses.includes(status) && !completeBankFallback)) {
+        return {
+          visuals: [],
+          reviewMessage: "Diagram being generated, please wait.",
+        };
+      }
+    }
+
+    if (status === "not_required") return { visuals, reviewMessage: "" };
+    if (completeStatuses.includes(status) || completeBankFallback) {
+      if (prepared.refinement_version !== REQUIRED_QUESTION_VISUAL_REVIEW_VERSION || returnedVisuals === null) {
+        return {
+          visuals: [],
+          reviewMessage: "The diagram is still being prepared. Please try again shortly.",
+        };
+      }
+      cacheQuestionVisuals(question, visuals);
+      return { visuals, reviewMessage: visuals.length ? "" : "No diagram is needed for this question." };
+    }
+
+    return { visuals: [], reviewMessage: "The diagram is still being prepared. Please try again shortly." };
+  } catch {
+    return {
+      visuals: [],
+      reviewMessage: "The diagram is still being prepared. Please try again shortly.",
+    };
+  }
 }
 
 async function selectPracticeQuestion(question) {
   state.currentPracticeQuestion = question;
+  const questionId = String(question.question_id || question.bank_question_id || question.id || "");
+  state.practiceInspectionId = sessionStorage.getItem(practiceQuestionStorageKey(PRACTICE_SESSION_KEYS.inspectionPrefix, questionId)) || "";
+  const storedPhotoIds = sessionStorage.getItem(practiceQuestionStorageKey(PRACTICE_SESSION_KEYS.photosPrefix, questionId));
+  try { state.practiceAnswerPhotoIds = storedPhotoIds ? JSON.parse(storedPhotoIds).filter((id) => typeof id === "string" && id) : []; }
+  catch { state.practiceAnswerPhotoIds = []; }
+  state.practiceAnswerPhotoPreviews.forEach((item) => URL.revokeObjectURL(item.url));
+  state.practiceAnswerPhotoPreviews = [];
+  renderPracticeAnswerAttachments();
+  sessionStorage.setItem(PRACTICE_SESSION_KEYS.grade, String(formatGrade($("#practiceGrade").value)));
+  sessionStorage.setItem(PRACTICE_SESSION_KEYS.topic, $("#practiceTopic").value);
+  sessionStorage.setItem(PRACTICE_SESSION_KEYS.subtopic, $("#practiceSubtopic").value);
+  if (questionId) sessionStorage.setItem(PRACTICE_SESSION_KEYS.question, questionId);
+  else sessionStorage.removeItem(PRACTICE_SESSION_KEYS.question);
   state.hintIndex = 0;
   state.practiceVisuals = collectVisuals(question);
   $("#practiceQuestionCard").hidden = false;
@@ -722,27 +1179,45 @@ async function selectPracticeQuestion(question) {
   renderMath($("#practiceQuestionText"), questionLabel(question));
   $("#practiceHints").hidden = true;
   $("#practiceHints").textContent = "";
-  $("#practiceAnswer").value = "";
+  $("#practiceHintButton").textContent = "Show a hint";
+  practiceEditorCommand({ name: "clear" });
   $("#practiceFeedback").hidden = true;
   $("#practiceFeedback").replaceChildren();
   $("#practiceFullScreen").hidden = true;
   $("#practiceVisuals").replaceChildren();
-  $$(".question-list-button").forEach((button) => button.classList.toggle("is-active", button.dataset.questionId === String(question.question_id || question.id || "")));
+  $$(".question-list-button").forEach((button) => button.classList.toggle("is-active", button.dataset.questionId === questionId));
   $("#practiceMarkStatus").textContent = "";
+  $("#practiceVoiceReview").hidden = true;
+  $("#practiceVoiceTranscript").value = "";
+  $("#practiceVoiceMath").value = "";
 
-  if (collectVisuals(question).length) {
-    $("#practiceVisuals").innerHTML = '<p class="muted">Preparing the question diagram…</p>';
-    state.practiceVisuals = await preparePracticeVisuals(question);
-    renderQuestionVisuals($("#practiceVisuals"), state.practiceVisuals, `Grade ${question.grade || state.grade} question diagram`);
+  if (question.question_id || question.bank_question_id || question.id || collectVisuals(question).length) {
+    const locallyCachedVisuals = readCachedQuestionVisuals(question);
+    if (locallyCachedVisuals !== null) {
+      state.practiceVisuals = locallyCachedVisuals;
+      renderQuestionVisuals($("#practiceVisuals"), state.practiceVisuals, `Grade ${question.grade || state.grade} question diagram`, questionLabel(question));
+    } else {
+      renderVisualReviewProgress($("#practiceVisuals"));
+      const visualReview = await preparePracticeVisuals(question);
+      if (state.currentPracticeQuestion !== question) return;
+      state.practiceVisuals = visualReview.visuals;
+      renderQuestionVisuals($("#practiceVisuals"), state.practiceVisuals, `Grade ${question.grade || state.grade} question diagram`, questionLabel(question), visualReview.reviewMessage);
+    }
     const hasImage = $$("img", $("#practiceVisuals")).length > 0;
     $("#practiceFullScreen").hidden = !hasImage;
   }
 }
 
-function renderQuestionVisuals(container, visuals, title) {
+function renderQuestionVisuals(container, visuals, title, questionText = "", reviewMessage = "") {
   container.replaceChildren();
+  if (reviewMessage) {
+    const status = document.createElement("p");
+    status.className = "visual-review-status muted";
+    status.textContent = reviewMessage;
+    container.append(status);
+  }
   for (const visual of visuals || []) {
-    const imageSource = diagramImageSource(visual);
+    const imageSource = diagramImageSource(visual, questionText);
     if (imageSource) {
       const image = document.createElement("img");
       image.src = imageSource;
@@ -769,29 +1244,343 @@ $("#practiceFullScreen").addEventListener("click", () => {
 $("#practiceHintButton").addEventListener("click", () => {
   const question = state.currentPracticeQuestion;
   if (!question) return;
-  const hints = Array.isArray(question.progressive_hints) ? question.progressive_hints : [];
-  const selected = hints.slice(0, Math.max(1, ++state.hintIndex)).map(displayStructuredContent).filter(Boolean);
-  const content = selected.length
-    ? selected.join("\n\n")
-    : "Underline what the question asks you to find. List the given values, then choose a matching rule or theorem and apply it one step at a time. Check the result against the question's conditions.";
+  const hints = Array.isArray(question.subquestion_hints) ? question.subquestion_hints.filter((hint) => hint && typeof hint === "object") : [];
+  const progressive = Array.isArray(question.progressive_hints) ? question.progressive_hints : [];
+  const total = hints.length || progressive.length;
+  if (!total) {
+    $("#practiceHints").hidden = false;
+    renderMath($("#practiceHints"), "No hints are available for this question.");
+    return;
+  }
+  const index = state.hintIndex % total;
+  let content = "";
+  if (hints.length) {
+    const hint = hints[index];
+    const partId = String(hint.subquestion_id || hint.part_id || "").trim();
+    const formula = displayStructuredContent(hint.related_formula || hint.formula || question.relevant_formulas?.[0] || "Use the rule or formula named for this part of the question.");
+    const steps = Array.isArray(hint.steps) ? hint.steps.map(displayStructuredContent).filter(Boolean) : [];
+    content = `Hint ${index + 1} of ${total}${partId ? ` · Part (${partId})` : ""}\n${displayStructuredContent(hint.text || hint.hint || hint.guidance)}\n\nFormula: ${formula}`;
+    if (steps.length) content += `\n\nSteps to try:\n${steps.map((step, stepIndex) => `${stepIndex + 1}. ${step}`).join("\n")}`;
+    else content += "\n\nSteps to try:\n1. Write the values given in this part and identify the quantity requested.\n2. Choose the displayed rule, substitute the values, and show one step per line.";
+  } else {
+    content = `Hint ${index + 1} of ${total}: ${displayStructuredContent(progressive[index])}`;
+  }
   $("#practiceHints").hidden = false;
   renderMath($("#practiceHints"), content);
+  state.hintIndex = (index + 1) % total;
+  $("#practiceHintButton").textContent = state.hintIndex === 0 ? "Show a hint" : "Show next hint";
 });
 
 $("#practiceFormulaButton").addEventListener("click", () => {
-  const formulas = state.currentPracticeQuestion?.relevant_formulas || [];
-  const content = formulas.length ? formulas.map(displayStructuredContent).filter(Boolean).join("\n\n") : "No specific formula is listed for this question. Identify the values and relationships in the question, then select the rule that applies.";
+  const question = state.currentPracticeQuestion;
+  const formulas = Array.isArray(question?.relevant_formulas) ? question.relevant_formulas : [];
+  const partFormulas = Array.isArray(question?.subquestion_hints)
+    ? question.subquestion_hints.map((hint) => hint?.related_formula).filter(Boolean)
+    : [];
+  const allFormulas = [...new Set([...partFormulas, ...formulas].map(displayStructuredContent).filter(Boolean))];
+  const content = allFormulas.length ? allFormulas.map((formula, index) => `${allFormulas.length > 1 ? `Option ${index + 1}: ` : "Formula: "}${formula}`).join("\n\n") : "No specific formula is listed for this question. Use the relevant definition or theorem named in the question.";
   $("#practiceHints").hidden = false;
   renderMath($("#practiceHints"), content);
 });
 
 $("#practiceCanvasButton").addEventListener("click", () => openCanvas("practice", state.currentPracticeQuestion));
+$("#practiceGraphCanvasButton").addEventListener("click", () => openCanvas("practice-graph", state.currentPracticeQuestion));
+
+const practiceMathEditorFrame = $("#practiceMathEditor");
+function practiceEditorCommand(command) {
+  const editor = practiceMathEditorFrame?.contentWindow?.SharperMathEditor;
+  if (!editor?.execute) return false;
+  editor.execute(command);
+  return true;
+}
+
+function initializePracticeMathEditor() {
+  const editorWindow = practiceMathEditorFrame?.contentWindow;
+  if (!editorWindow?.SharperMathEditor?.execute) return false;
+  state.practiceEditorReady = true;
+  try { editorWindow.document.querySelector(".editor-surface")?.setAttribute("inputmode", "none"); } catch { /* Same-origin editor attributes are optional. */ }
+  editorWindow.SharperMathEditor.execute({ name: "loadLatex", value: "" });
+  editorWindow.SharperMathEditor.execute({ name: "setLineLabels", value: "true" });
+  editorWindow.SharperMathEditor.execute({ name: "setPlaceholder", value: "Enter each step on a new line. Keep your final answer last." });
+  editorWindow.SharperMathEditor.execute({ name: "setFontSize", value: "23" });
+  editorWindow.SharperMathEditor.execute({ name: "setPhysicalKeyboardEnabled", value: "true" });
+  return true;
+}
+
+practiceMathEditorFrame.addEventListener("load", initializePracticeMathEditor);
+window.addEventListener("message", (event) => {
+  if (event.source !== practiceMathEditorFrame.contentWindow || event.data?.type !== "sharper-math-editor-state") return;
+  state.practiceEditorState = event.data.state || null;
+  if (!state.practiceEditorReady && event.data.state?.event === "ready") initializePracticeMathEditor();
+  if (event.data.state?.event === "activate") setPracticeKeyboardVisible(true);
+});
+
+function getPracticeEditorLatex() {
+  try { return practiceMathEditorFrame.contentWindow.SharperMathEditor.getLatex() || ""; }
+  catch { return state.practiceEditorState?.latex || ""; }
+}
+
+const keyText = (label, value = label) => ({ label, command: "insertText", value });
+const keyCommand = (label, command, value = "") => ({ label, command, value });
+const PRACTICE_MATH_KEYSETS = {
+  Alphabet: [
+    ..."qwertyuiopasdfghjklzxcvbnm".split("").map((letter) => keyText(letter)),
+    keyText("Space", " "), keyText(","), keyText("."), keyText("−", "−"), keyText("="), keyText("(") , keyText(")"),
+  ],
+  Basic: [
+    ...["7", "8", "9", "4", "5", "6", "1", "2", "3", "0"].map((value) => keyText(value)),
+    ...["+", "−", "×", "÷", "=", "≠", "<", "≤", ">", "≥", "±", "≈", "(", ")", ",", ";", "π", "∞"].map((value) => keyText(value)),
+    keyCommand("a⁄b", "insertFraction"), keyCommand("√□", "insertRoot"), keyCommand("ⁿ√□", "insertNthRoot"),
+    keyCommand("xʸ", "insertPower"), keyCommand("□²", "insertFixedPower", "2"), keyCommand("□³", "insertFixedPower", "3"),
+    keyCommand("aₙ", "insertSubscript"), keyCommand("|x|", "insertAbsolute"), keyCommand("log₍□₎", "insertLogarithm"), keyCommand("n!", "insertFactorial"),
+  ],
+  Advanced: [
+    ...["sin", "cos", "tan", "csc", "sec", "cot", "arcsin", "arccos", "arctan"].map((name) => keyCommand(name, "insertFunction", name)),
+    ...["θ", "π", "°", "x", "y", "=", "±", "∠", "⊥", "∥"].map((value) => keyText(value)),
+    keyCommand("√□", "insertRoot"), keyCommand("xʸ", "insertPower"), keyCommand("a⁄b", "insertFraction"),
+  ],
+  Calculus: [
+    keyCommand("d/dx", "insertDerivative", "1"), keyCommand("d²/dx²", "insertDerivative", "2"),
+    keyCommand("lim", "insertLimit"), keyCommand("lim→+", "insertLimit", "right"), keyCommand("lim→−", "insertLimit", "left"),
+    keyCommand("∫", "insertIntegral"), keyCommand("∫ᵃ_b", "insertIntegral", "definite"), keyCommand("∫dx", "insertIntegral", "dx"),
+    keyCommand("Σ", "insertLargeOperator", "sum"), keyCommand("Π", "insertLargeOperator", "product"),
+    ...["∞", "π", "x", "y", "e", "+", "−", "="].map((value) => keyText(value)),
+  ],
+  Greek: [..."αβγδεζηθικλμνξοπρστυφχψω".split("").map((value) => keyText(value)), ..."ΓΔΘΛΞΠΣΦΨΩ".split("").map((value) => keyText(value))],
+  Shorthand: [...["∠", "⊥", "∥", "∴", "∵", "⇒", "⇔", "→", "↔", "≡", "≅", "≈", "∝", "∈", "∉", "⊂", "⊆", "∪", "∩", "∅", "ℝ", "ℕ", "ℤ", "ℚ", "∀", "∃", "△", "≤", "≥", "≠", "±"].map((value) => keyText(value))],
+};
+
+function renderPracticeMathKeys(mode = state.practiceKeyboardMode) {
+  state.practiceKeyboardMode = mode in PRACTICE_MATH_KEYSETS ? mode : "Alphabet";
+  $$("[data-keyboard-mode]").forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.keyboardMode === state.practiceKeyboardMode)));
+  const host = $("#practiceMathKeys");
+  host.replaceChildren();
+  for (const key of PRACTICE_MATH_KEYSETS[state.practiceKeyboardMode]) {
+    const button = document.createElement("button");
+    button.type = "button";
+    const label = document.createElement("span");
+    label.textContent = key.label;
+    button.append(label);
+    button.setAttribute("aria-label", key.label === "Space" ? "Insert a space" : `Insert ${key.label}`);
+    if (key.label === "Space") button.classList.add("is-space");
+    if (key.label.length >= 5) button.classList.add("is-long-label");
+    if (key.label.length >= 7) button.classList.add("is-extra-long-label");
+    button.addEventListener("pointerdown", (event) => event.preventDefault());
+    button.addEventListener("click", () => practiceEditorCommand({ name: key.command, value: key.value }));
+    host.append(button);
+  }
+}
+
+renderPracticeMathKeys();
+function setPracticeKeyboardVisible(visible) {
+  const keyboard = $("#practiceMathKeyboard");
+  const toggle = $("#practiceKeyboardToggle");
+  keyboard.hidden = !visible;
+  toggle.setAttribute("aria-expanded", String(visible));
+}
+
+$("#practiceKeyboardToggle").addEventListener("click", () => {
+  setPracticeKeyboardVisible($("#practiceMathKeyboard").hidden);
+});
+$(".math-keyboard-tabs").addEventListener("click", (event) => {
+  const tab = event.target.closest("[data-keyboard-mode]");
+  if (tab) renderPracticeMathKeys(tab.dataset.keyboardMode);
+});
+$(".math-keyboard-actions").addEventListener("pointerdown", (event) => event.preventDefault());
+$(".math-keyboard-actions").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-editor-action]");
+  if (button) practiceEditorCommand({ name: button.dataset.editorAction });
+});
+
+function setPracticeVoiceTranscript(transcript) {
+  state.practiceVoiceTranscript = String(transcript || "").trim();
+  $("#practiceVoiceTranscript").value = state.practiceVoiceTranscript;
+  $("#practiceVoiceReview").hidden = false;
+  $("#practiceVoiceTranscript").focus({ preventScroll: true });
+  setStatus($("#practiceVoiceStatus"), state.practiceVoiceTranscript ? "Review and edit the transcript, then use it in your working." : "No words were recognized. Try recording again.", state.practiceVoiceTranscript ? "success" : "error");
+}
+
+async function recordPracticeVoiceNote() {
+  const button = $("#practiceVoiceButton");
+  const status = $("#practiceVoiceStatus");
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (SpeechRecognition) {
+    if (state.practiceVoiceRecorder instanceof SpeechRecognition) {
+      state.practiceVoiceRecorder.stop();
+      button.classList.remove("is-recording");
+      setStatus(status, "Voice note ready. Review the transcript below.");
+      return;
+    }
+    const recognition = new SpeechRecognition();
+    recognition.lang = "en-ZA";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.onresult = (event) => {
+      let transcript = "";
+      for (let index = 0; index < event.results.length; index++) transcript += event.results[index][0]?.transcript || "";
+      state.practiceVoiceTranscript = transcript.trim();
+      $("#practiceVoiceTranscript").value = state.practiceVoiceTranscript;
+      $("#practiceVoiceReview").hidden = false;
+    };
+    recognition.onerror = (event) => setStatus(status, event.error === "not-allowed" ? "Allow microphone access in your browser settings." : `Voice input: ${event.error}`, "error");
+    recognition.onend = () => {
+      if (state.practiceVoiceRecorder === recognition) state.practiceVoiceRecorder = null;
+      button.classList.remove("is-recording");
+      if (state.practiceVoiceTranscript) setStatus(status, "Voice note ready. Review the transcript below.", "success");
+    };
+    try {
+      state.practiceVoiceTranscript = "";
+      $("#practiceVoiceTranscript").value = "";
+      $("#practiceVoiceReview").hidden = false;
+      state.practiceVoiceRecorder = recognition;
+      recognition.start();
+      button.classList.add("is-recording");
+      setStatus(status, "Listening… select Voice again when you are finished.");
+    } catch (error) {
+      state.practiceVoiceRecorder = null;
+      setStatus(status, error.message, "error");
+    }
+    return;
+  }
+
+  if (state.practiceVoiceRecorder?.state === "recording") {
+    state.practiceVoiceRecorder.stop();
+    button.classList.remove("is-recording");
+    setStatus(status, "Transcribing voice note…");
+    return;
+  }
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    setStatus(status, "Voice recording is not supported by this browser. Use the editor or upload a photo of your work.", "error");
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"].find((type) => MediaRecorder.isTypeSupported(type));
+    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    const chunks = [];
+    recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
+    recorder.onstop = async () => {
+      stream.getTracks().forEach((track) => track.stop());
+      state.practiceVoiceRecorder = null;
+      try {
+        const type = recorder.mimeType || "audio/webm";
+        const ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
+        const file = new File([new Blob(chunks, { type })], `practice-voice-note.${ext}`, { type });
+        const form = new FormData();
+        form.set("audio", file);
+        const result = await uploadForm("/api/education/speech/transcribe", form);
+        setPracticeVoiceTranscript(result.transcript || result.text || result.transcription || "");
+      } catch (error) { setStatus(status, error.message, "error"); }
+    };
+    state.practiceVoiceRecorder = recorder;
+    recorder.start();
+    button.classList.add("is-recording");
+    setStatus(status, "Recording… select Voice again when you are finished.");
+  } catch (error) {
+    setStatus(status, error.name === "NotAllowedError" ? "Allow microphone access in your browser settings." : error.message, "error");
+  }
+}
+
+$("#practiceVoiceButton").addEventListener("click", recordPracticeVoiceNote);
+$("#practiceVoiceTranscript").addEventListener("input", (event) => { state.practiceVoiceTranscript = event.currentTarget.value; });
+$("#practiceVoiceMath").addEventListener("input", (event) => { state.practiceVoiceMath = event.currentTarget.value; });
+$("#practiceFormatVoiceMath").addEventListener("click", async () => {
+  const transcript = $("#practiceVoiceTranscript").value.trim();
+  if (!transcript) return setStatus($("#practiceVoiceStatus"), "Record a voice note or enter the transcript first.", "error");
+  const button = $("#practiceFormatVoiceMath");
+  button.disabled = true;
+  setStatus($("#practiceVoiceStatus"), "Formatting the spoken maths…");
+  try {
+    const result = await postJson("/api/education/speech/format-math", { text: transcript, subject: "Mathematics" });
+    const formatted = String(result.mathematical_text || "").trim();
+    if (!formatted) throw new Error("The mathematical form could not be prepared. Edit it below or use the transcript.");
+    state.practiceVoiceMath = formatted;
+    $("#practiceVoiceMath").value = formatted;
+    setStatus($("#practiceVoiceStatus"), "Mathematical form ready. Review it before using it.", "success");
+  } catch (error) { setStatus($("#practiceVoiceStatus"), error.message, "error"); }
+  finally { button.disabled = false; }
+});
+function insertPracticeVoiceValue(value, command = "insertText") {
+  const content = String(value || "").trim();
+  if (!content) return setStatus($("#practiceVoiceStatus"), "Enter or format a voice response first.", "error");
+  if (getPracticeEditorLatex().trim()) practiceEditorCommand({ name: "newLine" });
+  practiceEditorCommand({ name: command, value: content });
+  $("#practiceVoiceReview").hidden = true;
+  setStatus($("#practiceVoiceStatus"), "Added to your working.", "success");
+}
+$("#practiceUseVoiceTranscript").addEventListener("click", () => insertPracticeVoiceValue($("#practiceVoiceTranscript").value));
+$("#practiceUseVoiceMath").addEventListener("click", () => insertPracticeVoiceValue($("#practiceVoiceMath").value, "insertLatex"));
+$("#practiceDismissVoice").addEventListener("click", () => { $("#practiceVoiceReview").hidden = true; setStatus($("#practiceVoiceStatus"), ""); });
+
+function renderPracticeAnswerAttachments() {
+  const host = $("#practiceAnswerAttachments");
+  if (!host) return;
+  host.replaceChildren();
+  state.practiceAnswerPhotoIds.forEach((id) => {
+    const preview = state.practiceAnswerPhotoPreviews.find((item) => item.id === id);
+    const card = document.createElement("div");
+    card.className = "practice-attachment";
+    if (preview?.url) {
+      const image = document.createElement("img");
+      image.src = preview.url;
+      image.alt = "Uploaded handwritten working";
+      card.append(image);
+    } else {
+      const label = document.createElement("span");
+      label.textContent = "Handwritten work attached";
+      label.style.cssText = "display:grid;place-items:center;height:100%;padding:5px;text-align:center;font-size:10px";
+      card.append(label);
+    }
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", "Remove this handwritten image from the attempt");
+    remove.addEventListener("click", () => {
+      state.practiceAnswerPhotoIds = state.practiceAnswerPhotoIds.filter((photoId) => photoId !== id);
+      state.practiceAnswerPhotoPreviews = state.practiceAnswerPhotoPreviews.filter((item) => {
+        if (item.id !== id) return true;
+        URL.revokeObjectURL(item.url);
+        return false;
+      });
+      const key = practiceQuestionStorageKey(PRACTICE_SESSION_KEYS.photosPrefix);
+      if (key) sessionStorage.setItem(key, JSON.stringify(state.practiceAnswerPhotoIds));
+      renderPracticeAnswerAttachments();
+    });
+    card.append(remove);
+    host.append(card);
+  });
+}
+
+$("#practiceHandwritingButton").addEventListener("click", () => $("#practiceHandwritingInput").click());
+$("#practiceHandwritingInput").addEventListener("change", async (event) => {
+  const file = event.currentTarget.files?.[0];
+  event.currentTarget.value = "";
+  if (!file) return;
+  if (!file.type.startsWith("image/")) return setStatus($("#practiceMarkStatus"), "Choose an image file of your handwritten work.", "error");
+  if (state.practiceAnswerPhotoIds.length >= 3) return setStatus($("#practiceMarkStatus"), "The limit is three handwritten images per practice attempt.", "error");
+  try {
+    setStatus($("#practiceMarkStatus"), `Uploading ${file.name}…`);
+    const inspectionId = await ensureInspection("practice");
+    const form = new FormData();
+    form.set("photo_type", "school_answer_working");
+    form.set("photo", file, file.name);
+    const uploaded = await uploadForm(`/api/inspections/${encodeURIComponent(inspectionId)}/upload-photo`, form);
+    const photoId = String(uploaded.id || uploaded.photo_id || "");
+    if (!photoId) throw new Error("The handwritten image was not attached. Please try again.");
+    state.practiceAnswerPhotoIds.push(photoId);
+    state.practiceAnswerPhotoPreviews.push({ id: photoId, url: URL.createObjectURL(file) });
+    const key = practiceQuestionStorageKey(PRACTICE_SESSION_KEYS.photosPrefix);
+    if (key) sessionStorage.setItem(key, JSON.stringify(state.practiceAnswerPhotoIds));
+    renderPracticeAnswerAttachments();
+    setStatus($("#practiceMarkStatus"), "Handwritten work attached to this question.", "success");
+  } catch (error) { setStatus($("#practiceMarkStatus"), error.message, "error"); }
+});
 
 $("#markPracticeAnswer").addEventListener("click", async () => {
   const question = state.currentPracticeQuestion;
-  const working = $("#practiceAnswer").value.trim();
+  const working = getPracticeEditorLatex().trim();
   if (!question) return;
-  if (!working) return setStatus($("#practiceMarkStatus"), "Enter your working or answer before sending it for marking.", "error");
+  if (!working && !state.practiceAnswerPhotoIds.length) return setStatus($("#practiceMarkStatus"), "Enter your working, write on the canvas, or upload a handwritten answer before sending it for marking.", "error");
   const button = $("#markPracticeAnswer");
   button.disabled = true;
   setStatus($("#practiceMarkStatus"), "Marking your attempt…");
@@ -806,24 +1595,24 @@ $("#markPracticeAnswer").addEventListener("click", async () => {
       marks: question.marks || 0,
       learner_working: working,
       learner_final_answer: working.split(/\r?\n/).filter(Boolean).at(-1) || working,
-      assistance_mode: "SolveItMyself",
+      assistance_mode: state.hintIndex ? "Hints" : "SolveItMyself",
       hints_used: state.hintIndex,
+      photo_ids: [...state.practiceAnswerPhotoIds],
     };
     let result;
-    if (state.attachedCanvasPhotoId) {
+    if (state.practiceAnswerPhotoIds.length) {
       result = await postJson("/api/education/tutor/ask", {
         subject: "Mathematics", grade: question.grade || state.grade,
         topic: question.topic || "", question: questionLabel(question),
-        learner_answer: working || "My handwritten working is in the attached canvas image.",
+        learner_answer: working || "My complete working and answer are in the attached handwritten image.",
         mode: "mark_attempt", inspection_id: state.practiceInspectionId,
         ai_tier: "luna", allow_web_search: false,
         math_practice_context: markingContext,
       });
-      state.attachedCanvasPhotoId = "";
-      state.practiceCanvasPreview = "";
     } else {
       result = await postJson("/api/education/math-practice/mark", markingContext);
     }
+    requireLunaXhigh(result, "Practice marking");
     const reportText = readMarkingText(result);
     const panel = $("#practiceFeedback");
     panel.hidden = false;
@@ -1077,6 +1866,7 @@ $("#loadExamTopics").addEventListener("click", loadExamTopics);
 $("#examGrade").addEventListener("change", () => {
   $("#globalGrade").value = $("#examGrade").value;
   state.grade = formatGrade($("#examGrade").value);
+  sessionStorage.setItem("sharperx_web_grade", String(state.grade));
   renderSourceLinks();
   loadExamTopics();
 });
@@ -1101,7 +1891,7 @@ $("#generateExam").addEventListener("click", async () => {
   if (!scopes.length) return setStatus($("#examStatus"), "Select at least one topic and one subtopic.", "error");
   const button = $("#generateExam");
   button.disabled = true;
-  setStatus($("#examStatus"), "The server is building and checking your assessment…");
+  setStatus($("#examStatus"), "Building and checking your assessment…");
   try {
     const result = await postJson("/api/education/test-exam-preparation/generate", {
       grade: formatGrade($("#examGrade").value),
@@ -1113,7 +1903,7 @@ $("#generateExam").addEventListener("click", async () => {
     state.examSessionId = "";
     sessionStorage.removeItem("sharperx_web_exam_session_id");
     $("#examPaperSummary").hidden = false;
-    $("#examPaperSummary").textContent = (result.title || "Assessment ready") + " · " + (result.questions || []).length + " questions · " + result.total_marks + " marks · " + result.duration_minutes + " minutes. The server checked this paper.";
+    $("#examPaperSummary").textContent = (result.title || "Assessment ready") + " · " + (result.questions || []).length + " questions · " + result.total_marks + " marks · " + result.duration_minutes + " minutes. The paper is ready.";
     $("#startExamSession").hidden = false;
     setStatus($("#examStatus"), "Paper ready. Start the session when you are ready.", "success");
   } catch (error) {
@@ -1168,7 +1958,7 @@ async function restoreExamSession() {
 async function renderExamSession(session) {
   state.exam = Object.assign(state.exam || {}, session);
   const question = session.current_question;
-  if (!question) throw new Error("The server did not return the current assessment question.");
+  if (!question) throw new Error("The current assessment question could not be loaded.");
   state.examQuestionIndex = Number(session.current_question_index || 0);
   state.examCurrentQuestion = question;
   $("#examProgress").textContent = (session.paper_title || "Assessment") + " · Question " + (state.examQuestionIndex + 1) + " of " + session.question_count;
@@ -1183,9 +1973,19 @@ async function renderExamSession(session) {
   $("#nextExamQuestion").disabled = state.examQuestionIndex >= session.question_count - 1;
   $("#examGuidanceButton").disabled = session.mode === "strict";
   state.examVisuals = collectVisuals(question);
-  if (state.examVisuals.length) {
-    state.examVisuals = await preparePracticeVisuals(Object.assign({}, question, { question_id: question.bank_question_id || question.id }));
-    renderQuestionVisuals($("#examQuestionVisuals"), state.examVisuals, "Assessment diagram");
+  if (question.bank_question_id || question.question_id || question.id || state.examVisuals.length) {
+    const reviewQuestion = Object.assign({}, question, { question_id: question.bank_question_id || question.question_id || question.id });
+    const locallyCachedVisuals = readCachedQuestionVisuals(reviewQuestion);
+    if (locallyCachedVisuals !== null) {
+      state.examVisuals = locallyCachedVisuals;
+      renderQuestionVisuals($("#examQuestionVisuals"), state.examVisuals, "Assessment diagram", question.question_text_latex || question.question_text || "");
+    } else {
+      renderVisualReviewProgress($("#examQuestionVisuals"));
+      const visualReview = await preparePracticeVisuals(reviewQuestion);
+      if (state.examCurrentQuestion !== question) return;
+      state.examVisuals = visualReview.visuals;
+      renderQuestionVisuals($("#examQuestionVisuals"), state.examVisuals, "Assessment diagram", question.question_text_latex || question.question_text || "", visualReview.reviewMessage);
+    }
     $("#examFullScreen").hidden = !$("#examQuestionVisuals img");
   }
 }
@@ -1218,6 +2018,7 @@ $("#nextExamQuestion").addEventListener("click", () => navigateExam(1));
 $("#examGuidanceButton").addEventListener("click", async () => {
   try {
     const result = await postJson("/api/education/exam-sessions/" + encodeURIComponent(state.examSessionId) + "/guidance", { action: "explain" });
+    requireLunaXhigh(result, "Assessment guidance");
     const panel = $("#examGuidanceText");
     panel.hidden = false;
     renderMath(panel, result.guidance_latex || result.guidance || result.message || "Identify the information given and what the question asks you to find.");
@@ -1240,6 +2041,7 @@ $("#submitExam").addEventListener("click", async () => {
   try {
     await saveExamAnswer();
     const result = await postJson("/api/education/exam-sessions/" + encodeURIComponent(state.examSessionId) + "/submit", {});
+    requireLunaXhigh(result, "Assessment marking");
     const panel = $("#examResult");
     panel.hidden = false;
     panel.replaceChildren();
@@ -1311,6 +2113,7 @@ async function loadLessons() {
 $("#lessonGrade").addEventListener("change", () => {
   $("#globalGrade").value = $("#lessonGrade").value;
   state.grade = formatGrade($("#lessonGrade").value);
+  sessionStorage.setItem("sharperx_web_grade", String(state.grade));
   renderSourceLinks();
   loadLessons();
 });
@@ -1338,16 +2141,222 @@ async function playLessonVideo(grade, topic, lesson, button) {
 renderSourceLinks();
 
 const workingCanvas = $("#workingCanvas");
+let phoneCanvasSocket = null;
+let phoneCanvasSession = null;
+let phoneCanvasSubmissionSentUntil = 0;
+let phoneCanvasHeartbeat = 0;
+let phoneCanvasCloseTimer = 0;
+
+function phoneCanvasSetStatus(message, kind = "") {
+  setStatus($("#phoneCanvasPairStatus"), message, kind);
+}
+
+function phoneCanvasSend(message) {
+  if (phoneCanvasSocket?.readyState !== WebSocket.OPEN) return false;
+  phoneCanvasSocket.send(JSON.stringify(message));
+  return true;
+}
+
+function phoneCanvasRemoteUrl(sessionId, code) {
+  const localDevelopment = ["localhost", "127.0.0.1", "::1"].includes(location.hostname);
+  const remoteUrl = localDevelopment
+    ? new URL("https://sharperx.co.za/app/canvas-remote.html")
+    : new URL("./canvas-remote.html", location.href);
+  remoteUrl.hash = new URLSearchParams({ session_id: sessionId, code }).toString();
+  return remoteUrl;
+}
+
+function renderPhoneCanvasQr(url) {
+  const host = $("#phoneCanvasPairQr");
+  host.replaceChildren();
+  const code = qrcode(0, "M");
+  code.addData(url, "Byte");
+  code.make();
+  host.innerHTML = code.createSvgTag({ cellSize: 4, margin: 4, scalable: true });
+  const svg = host.querySelector("svg");
+  if (svg) {
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "Scan to connect your phone canvas");
+  }
+}
+
+function phoneCanvasMapPoint(point, frame) {
+  const rect = workingCanvas.getBoundingClientRect();
+  const sourceWidth = Math.max(1, Number(frame?.width) || 1);
+  const sourceHeight = Math.max(1, Number(frame?.height) || 1);
+  const scale = Math.min(rect.width / sourceWidth, rect.height / sourceHeight);
+  return {
+    x: (rect.width - sourceWidth * scale) / 2 + (Number(point?.x) || 0) * sourceWidth * scale,
+    y: (rect.height - sourceHeight * scale) / 2 + (Number(point?.y) || 0) * sourceHeight * scale,
+    scale,
+  };
+}
+
+function phoneCanvasSnapshot() {
+  const source = state.canvas.strokes.filter((stroke) => stroke.source === "phone").reverse();
+  let remaining = 4000;
+  const result = [];
+  for (const stroke of source) {
+    if (remaining <= 0 || result.length >= 250) break;
+    const points = Array.isArray(stroke.remotePoints) ? stroke.remotePoints : [];
+    const count = Math.min(points.length, remaining);
+    if (!count) continue;
+    const selected = count === points.length
+      ? points
+      : Array.from({ length: count }, (_, index) => points[Math.round(index * (points.length - 1) / Math.max(1, count - 1))]);
+    result.push({
+      id: stroke.id,
+      frame: stroke.remoteFrame,
+      width: stroke.remoteWidth,
+      color: stroke.color,
+      points: selected,
+    });
+    remaining -= count;
+  }
+  return result.reverse();
+}
+
+function applyPhoneCanvasMessage(message) {
+  if (!message || typeof message !== "object") return;
+  if (message.type === "authenticated") {
+    phoneCanvasSetStatus("Scan the code with your phone. Enter the pairing code if you cannot scan it.");
+  } else if (message.type === "phone_connected") {
+    phoneCanvasSetStatus("Phone connected. Draw on it and your work will appear here.", "success");
+    const question = state.canvasQuestion;
+    const questionText = question?.accessible_text || question?.question_text || question?.text || questionLabel(question || {});
+    phoneCanvasSend({
+      type: "setup",
+      title: $("#canvasTitle").textContent,
+      question: String(questionText || "").slice(0, 12_000),
+      strokes: phoneCanvasSnapshot(),
+    });
+  } else if (message.type === "phone_disconnected") {
+    phoneCanvasSetStatus("Phone disconnected. Scan the code again to reconnect.", "error");
+  } else if (message.type === "stroke_start") {
+    const first = phoneCanvasMapPoint(message.point, message.frame);
+    state.canvas.strokes.push({
+      id: String(message.id || ""),
+      source: "phone",
+      remoteFrame: message.frame,
+      remoteWidth: Number(message.width) || 2.2,
+      remotePoints: [message.point],
+      points: [{ x: first.x, y: first.y }],
+      color: "#162a29",
+      width: (Number(message.width) || 2.2) * first.scale,
+    });
+    drawCanvas();
+  } else if (message.type === "stroke_points") {
+    const stroke = [...state.canvas.strokes].reverse().find((item) => item.source === "phone" && item.id === String(message.id || ""));
+    if (!stroke || !Array.isArray(message.points)) return;
+    message.points.forEach((point) => {
+      const mapped = phoneCanvasMapPoint(point, message.frame);
+      stroke.remotePoints.push(point);
+      stroke.points.push({ x: mapped.x, y: mapped.y });
+    });
+    drawCanvas();
+  } else if (message.type === "stroke_end") {
+    state.canvas.active = null;
+  } else if (message.type === "undo") {
+    const targetId = String(message.id || "");
+    let index = -1;
+    for (let i = state.canvas.strokes.length - 1; i >= 0; i -= 1) {
+      const stroke = state.canvas.strokes[i];
+      if (stroke.source === "phone" && (!targetId || stroke.id === targetId)) { index = i; break; }
+    }
+    if (index >= 0) state.canvas.strokes.splice(index, 1);
+    drawCanvas();
+  } else if (message.type === "clear") {
+    state.canvas.strokes = state.canvas.strokes.filter((stroke) => stroke.source !== "phone");
+    drawCanvas();
+  } else if (message.type === "submit") {
+    phoneCanvasSetStatus("Submitting the phone canvas…");
+    $("#finishCanvas").click();
+  }
+}
+
+function stopPhoneCanvas({ notify = true } = {}) {
+  clearTimeout(phoneCanvasCloseTimer);
+  phoneCanvasCloseTimer = 0;
+  clearInterval(phoneCanvasHeartbeat);
+  phoneCanvasHeartbeat = 0;
+  if (phoneCanvasSocket && phoneCanvasSocket.readyState < WebSocket.CLOSING) {
+    if (notify) phoneCanvasSend({ type: "cancel" });
+    phoneCanvasSocket.close();
+  }
+  phoneCanvasSocket = null;
+  phoneCanvasSession = null;
+  phoneCanvasSubmissionSentUntil = 0;
+  $("#phoneCanvasPairCode").textContent = "------";
+  $("#phoneCanvasPairQr").replaceChildren();
+  $("#usePhoneCanvas").setAttribute("aria-expanded", "false");
+  $("#phoneCanvasPairPanel").hidden = true;
+  $("#usePhoneCanvas").disabled = false;
+  phoneCanvasSetStatus("Phone connection closed.");
+}
+
+async function startPhoneCanvas() {
+  if (phoneCanvasSession) return;
+  const button = $("#usePhoneCanvas");
+  button.disabled = true;
+  phoneCanvasSetStatus("Connecting…");
+  try {
+    const session = await postJson("/api/canvas-pairing/sessions", {});
+    phoneCanvasSession = session;
+    $("#phoneCanvasPairCode").textContent = session.pairing_code;
+    const remoteUrl = phoneCanvasRemoteUrl(session.session_id, session.pairing_code);
+    const remotePage = new URL(remoteUrl.href);
+    remotePage.hash = "";
+    $("#phoneCanvasRemoteLink").href = remotePage.href;
+    $("#phoneCanvasRemoteLink").textContent = remotePage.host + remotePage.pathname;
+    renderPhoneCanvasQr(remoteUrl.href);
+
+    const socketUrl = new URL(`${API_BASE_URL}/api/canvas-pairing/ws/${encodeURIComponent(session.session_id)}`);
+    socketUrl.protocol = socketUrl.protocol === "https:" ? "wss:" : "ws:";
+    socketUrl.searchParams.set("role", "host");
+    phoneCanvasSocket = new WebSocket(socketUrl);
+    phoneCanvasSocket.addEventListener("open", () => {
+      phoneCanvasSocket.send(JSON.stringify({ type: "authenticate", token: session.host_token }));
+      clearInterval(phoneCanvasHeartbeat);
+      phoneCanvasHeartbeat = setInterval(() => phoneCanvasSend({ type: "ping" }), 30_000);
+      phoneCanvasSetStatus("Starting secure phone connection…");
+      button.disabled = false;
+    });
+    phoneCanvasSocket.addEventListener("message", (event) => {
+      try { applyPhoneCanvasMessage(JSON.parse(event.data)); } catch { /* Ignore malformed remote updates. */ }
+    });
+    phoneCanvasSocket.addEventListener("close", () => {
+      clearInterval(phoneCanvasHeartbeat);
+      phoneCanvasHeartbeat = 0;
+      if (phoneCanvasSession) {
+        phoneCanvasSetStatus("Phone connection ended. You can start another connection.", "error");
+        $("#phoneCanvasPairCode").textContent = "------";
+        $("#phoneCanvasPairQr").replaceChildren();
+      }
+      phoneCanvasSession = null;
+      phoneCanvasSocket = null;
+      button.disabled = false;
+    });
+    phoneCanvasSocket.addEventListener("error", () => phoneCanvasSetStatus("Could not connect to your phone. Check your connection and try again.", "error"));
+  } catch (error) {
+    phoneCanvasSetStatus(error.message || "Could not start a phone connection.", "error");
+    phoneCanvasSession = null;
+    button.disabled = false;
+  }
+}
+
 function openCanvas(mode, question) {
+  if (phoneCanvasSession) stopPhoneCanvas();
+  $("#phoneCanvasPairPanel").hidden = true;
+  $("#usePhoneCanvas").setAttribute("aria-expanded", "false");
   state.canvasContext = mode;
   state.canvasQuestion = question || null;
   state.canvasReturnFocus = document.activeElement;
   state.canvas = { mode: mode.endsWith("graph") ? "graph" : "write", strokes: [], scale: 1, offsetX: 0, offsetY: 0, pan: false, active: null, drag: null, pointers: new Map(), pinch: null, size: { width: 0, height: 0 } };
-  $("#canvasTitle").textContent = mode === "ask-graph" ? "Draw a graph" : mode === "ask-write" ? "Write words / maths" : "Write or draw your answer";
+  $("#canvasTitle").textContent = mode.endsWith("graph") ? "Draw a graph" : mode === "ask-write" ? "Write words / maths" : "Write or draw your answer";
   $("#canvasPanButton").setAttribute("aria-pressed", "false");
   $("#canvasPanButton").textContent = "☝ Pan";
   const askPaperQuestion = (mode === "ask-write" || mode === "ask-graph") && state.selectedPaperQuestion;
-  const hasQuestionSidebar = mode === "practice" || mode === "exam" || Boolean(askPaperQuestion);
+  const hasQuestionSidebar = mode.startsWith("practice") || mode === "exam" || Boolean(askPaperQuestion);
   const sidebar = $("#canvasQuestionSidebar");
   sidebar.hidden = !hasQuestionSidebar;
   $(".canvas-layout").classList.toggle("has-question", hasQuestionSidebar);
@@ -1359,8 +2368,9 @@ function openCanvas(mode, question) {
   const contextQuestion = question || (askPaperQuestion ? state.selectedPaperQuestion : null);
   if (hasQuestionSidebar && contextQuestion) {
     renderMath($("#canvasQuestionText"), contextQuestion.question_text_latex || contextQuestion.accessible_text || contextQuestion.question_text || contextQuestion.text || questionLabel(contextQuestion));
-    const visuals = mode === "practice" ? state.practiceVisuals : mode === "exam" ? state.examVisuals : [];
-    const source = askPaperQuestion ? state.paperPageImage : visuals && visuals.length ? diagramImageSource(visuals[0]) : "";
+    const visuals = mode.startsWith("practice") ? state.practiceVisuals : mode === "exam" ? state.examVisuals : [];
+    const questionText = contextQuestion && (contextQuestion.question_text_latex || contextQuestion.accessible_text || contextQuestion.question_text || contextQuestion.text || questionLabel(contextQuestion));
+    const source = askPaperQuestion ? state.paperPageImage : visuals && visuals.length ? diagramImageSource(visuals[0], questionText) : "";
     if (source) { image.src = source; image.hidden = false; }
   }
   if (!$("#canvasDialog").open) $("#canvasDialog").showModal();
@@ -1507,8 +2517,16 @@ $("#canvasDialog").addEventListener("close", () => {
   if (state.canvasReturnFocus instanceof HTMLElement) state.canvasReturnFocus.focus({ preventScroll: true });
 });
 $("#canvasFitButton").addEventListener("click", () => { state.canvas.scale = 1; state.canvas.offsetX = 0; state.canvas.offsetY = 0; drawCanvas(); });
-$("#undoCanvas").addEventListener("click", () => { state.canvas.strokes.pop(); drawCanvas(); });
-$("#clearCanvas").addEventListener("click", () => { state.canvas.strokes = []; drawCanvas(); });
+$("#undoCanvas").addEventListener("click", () => {
+  state.canvas.strokes.pop();
+  drawCanvas();
+  if (phoneCanvasSession) phoneCanvasSend({ type: "setup", strokes: phoneCanvasSnapshot() });
+});
+$("#clearCanvas").addEventListener("click", () => {
+  state.canvas.strokes = [];
+  drawCanvas();
+  if (phoneCanvasSession) phoneCanvasSend({ type: "setup", strokes: [] });
+});
 $("#toggleQuestionSidebar").addEventListener("click", () => {
   const sidebar = $("#canvasQuestionSidebar");
   sidebar.hidden = !sidebar.hidden;
@@ -1526,27 +2544,53 @@ $("#canvasDialog").addEventListener("close", () => {
 new ResizeObserver(() => { if ($("#canvasDialog").open) resizeCanvas(); }).observe($(".drawing-surface"));
 window.addEventListener("resize", () => { if ($("#canvasDialog").open) resizeCanvas(); });
 
+$("#usePhoneCanvas").addEventListener("click", async () => {
+  const panel = $("#phoneCanvasPairPanel");
+  panel.hidden = !panel.hidden;
+  $("#usePhoneCanvas").setAttribute("aria-expanded", String(!panel.hidden));
+  if (!panel.hidden) await startPhoneCanvas();
+});
+$("#stopPhoneCanvas").addEventListener("click", () => stopPhoneCanvas());
+$("#canvasDialog").addEventListener("close", () => {
+  if (Date.now() < phoneCanvasSubmissionSentUntil) {
+    clearTimeout(phoneCanvasCloseTimer);
+    phoneCanvasCloseTimer = setTimeout(() => {
+      phoneCanvasCloseTimer = 0;
+      stopPhoneCanvas();
+    }, Math.max(0, phoneCanvasSubmissionSentUntil - Date.now()));
+  } else if (phoneCanvasSession) stopPhoneCanvas();
+});
+
 $("#finishCanvas").addEventListener("click", async () => {
   const button = $("#finishCanvas");
+  if (state.canvasContext.startsWith("practice") && state.practiceAnswerPhotoIds.length >= 3) {
+    showToast("The limit is three handwritten images per practice attempt.");
+    if (phoneCanvasSession) phoneCanvasSend({ type: "submission_error", message: "This attempt already has the maximum number of handwritten images." });
+    return;
+  }
   button.disabled = true;
   try {
     const blob = await new Promise((resolve, reject) => workingCanvas.toBlob((value) => value ? resolve(value) : reject(new Error("The canvas image could not be created.")), "image/png"));
     const file = new File([blob], "sharpertime-canvas-" + Date.now() + ".png", { type: "image/png" });
-    const uploadContext = state.canvasContext === "practice" ? "practice" : state.canvasContext === "exam" ? "exam" : "ask";
+    const uploadContext = state.canvasContext.startsWith("practice") ? "practice" : state.canvasContext === "exam" ? "exam" : "ask";
     const inspectionId = await ensureInspection(uploadContext);
     const form = new FormData();
     form.set("photo_type", state.canvasContext + "_handwritten_working");
     form.set("photo", file, file.name);
     const uploaded = await uploadForm("/api/inspections/" + encodeURIComponent(inspectionId) + "/upload-photo", form);
     const photoId = uploaded.id || uploaded.photo_id;
+    if (!photoId) throw new Error("The canvas working was not attached. Please try again.");
     const previewUrl = URL.createObjectURL(blob);
     if (state.canvasContext === "ask-write" || state.canvasContext === "ask-graph") {
       state.askPhotos.push({ id: photoId, filename: file.name, previewUrl });
       appendMessage("Canvas working attached. It will be included when you press Send.", { kind: "Canvas working", imageUrl: previewUrl });
       $("#askInput").focus({ preventScroll: true });
-    } else if (state.canvasContext === "practice") {
-      state.attachedCanvasPhotoId = photoId;
-      state.practiceCanvasPreview = previewUrl;
+    } else if (state.canvasContext.startsWith("practice")) {
+      if (photoId && !state.practiceAnswerPhotoIds.includes(photoId)) state.practiceAnswerPhotoIds.push(photoId);
+      state.practiceAnswerPhotoPreviews.push({ id: photoId, url: previewUrl });
+      const key = practiceQuestionStorageKey(PRACTICE_SESSION_KEYS.photosPrefix);
+      if (key) sessionStorage.setItem(key, JSON.stringify(state.practiceAnswerPhotoIds));
+      renderPracticeAnswerAttachments();
       showToast("Canvas working attached. Send it for marking when ready.");
     } else if (state.canvasContext === "exam") {
       const question = state.examCurrentQuestion;
@@ -1556,8 +2600,13 @@ $("#finishCanvas").addEventListener("click", async () => {
       }
       showToast("Canvas working attached to this assessment answer.");
     }
+    if (phoneCanvasSession && phoneCanvasSocket?.readyState === WebSocket.OPEN) {
+      phoneCanvasSubmissionSentUntil = Date.now() + 1200;
+      phoneCanvasSend({ type: "submitted" });
+    }
     $("#canvasDialog").close();
   } catch (error) {
+    if (phoneCanvasSession) phoneCanvasSend({ type: "submission_error", message: error.message || "Canvas submission failed." });
     showToast(error.message);
   } finally { button.disabled = false; }
 });

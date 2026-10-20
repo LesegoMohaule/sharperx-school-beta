@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0e766e">
+  <meta name="robots" content="noindex, nofollow">
+  <title>SharperTime phone canvas</title>
+  <link rel="stylesheet" href="./styles.css?v=17">
+  <style>
+    body { min-height: 100svh; }
+    .phone-remote-page { width: min(100%, 1050px); min-height: 100svh; margin: 0 auto; padding: max(12px, env(safe-area-inset-top)) 14px max(12px, env(safe-area-inset-bottom)); }
+    .phone-remote-card { display: grid; gap: 14px; padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: #fff; box-shadow: var(--shadow); }
+    .phone-remote-brand { width: 138px; height: 48px; object-fit: contain; }
+    .phone-remote-page h1 { margin: 0; font-size: clamp(23px, 5vw, 30px); }
+    .phone-remote-page p { margin: 0; color: var(--ink-soft); line-height: 1.5; }
+    .phone-pair-form { display: grid; gap: 10px; max-width: 440px; }
+    .phone-pair-form label { font-size: 13px; font-weight: 700; }
+    .phone-pair-form input { min-height: 52px; font-size: 22px; letter-spacing: .18em; text-align: center; }
+    .phone-signin-note { padding: 12px; border-radius: 10px; background: var(--teal-pale); font-size: 13px; }
+    .phone-canvas-workspace { height: calc(100svh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); min-height: 440px; display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto; gap: 10px; }
+    .phone-canvas-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+    .phone-canvas-header .phone-remote-brand { width: 112px; height: 38px; }
+    .phone-canvas-status { min-width: 0; color: var(--teal-dark); font-size: 12px; font-weight: 700; text-align: right; }
+    .phone-question { max-height: 18svh; overflow: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #f8fbfa; font-family: Georgia, "Times New Roman", serif; font-size: 15px; line-height: 1.4; white-space: pre-wrap; }
+    .phone-question:empty { display: none; }
+    .phone-canvas-tools { display: flex; flex-wrap: wrap; gap: 7px; }
+    .phone-canvas-tools .button { min-height: 40px; padding: 8px 12px; }
+    .phone-canvas-wrap { min-height: 0; overflow: hidden; border: 1px solid #b9ceca; border-radius: 12px; background: #fff; touch-action: none; }
+    #phoneCanvas { width: 100%; height: 100%; display: block; touch-action: none; }
+    .phone-canvas-footer { min-height: 20px; color: var(--ink-soft); font-size: 12px; }
+    @media (max-width: 700px) {
+      .phone-remote-page { padding-inline: 10px; }
+      .phone-remote-card { padding: 14px; }
+      .phone-canvas-workspace { height: calc(100svh - 20px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); min-height: 400px; grid-template-rows: auto auto auto minmax(0, 1fr) auto; }
+      .phone-question { max-height: 15svh; font-size: 14px; }
+      .phone-canvas-tools { gap: 5px; }
+      .phone-canvas-tools .button { min-height: 38px; padding: 7px 9px; font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <main class="phone-remote-page">
+    <section id="pairScreen" class="phone-remote-card">
+      <img class="phone-remote-brand" src="../assets/brand/sharperx-logo.png" alt="SharperX">
+      <h1>Connect your phone</h1>
+      <p>Use your phone to write or draw on the canvas open on your computer.</p>
+      <div class="phone-signin-note">Sign in to the same SharperTime account on this phone. Your writing will stay linked to the canvas on your computer.</div>
+      <form id="phonePairForm" class="phone-pair-form">
+        <label for="phonePairCode">Pairing code</label>
+        <input id="phonePairCode" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="000000" required>
+        <button class="button primary" type="submit">Connect phone</button>
+      </form>
+      <a id="phoneSignInLink" class="button secondary" href="./index.html">Sign in to SharperTime</a>
+      <div id="phonePairStatus" class="status" role="status" aria-live="polite"></div>
+    </section>
+
+    <section id="phoneCanvasWorkspace" class="phone-canvas-workspace" hidden>
+      <header class="phone-canvas-header">
+        <img class="phone-remote-brand" src="../assets/brand/sharperx-logo.png" alt="SharperX">
+        <div id="phoneCanvasConnectionStatus" class="phone-canvas-status" role="status" aria-live="polite">Connecting…</div>
+      </header>
+      <div id="phoneCanvasQuestion" class="phone-question" aria-label="Current question"></div>
+      <div class="phone-canvas-tools" aria-label="Canvas tools">
+        <button id="phoneCanvasUndo" class="button secondary" type="button">Undo</button>
+        <button id="phoneCanvasClear" class="button subtle" type="button">Clear</button>
+        <button id="phoneCanvasSubmit" class="button primary" type="button" disabled>Submit canvas</button>
+        <button id="phoneCanvasDisconnect" class="button subtle" type="button">Disconnect</button>
+      </div>
+      <div class="phone-canvas-wrap"><canvas id="phoneCanvas" aria-label="Write or draw your answer with your finger or stylus"></canvas></div>
+      <div id="phoneCanvasHelp" class="phone-canvas-footer">Write or draw here. Your strokes appear on the computer canvas as you work.</div>
+    </section>
+  </main>
+  <script type="module" src="./canvas-remote.js?v=1"></script>
+</body>
+</html>

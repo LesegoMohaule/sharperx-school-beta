@@ -1,0 +1,3185 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+    <style>
+        :root {
+            /* The Android app is intentionally light. Do not let a device-level
+               dark preference turn the editor ink white on its light surface. */
+            color-scheme: light;
+            --ink: #000000;
+            --muted: #64748b;
+            --placeholder: #94a3b8;
+            --placeholder-fill: rgba(148, 163, 184, .12);
+            --caret: #e11d48;
+            --selection: rgba(244, 63, 94, .12);
+            --math-font-size: 32px;
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            min-height: 100%;
+            overflow: hidden;
+            background: #ffffff;
+        }
+
+        body {
+            color: var(--ink);
+            font-family: "Cambria Math", "STIX Two Math", "Times New Roman", serif;
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+        }
+
+        #editor-shell {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            min-height: 56px;
+            max-height: 100%;
+            overflow: hidden;
+        }
+
+        #line-labels {
+            display: none;
+            position: absolute;
+            inset: 0 auto 0 0;
+            z-index: 3;
+            width: 62px;
+            overflow: hidden;
+            border-right: 1px solid rgba(100, 116, 139, .28);
+            background: var(--placeholder-fill);
+            color: var(--muted);
+            font-family: system-ui, sans-serif;
+            font-size: 11px;
+            font-weight: 600;
+            pointer-events: none;
+            user-select: none;
+        }
+
+        #editor-shell.line-labels-visible #line-labels { display: block; }
+
+        .line-label {
+            position: absolute;
+            left: 0;
+            width: 61px;
+            padding: 2px 6px;
+            text-align: right;
+            white-space: nowrap;
+        }
+
+        #editor-shell.line-labels-visible .editor-surface { padding-left: 72px; }
+        #editor-shell.line-labels-visible #placeholder { left: 72px; }
+
+        .editor-surface {
+            position: absolute;
+            inset: 0;
+            z-index: 1;
+            display: block;
+            width: 100%;
+            max-width: 100%;
+            height: 100%;
+            min-height: 56px;
+            max-height: 100%;
+            padding: 12px 25px 25px 13px;
+            background: #ffffff;
+            color: var(--ink);
+            cursor: text;
+            /* The structured editor renders its own red caret. Leaving the
+               browser caret enabled would paint a second caret at the same
+               logical position, and Android WebView may add its selection
+               handle as well. Keep the platform caret invisible while the
+               custom keyboard/command model remains authoritative. */
+            caret-color: transparent;
+            overflow-x: auto;
+            overflow-y: auto;
+            overflow-wrap: normal;
+            word-break: normal;
+            overscroll-behavior: contain;
+            touch-action: pan-x pan-y;
+            -webkit-overflow-scrolling: touch;
+            scrollbar-width: none;
+            user-select: text;
+            -webkit-user-select: text;
+        }
+
+        .editor-surface::-webkit-scrollbar { width: 0; height: 0; }
+
+        .editor-scrollbar {
+            /* Scrolling is handled by the WebView touch bridge. Keep the
+               diagnostic tracks out of the learner's visual input surface. */
+            display: block;
+            position: absolute;
+            z-index: 4;
+            border-radius: 7px;
+            background: rgba(100, 116, 139, .22);
+            touch-action: none;
+            pointer-events: auto;
+        }
+
+        .editor-scrollbar.vertical {
+            top: 5px;
+            right: 4px;
+            bottom: 18px;
+            width: 14px;
+        }
+
+        .editor-scrollbar.horizontal {
+            left: 5px;
+            right: 18px;
+            bottom: 4px;
+            height: 14px;
+        }
+
+        .editor-scroll-thumb {
+            position: absolute;
+            border-radius: 7px;
+            background: rgba(15, 118, 110, .78);
+            box-shadow: 0 1px 3px rgba(15, 23, 42, .28);
+        }
+
+        .editor-scrollbar.vertical .editor-scroll-thumb {
+            top: 0;
+            left: 1px;
+            right: 1px;
+            min-height: 30px;
+        }
+
+        .editor-scrollbar.horizontal .editor-scroll-thumb {
+            top: 1px;
+            bottom: 1px;
+            left: 0;
+            min-width: 30px;
+        }
+
+        .editor-scrollbar.disabled .editor-scroll-thumb {
+            background: rgba(100, 116, 139, .52);
+        }
+
+        #placeholder {
+            position: absolute;
+            z-index: 2;
+            inset: 13px 14px auto 14px;
+            color: var(--muted);
+            font-family: system-ui, sans-serif;
+            font-size: 14px;
+            line-height: 1.35;
+            pointer-events: none;
+        }
+
+        #placeholder.hidden { display: none; }
+
+        .math-document {
+            display: flex;
+            width: 100%;
+            max-width: 100%;
+            min-width: 100%;
+            min-height: 31px;
+            flex-wrap: wrap;
+            align-items: center;
+            align-content: flex-start;
+            gap: 0;
+            font-size: var(--math-font-size);
+            line-height: 1.15;
+            transition: font-size 90ms ease-out;
+        }
+
+        .editor-surface.minimum-wrapped .math-document {
+            align-items: center;
+            align-content: flex-start;
+            row-gap: .12em;
+        }
+
+        .math-sequence {
+            display: inline-flex;
+            min-width: .12em;
+            min-height: 1.15em;
+            align-items: center;
+            flex-wrap: nowrap;
+            vertical-align: middle;
+        }
+
+        .math-document > .math-item {
+            max-width: none;
+        }
+
+        .math-sequence.math-document {
+            /* A visual row wrap is not a logical line break. The model only
+               creates a new numbered line for an explicit Enter/Return. */
+            flex-wrap: wrap;
+        }
+
+        .math-item {
+            display: inline-flex;
+            flex: 0 0 auto;
+            max-width: 100%;
+            align-items: center;
+            vertical-align: middle;
+            border-radius: 4px;
+        }
+
+        .math-item.environment-item {
+            flex: 1 1 100%;
+            width: 100%;
+            min-width: 0;
+        }
+
+        /* Spreadsheet-cell wrapping: top-level items may move to the next
+           row, but a mathematical construct is never split across rows. */
+        .math-item > .fraction,
+        .math-item > .root-node,
+        .math-item > .script-node,
+        .math-item > .delimiter-node,
+        .math-item > .function-node,
+        .math-item > .logarithm-node,
+        .math-item > .factorial-node,
+        .math-item > .derivative-node,
+        .math-item > .limit-node,
+        .math-item > .large-operator-node,
+        .math-item > .integral-node,
+        .math-item > .combination-node,
+        .math-item > .environment-node {
+            flex: 0 0 auto;
+            break-inside: avoid;
+        }
+
+        .math-item.line-break-item {
+            display: block;
+            flex: 0 0 100%;
+            width: 100%;
+            height: 0;
+            min-height: 0;
+        }
+
+        .line-break {
+            display: block;
+            width: 100%;
+            height: 0;
+        }
+
+        .math-item:active { background: var(--selection); }
+
+        .atom { white-space: pre; }
+        .operator {
+            align-self: center;
+            padding: 0 .16em;
+            font-family: "Cambria Math", "STIX Two Math", serif;
+            line-height: 1;
+            vertical-align: middle;
+        }
+        .relation {
+            align-self: center;
+            padding: 0 .22em;
+            line-height: 1;
+            vertical-align: middle;
+        }
+        .variable { font-style: italic; }
+        .function-name { font-style: normal; margin-right: .08em; }
+
+        .slot-placeholder {
+            display: inline-block;
+            width: .72em;
+            min-width: .72em;
+            height: .8em;
+            margin: 0 .08em;
+            align-self: center;
+            border: 1px dashed var(--placeholder);
+            border-radius: 2px;
+            background: var(--placeholder-fill);
+        }
+
+        .math-caret {
+            display: inline-block;
+            flex: 0 0 2px;
+            width: 2px;
+            height: 1.08em;
+            margin: 0 1px;
+            align-self: center;
+            background: var(--caret);
+            border-radius: 1px;
+            animation: blink 1.05s steps(2, start) infinite;
+        }
+
+        @keyframes blink { 50% { opacity: 0; } }
+
+        .fraction {
+            display: inline-flex;
+            flex-direction: column;
+            align-items: stretch;
+            justify-content: center;
+            margin: 0 .14em;
+            text-align: center;
+            vertical-align: middle;
+            transform: translateY(.03em);
+        }
+
+        .fraction-slot {
+            display: flex;
+            min-width: 1.15em;
+            justify-content: center;
+            padding: 0 .14em;
+            font-size: .82em;
+            line-height: 1.05;
+        }
+
+        .fraction-numerator {
+            padding-bottom: .08em;
+            border-bottom: 1.6px solid currentColor;
+        }
+
+        .fraction-denominator { padding-top: .08em; }
+
+        .root-node {
+            display: inline-flex;
+            align-items: flex-start;
+            margin: 0 .08em;
+            vertical-align: baseline;
+        }
+
+        .root-index {
+            min-width: .45em;
+            margin-right: -.3em;
+            transform: translate(.12em, -.1em);
+            font-size: .52em;
+            line-height: 1;
+            z-index: 1;
+        }
+
+        .root-symbol {
+            font-size: 1.55em;
+            line-height: .9;
+            transform: translateY(.08em);
+        }
+
+        .radicand {
+            min-width: .8em;
+            padding: .02em .16em .01em .1em;
+            border-top: 1.6px solid currentColor;
+        }
+
+        .script-node {
+            display: inline-flex;
+            align-items: center;
+            vertical-align: middle;
+        }
+
+        .script-base-placeholder {
+            width: .72em;
+            height: .8em;
+            align-self: center;
+            border: 1px dashed var(--placeholder);
+            border-radius: 2px;
+            background: var(--placeholder-fill);
+        }
+
+        .script-stack {
+            display: inline-flex;
+            min-width: .48em;
+            flex-direction: column;
+            justify-content: center;
+            margin-left: .03em;
+            font-size: .62em;
+            line-height: 1;
+            vertical-align: baseline;
+        }
+
+        .superscript { transform: translateY(-.38em); }
+        .subscript { transform: translateY(.16em); }
+
+        .delimiter-node { display: inline-flex; align-items: center; }
+        .delimiter {
+            align-self: stretch;
+            display: inline-flex;
+            align-items: center;
+            font-size: 1.08em;
+            line-height: 1;
+        }
+
+        .function-node { display: inline-flex; align-items: center; }
+
+        .logarithm-node { display: inline-flex; align-items: center; }
+        .logarithm-base {
+            align-self: flex-end;
+            margin: 0 .05em .08em .01em;
+            font-size: .55em;
+            line-height: 1;
+        }
+
+        .factorial-node { display: inline-flex; align-items: center; }
+
+        .derivative-node {
+            display: inline-flex;
+            align-items: center;
+            margin: 0 .12em;
+        }
+
+        .derivative-variable { min-width: .55em; }
+
+        .limit-node,
+        .large-operator-node,
+        .integral-node {
+            display: inline-flex;
+            align-items: center;
+            margin: 0 .12em;
+        }
+
+        .limit-symbol { font-style: normal; }
+        .limit-target {
+            display: inline-flex;
+            align-self: flex-end;
+            align-items: baseline;
+            margin-left: -.15em;
+            font-size: .55em;
+            transform: translateY(.35em);
+        }
+        .limit-direction { align-self: flex-start; font-size: .72em; transform: translateY(-.3em); }
+
+        .large-symbol { font-size: 1.55em; line-height: .9; }
+        .operator-with-bounds {
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            line-height: .9;
+        }
+        .operator-with-bounds > .upper-bound,
+        .operator-with-bounds > .lower-bound {
+            min-height: .72em;
+            font-size: .48em;
+            line-height: .85;
+        }
+        .large-stack {
+            display: inline-flex;
+            flex-direction: column;
+            font-size: .48em;
+            line-height: .9;
+            align-items: center;
+            margin-left: -.22em;
+        }
+
+        .integral-symbol { font-size: 1.75em; line-height: .9; }
+        .integral-body { margin: 0 .12em; }
+        .differential { margin-left: .08em; font-size: .9em; }
+
+        .combination-node { display: inline-flex; align-items: center; }
+        .binomial-node {
+            display: inline-grid;
+            grid-template-columns: auto auto auto;
+            align-items: center;
+            column-gap: .08em;
+        }
+        .binomial-values {
+            display: inline-flex;
+            flex-direction: column;
+            align-items: center;
+            font-size: .72em;
+            line-height: 1;
+        }
+        .environment-node {
+            display: inline-flex;
+            align-items: stretch;
+            width: 100%;
+            min-width: 0;
+            max-width: 100%;
+        }
+        .environment-node > .math-sequence {
+            display: inline-flex;
+            width: 100%;
+            min-width: 0;
+            flex-wrap: wrap;
+            align-content: center;
+        }
+        .cases-brace {
+            display: inline-flex;
+            align-items: center;
+            font-size: 2.15em;
+            line-height: 1;
+            margin-right: .1em;
+        }
+
+        .line-break {
+            flex-basis: 100%;
+            width: 0;
+            height: .25em;
+        }
+
+        #measurement-host {
+            position: fixed;
+            left: -100000px;
+            top: -100000px;
+            width: max-content;
+            height: auto;
+            visibility: hidden;
+            pointer-events: none;
+            contain: layout style paint;
+        }
+
+        #measurement-host .math-document {
+            width: max-content;
+            min-width: 0;
+            flex-wrap: nowrap;
+            font-size: 32px;
+            transition: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="editor-shell">
+        <div id="line-labels" aria-hidden="true"></div>
+        <div id="placeholder"></div>
+        <div id="editor" class="editor-surface"
+             role="textbox"
+             aria-multiline="true"
+             aria-label="Structured mathematics editor"
+             contenteditable="true"
+             inputmode="none"
+             autocomplete="off"
+             autocorrect="off"
+             autocapitalize="off"
+             spellcheck="false"></div>
+        <div id="vertical-scrollbar" class="editor-scrollbar vertical" aria-hidden="true">
+            <div id="vertical-scroll-thumb" class="editor-scroll-thumb"></div>
+        </div>
+        <div id="horizontal-scrollbar" class="editor-scrollbar horizontal" aria-hidden="true">
+            <div id="horizontal-scroll-thumb" class="editor-scroll-thumb"></div>
+        </div>
+    </div>
+    <div id="measurement-host" aria-hidden="true"></div>
+
+    <script>
+        (() => {
+            'use strict';
+
+            const editorShell = document.getElementById('editor-shell');
+            const editor = document.getElementById('editor');
+            const lineLabels = document.getElementById('line-labels');
+            const placeholder = document.getElementById('placeholder');
+            const verticalScrollbar = document.getElementById('vertical-scrollbar');
+            const verticalScrollThumb = document.getElementById('vertical-scroll-thumb');
+            const horizontalScrollbar = document.getElementById('horizontal-scrollbar');
+            const horizontalScrollThumb = document.getElementById('horizontal-scroll-thumb');
+            const measurementHost = document.getElementById('measurement-host');
+            // This is a custom mathematics editor. Android must not open the
+            // Samsung/Gboard IME when the contenteditable receives focus;
+            // Windows still accepts physical keys through the explicit host
+            // bridge below.
+            editor.setAttribute('inputmode', 'none');
+            editor.setAttribute('autocomplete', 'off');
+            editor.setAttribute('autocorrect', 'off');
+            editor.setAttribute('autocapitalize', 'off');
+            editor.setAttribute('spellcheck', 'false');
+            // Clipboard actions are provided by the native app keyboard after
+            // a long press. Prevent Chromium's Android context menu from
+            // opening a competing Select/Copy/Paste toolbar.
+            editor.addEventListener('contextmenu', showClipboardMenu);
+            let preferredMathFontSize = 32;
+            let minimumMathFontSize = 18;
+            let fitMetrics = {
+                fontSize: preferredMathFontSize,
+                preferredFontSize: preferredMathFontSize,
+                minimumFontSize: minimumMathFontSize,
+                naturalWidth: 0,
+                availableWidth: 0,
+                overflow: false,
+                wrapped: false
+            };
+            let nextId = 1;
+            let documentModel = createDocument();
+            let caret = { sequenceId: documentModel.root.id, offset: 0 };
+            let undoStack = [];
+            let redoStack = [];
+            let placeholderText = 'Enter your answer or show your next step…';
+            let renderingMeasurement = false;
+            let resizeFrame = 0;
+            let activeCommandSequence = 0;
+            let selectAllActive = false;
+            let scrollbarDrag = null;
+            let editorTouchDrag = null;
+            let pointerGesture = null;
+            let lastCaretPlacementAt = 0;
+            let caretPlacementRevision = 0;
+            let pendingPhysicalTapCaret = null;
+            // Enabled explicitly by the Windows host. Android remains on its
+            // existing touch/custom-keyboard path and never consumes hardware
+            // key events through this bridge.
+            let physicalKeyboardEnabled = false;
+            let showLineLabels = false;
+
+            function clearPlatformSelection() {
+                // Android's contenteditable selection handle is a second
+                // cursor for this editor. The app has semantic selection and
+                // clipboard commands, so the custom-keyboard path does not
+                // need Chromium's visual selection range. Desktop retains
+                // ordinary mouse selection once the Windows host enables its
+                // physical-key path.
+                if (physicalKeyboardEnabled) return;
+                const selection = window.getSelection();
+                if (selection && selection.rangeCount > 0)
+                    selection.removeAllRanges();
+            }
+
+            function updateLineLabels() {
+                lineLabels.replaceChildren();
+                if (!showLineLabels) return;
+
+                const documentElement = editor.querySelector('.math-document');
+                if (!documentElement) return;
+
+                const editorBounds = editor.getBoundingClientRect();
+                const starts = [documentElement.getBoundingClientRect().top - editorBounds.top + editor.scrollTop];
+                const breaks = Array.from(documentElement.children)
+                    .filter(item => item.classList.contains('line-break-item'));
+
+                for (const lineBreak of breaks) {
+                    // Keep consecutive Enter presses on their own rows. Skipping
+                    // blank line-break items made every following gutter label
+                    // point at the same next text node, stacking Line 2, Line 3,
+                    // etc. on top of each other.
+                    const next = lineBreak.nextElementSibling;
+                    const nextTop = next
+                        ? next.getBoundingClientRect().top - editorBounds.top + editor.scrollTop
+                        : lineBreak.getBoundingClientRect().top - editorBounds.top + editor.scrollTop + Math.max(24, fitMetrics.fontSize * 1.2);
+                    starts.push(nextTop);
+                }
+
+                starts.forEach((contentTop, index) => {
+                    const label = element('div', 'line-label', `Line ${index + 1}`);
+                    label.style.top = `${Math.max(4, contentTop - editor.scrollTop)}px`;
+                    lineLabels.appendChild(label);
+                });
+            }
+            let caretHitDebug = 'none';
+            let lastCommandDebug = 'none';
+            let lastStateEventDebug = 'none';
+
+            function clamp(value, minimum, maximum) {
+                return Math.max(minimum, Math.min(maximum, value));
+            }
+
+            function setFontSize(value) {
+                const requested = Number.parseFloat(value);
+                if (!Number.isFinite(requested)) return;
+                preferredMathFontSize = clamp(requested, 8, 72);
+                minimumMathFontSize = clamp(preferredMathFontSize * 0.72, 8, preferredMathFontSize);
+                document.documentElement.style.setProperty('--math-font-size', `${preferredMathFontSize}px`);
+                render();
+                emitState('layout');
+            }
+
+            function updateScrollbars() {
+                if (!editor || !verticalScrollbar || !horizontalScrollbar) return;
+
+                const verticalRange = Math.max(0, editor.scrollHeight - editor.clientHeight);
+                const verticalTrackLength = Math.max(1, verticalScrollbar.clientHeight);
+                const verticalThumbLength = clamp(
+                    verticalTrackLength * (editor.clientHeight / Math.max(editor.scrollHeight, 1)),
+                    30,
+                    verticalTrackLength);
+                const verticalThumbRange = Math.max(0, verticalTrackLength - verticalThumbLength);
+                const verticalPosition = verticalRange > 0
+                    ? (editor.scrollTop / verticalRange) * verticalThumbRange
+                    : 0;
+                verticalScrollThumb.style.height = `${verticalThumbLength}px`;
+                verticalScrollThumb.style.transform = `translateY(${clamp(verticalPosition, 0, verticalThumbRange)}px)`;
+                verticalScrollbar.classList.toggle('disabled', verticalRange <= 1);
+
+                const horizontalRange = Math.max(0, editor.scrollWidth - editor.clientWidth);
+                const horizontalTrackLength = Math.max(1, horizontalScrollbar.clientWidth);
+                const horizontalThumbLength = clamp(
+                    horizontalTrackLength * (editor.clientWidth / Math.max(editor.scrollWidth, 1)),
+                    30,
+                    horizontalTrackLength);
+                const horizontalThumbRange = Math.max(0, horizontalTrackLength - horizontalThumbLength);
+                const horizontalPosition = horizontalRange > 0
+                    ? (editor.scrollLeft / horizontalRange) * horizontalThumbRange
+                    : 0;
+                horizontalScrollThumb.style.width = `${horizontalThumbLength}px`;
+                horizontalScrollThumb.style.transform = `translateX(${clamp(horizontalPosition, 0, horizontalThumbRange)}px)`;
+                horizontalScrollbar.classList.toggle('disabled', horizontalRange <= 1);
+                updateLineLabels();
+            }
+
+            function scrollFromTrack(event, axis, track, thumb) {
+                const bounds = track.getBoundingClientRect();
+                const trackLength = axis === 'vertical' ? bounds.height : bounds.width;
+                const contentLength = axis === 'vertical' ? editor.scrollHeight : editor.scrollWidth;
+                const viewportLength = axis === 'vertical' ? editor.clientHeight : editor.clientWidth;
+                const thumbLength = axis === 'vertical' ? thumb.offsetHeight : thumb.offsetWidth;
+                const range = Math.max(0, contentLength - viewportLength);
+                const thumbRange = Math.max(0, trackLength - thumbLength);
+                if (range <= 0 || thumbRange <= 0) return;
+                const pointerPosition = axis === 'vertical'
+                    ? event.clientY - bounds.top
+                    : event.clientX - bounds.left;
+                const nextPosition = clamp(pointerPosition - (thumbLength / 2), 0, thumbRange);
+                if (axis === 'vertical') editor.scrollTop = (nextPosition / thumbRange) * range;
+                else editor.scrollLeft = (nextPosition / thumbRange) * range;
+                updateScrollbars();
+            }
+
+            function bindScrollbar(track, thumb, axis) {
+                const beginDrag = (pointerId, pointerPosition) => {
+                    scrollbarDrag = {
+                        axis,
+                        pointerId,
+                        startPointer: pointerPosition,
+                        startScroll: axis === 'vertical' ? editor.scrollTop : editor.scrollLeft,
+                        trackLength: axis === 'vertical' ? track.clientHeight : track.clientWidth,
+                        thumbLength: axis === 'vertical' ? thumb.offsetHeight : thumb.offsetWidth
+                    };
+                };
+
+                const moveDrag = (pointerId, pointerPosition) => {
+                    if (!scrollbarDrag || scrollbarDrag.pointerId !== pointerId) return;
+                    const contentLength = axis === 'vertical' ? editor.scrollHeight : editor.scrollWidth;
+                    const viewportLength = axis === 'vertical' ? editor.clientHeight : editor.clientWidth;
+                    const range = Math.max(0, contentLength - viewportLength);
+                    const thumbRange = Math.max(1, scrollbarDrag.trackLength - scrollbarDrag.thumbLength);
+                    const nextScroll = scrollbarDrag.startScroll +
+                        ((pointerPosition - scrollbarDrag.startPointer) / thumbRange) * range;
+                    if (axis === 'vertical') editor.scrollTop = clamp(nextScroll, 0, range);
+                    else editor.scrollLeft = clamp(nextScroll, 0, range);
+                    updateScrollbars();
+                };
+
+                const stopDrag = pointerId => {
+                    if (scrollbarDrag?.pointerId === pointerId) scrollbarDrag = null;
+                };
+
+                thumb.addEventListener('pointerdown', event => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    beginDrag(event.pointerId, axis === 'vertical' ? event.clientY : event.clientX);
+                    thumb.setPointerCapture?.(event.pointerId);
+                });
+
+                thumb.addEventListener('pointermove', event => {
+                    moveDrag(event.pointerId, axis === 'vertical' ? event.clientY : event.clientX);
+                });
+
+                const stopDragging = event => stopDrag(event.pointerId);
+                thumb.addEventListener('pointerup', stopDragging);
+                thumb.addEventListener('pointercancel', stopDragging);
+                thumb.addEventListener('lostpointercapture', stopDragging);
+
+                // Samsung WebView can deliver a finger drag as touch events
+                // without a usable pointer capture. Keep the custom tracks
+                // draggable on that path as well.
+                thumb.addEventListener('touchstart', event => {
+                    const touch = event.changedTouches && event.changedTouches[0];
+                    if (!touch) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    beginDrag(touch.identifier, axis === 'vertical' ? touch.clientY : touch.clientX);
+                }, { passive: false });
+                thumb.addEventListener('touchmove', event => {
+                    const touch = Array.from(event.changedTouches || [])
+                        .find(candidate => candidate.identifier === scrollbarDrag?.pointerId);
+                    if (!touch) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    moveDrag(touch.identifier, axis === 'vertical' ? touch.clientY : touch.clientX);
+                }, { passive: false });
+                const stopTouchDragging = event => {
+                    const touch = Array.from(event.changedTouches || [])
+                        .find(candidate => candidate.identifier === scrollbarDrag?.pointerId);
+                    if (touch) stopDrag(touch.identifier);
+                };
+                thumb.addEventListener('touchend', stopTouchDragging, { passive: true });
+                thumb.addEventListener('touchcancel', stopTouchDragging, { passive: true });
+
+                track.addEventListener('pointerdown', event => {
+                    if (event.target === thumb) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    scrollFromTrack(event, axis, track, thumb);
+                });
+                track.addEventListener('touchstart', event => {
+                    if (event.target === thumb) return;
+                    const touch = event.changedTouches && event.changedTouches[0];
+                    if (!touch) return;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    scrollFromTrack({ clientX: touch.clientX, clientY: touch.clientY }, axis, track, thumb);
+                }, { passive: false });
+            }
+
+            bindScrollbar(verticalScrollbar, verticalScrollThumb, 'vertical');
+            bindScrollbar(horizontalScrollbar, horizontalScrollThumb, 'horizontal');
+            editor.addEventListener('scroll', updateScrollbars, { passive: true });
+
+            function sequence(items = [], role = 'expression') {
+                return { type: 'sequence', id: `s${nextId++}`, role, items };
+            }
+
+            function createDocument() {
+                return { type: 'document', root: sequence([], 'document'), sourceLatex: null };
+            }
+
+            function atom(value, latex = null) {
+                const result = { type: 'atom', value };
+                if (latex) result.latex = latex;
+                return result;
+            }
+
+            function clone(value) {
+                return JSON.parse(JSON.stringify(value));
+            }
+
+            function element(tag, className, text) {
+                const result = document.createElement(tag);
+                if (className) result.className = className;
+                if (text !== undefined) result.textContent = text;
+                return result;
+            }
+
+            function nestedSequences(node) {
+                switch (node.type) {
+                    case 'fraction': return [node.numerator, node.denominator];
+                    case 'root': return node.index ? [node.index, node.radicand] : [node.radicand];
+                    case 'script': {
+                        const result = [node.base];
+                        if (node.superscript) result.push(node.superscript);
+                        if (node.subscript) result.push(node.subscript);
+                        return result;
+                    }
+                    case 'function': {
+                        const result = [];
+                        if (node.power) result.push(node.power);
+                        result.push(node.argument);
+                        return result;
+                    }
+                    case 'logarithm': {
+                        const result = [];
+                        if (node.base) result.push(node.base);
+                        result.push(node.argument);
+                        return result;
+                    }
+                    case 'factorial': return [node.operand];
+                    case 'delimiter': return [node.body];
+                    case 'derivative': return [node.numerator, node.variable];
+                    case 'limit': {
+                        const result = [node.variable, node.destination];
+                        if (node.direction) result.push(node.direction);
+                        return result;
+                    }
+                    case 'integral': {
+                        const result = [];
+                        if (node.lower) result.push(node.lower);
+                        if (node.upper) result.push(node.upper);
+                        result.push(node.body);
+                        return result;
+                    }
+                    case 'combination': return [node.left, node.right];
+                    case 'largeOperator': return [node.lower, node.upper, node.body];
+                    case 'environment': return [node.body];
+                    default: return [];
+                }
+            }
+
+            function findSequence(sequenceId, current = documentModel.root) {
+                if (current.id === sequenceId) return current;
+                for (const item of current.items) {
+                    for (const nested of nestedSequences(item)) {
+                        const found = findSequence(sequenceId, nested);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            }
+
+            function findParent(sequenceId, current = documentModel.root) {
+                for (let index = 0; index < current.items.length; index++) {
+                    const node = current.items[index];
+                    const slots = nestedSequences(node);
+                    for (let slotIndex = 0; slotIndex < slots.length; slotIndex++) {
+                        const slot = slots[slotIndex];
+                        if (slot.id === sequenceId) {
+                            return { parentSequence: current, node, nodeIndex: index, slot, slotIndex, slots };
+                        }
+                        const found = findParent(sequenceId, slot);
+                        if (found) return found;
+                    }
+                }
+                return null;
+            }
+
+            function currentSequence() {
+                let result = findSequence(caret.sequenceId);
+                if (!result) {
+                    result = documentModel.root;
+                    caret = { sequenceId: result.id, offset: result.items.length };
+                }
+                caret.offset = Math.max(0, Math.min(caret.offset, result.items.length));
+                return result;
+            }
+
+            function sequenceHasVisibleText(model) {
+                return (model?.items || []).some(node => {
+                    if (node.type === 'atom') return /\S/u.test(String(node.value || ''));
+                    if (node.type === 'lineBreak') return false;
+                    return nestedSequences(node).some(sequenceHasVisibleText);
+                });
+            }
+
+            function currentLineHasVisibleText() {
+                const { model, start, end } = currentLineRange();
+                return sequenceHasVisibleText({ items: model.items.slice(start, end) });
+            }
+
+            function currentLineRange() {
+                let model = currentSequence();
+                let offset = caret.offset;
+                // A numerator/exponent is a slot, not a new editor line.
+                while (model.id !== documentModel.root.id) {
+                    const parent = findParent(model.id);
+                    if (!parent) break;
+                    offset = parent.nodeIndex;
+                    model = parent.parentSequence;
+                }
+                let start = offset;
+                while (start > 0 && model.items[start - 1].type !== 'lineBreak') start--;
+                let end = offset;
+                while (end < model.items.length && model.items[end].type !== 'lineBreak') end++;
+                return { model, start, end };
+            }
+
+            function recordHistory() {
+                undoStack.push(JSON.stringify({ documentModel, caret }));
+                if (undoStack.length > 100) undoStack.shift();
+                redoStack = [];
+            }
+
+            function restoreSnapshot(serialized) {
+                const snapshot = JSON.parse(serialized);
+                documentModel = snapshot.documentModel;
+                caret = snapshot.caret;
+                render();
+                emitState('change');
+            }
+
+            function isOperator(value) {
+                return ['+', '−', '-', '×', '÷', '=', '<', '>', '≤', '≥', '≠', '≈', '±', '/', '%', '→'].includes(value);
+            }
+
+            function isRelation(value) {
+                return ['=', '<', '>', '≤', '≥', '≠', '≈', '→'].includes(value);
+            }
+
+            function renderSequence(model, extraClass = '', showPlaceholder = true) {
+                const container = element('span', `math-sequence ${extraClass}`.trim());
+                container.dataset.sequenceId = model.id;
+                container.dataset.role = model.role || 'expression';
+
+                for (let index = 0; index <= model.items.length; index++) {
+                    if (!renderingMeasurement && caret.sequenceId === model.id && caret.offset === index) {
+                        const caretElement = element('span', 'math-caret');
+                        caretElement.setAttribute('aria-hidden', 'true');
+                        container.appendChild(caretElement);
+                    }
+
+                    if (index < model.items.length) {
+                        const node = model.items[index];
+                        const wrapperClass = node.type === 'lineBreak'
+                            ? 'math-item line-break-item'
+                            : node.type === 'environment'
+                                ? 'math-item environment-item'
+                                : 'math-item';
+                        const wrapper = element('span', wrapperClass);
+                        wrapper.dataset.itemIndex = String(index);
+                        wrapper.appendChild(renderNode(node));
+                        container.appendChild(wrapper);
+                    }
+                }
+
+                if (model.items.length === 0 && showPlaceholder) {
+                    const emptySlot = element('span', 'slot-placeholder');
+                    emptySlot.setAttribute('aria-label', `Empty ${model.role || 'maths'} slot`);
+                    container.appendChild(emptySlot);
+                }
+
+                return container;
+            }
+
+            function renderNode(node) {
+                switch (node.type) {
+                    case 'atom': {
+                        const classes = ['atom'];
+                        if (isOperator(node.value)) classes.push('operator');
+                        if (isRelation(node.value)) classes.push('relation');
+                        if (/^[A-Za-z]$/.test(node.value)) classes.push('variable');
+                        return element('span', classes.join(' '), node.value);
+                    }
+                    case 'lineBreak':
+                        return element('span', 'line-break');
+                    case 'fraction': {
+                        const fraction = element('span', 'fraction');
+                        fraction.appendChild(renderSequence(node.numerator, 'fraction-slot fraction-numerator'));
+                        fraction.appendChild(renderSequence(node.denominator, 'fraction-slot fraction-denominator'));
+                        return fraction;
+                    }
+                    case 'root': {
+                        const root = element('span', 'root-node');
+                        if (node.index) root.appendChild(renderSequence(node.index, 'root-index'));
+                        root.appendChild(element('span', 'root-symbol', '√'));
+                        root.appendChild(renderSequence(node.radicand, 'radicand'));
+                        return root;
+                    }
+                    case 'script': {
+                        const script = element('span', 'script-node');
+                        script.appendChild(renderSequence(node.base, 'script-base'));
+                        const stack = element('span', 'script-stack');
+                        if (node.superscript) stack.appendChild(renderSequence(node.superscript, 'superscript'));
+                        if (node.subscript) stack.appendChild(renderSequence(node.subscript, 'subscript'));
+                        script.appendChild(stack);
+                        return script;
+                    }
+                    case 'function': {
+                        const fn = element('span', 'function-node');
+                        if (node.power) {
+                            const poweredName = element('span', 'script-node');
+                            poweredName.appendChild(element('span', 'function-name', node.name));
+                            const stack = element('span', 'script-stack');
+                            stack.appendChild(renderSequence(node.power, 'superscript'));
+                            poweredName.appendChild(stack);
+                            fn.appendChild(poweredName);
+                        } else fn.appendChild(element('span', 'function-name', node.name));
+                        fn.appendChild(renderSequence(node.argument, 'function-argument'));
+                        return fn;
+                    }
+                    case 'logarithm': {
+                        const logarithm = element('span', 'logarithm-node');
+                        logarithm.appendChild(element('span', 'function-name', 'log'));
+                        if (node.base) logarithm.appendChild(renderSequence(node.base, 'logarithm-base'));
+                        logarithm.appendChild(renderSequence(node.argument, 'function-argument'));
+                        return logarithm;
+                    }
+                    case 'factorial': {
+                        const factorial = element('span', 'factorial-node');
+                        factorial.appendChild(renderSequence(node.operand, 'factorial-operand'));
+                        factorial.appendChild(element('span', 'atom', '!'));
+                        return factorial;
+                    }
+                    case 'delimiter': {
+                        const delimiter = element('span', 'delimiter-node');
+                        delimiter.appendChild(element('span', 'delimiter', node.open));
+                        delimiter.appendChild(renderSequence(node.body, 'delimiter-body'));
+                        delimiter.appendChild(element('span', 'delimiter', node.close));
+                        return delimiter;
+                    }
+                    case 'derivative': {
+                        const derivative = element('span', 'derivative-node');
+                        const fraction = element('span', 'fraction');
+                        const numeratorElement = element('span', 'fraction-slot fraction-numerator');
+                        numeratorElement.appendChild(element('span', 'atom', node.order === 2 ? 'd²' : 'd'));
+                        numeratorElement.appendChild(renderSequence(node.numerator, 'derivative-numerator', false));
+                        fraction.appendChild(numeratorElement);
+                        const denominatorElement = element('span', 'fraction-slot fraction-denominator');
+                        denominatorElement.appendChild(element('span', 'atom', 'd'));
+                        denominatorElement.appendChild(renderSequence(node.variable, 'derivative-variable'));
+                        if (node.order === 2) denominatorElement.appendChild(element('span', 'atom', '²'));
+                        fraction.appendChild(denominatorElement);
+                        derivative.appendChild(fraction);
+                        return derivative;
+                    }
+                    case 'limit': {
+                        const limit = element('span', 'limit-node');
+                        limit.appendChild(element('span', 'limit-symbol', 'lim'));
+                        const target = element('span', 'limit-target');
+                        target.appendChild(renderSequence(node.variable, 'limit-variable'));
+                        target.appendChild(element('span', 'atom operator', '→'));
+                        target.appendChild(renderSequence(node.destination, 'limit-destination'));
+                        if (node.direction) target.appendChild(renderSequence(node.direction, 'limit-direction'));
+                        limit.appendChild(target);
+                        return limit;
+                    }
+                    case 'integral': {
+                        const integral = element('span', 'integral-node');
+                        if (node.lower || node.upper) {
+                            const boundedSymbol = element('span', 'operator-with-bounds');
+                            if (node.upper) boundedSymbol.appendChild(renderSequence(node.upper, 'upper-bound'));
+                            boundedSymbol.appendChild(element('span', 'integral-symbol', '∫'));
+                            if (node.lower) boundedSymbol.appendChild(renderSequence(node.lower, 'lower-bound'));
+                            integral.appendChild(boundedSymbol);
+                        } else integral.appendChild(element('span', 'integral-symbol', '∫'));
+                        integral.appendChild(renderSequence(node.body, 'integral-body'));
+                        if (node.differential) integral.appendChild(element('span', 'differential', `d${node.differential}`));
+                        return integral;
+                    }
+                    case 'combination': {
+                        if (node.symbol === 'binom') {
+                            const binomial = element('span', 'combination-node binomial-node');
+                            binomial.appendChild(element('span', 'delimiter', '('));
+                            const values = element('span', 'binomial-values');
+                            values.appendChild(renderSequence(node.left, 'first argument'));
+                            values.appendChild(renderSequence(node.right, 'second argument'));
+                            binomial.appendChild(values);
+                            binomial.appendChild(element('span', 'delimiter', ')'));
+                            return binomial;
+                        }
+                        const combination = element('span', 'combination-node');
+                        combination.appendChild(element('span', 'atom', node.symbol));
+                        combination.appendChild(renderSequence(node.left, 'first argument'));
+                        combination.appendChild(element('span', 'atom operator', ','));
+                        combination.appendChild(renderSequence(node.right, 'second argument'));
+                        return combination;
+                    }
+                    case 'largeOperator': {
+                        const large = element('span', 'large-operator-node');
+                        const boundedSymbol = element('span', 'operator-with-bounds');
+                        boundedSymbol.appendChild(renderSequence(node.upper, 'upper-bound'));
+                        boundedSymbol.appendChild(element('span', 'large-symbol', node.operator === 'product' ? 'Π' : 'Σ'));
+                        boundedSymbol.appendChild(renderSequence(node.lower, 'lower-bound'));
+                        large.appendChild(boundedSymbol);
+                        large.appendChild(renderSequence(node.body, 'operator expression'));
+                        return large;
+                    }
+                    case 'environment': {
+                        const environment = element('span', `environment-node ${node.name}-environment`);
+                        if (node.name === 'cases') environment.appendChild(element('span', 'cases-brace', '{'));
+                        environment.appendChild(renderSequence(node.body, `${node.name} rows`));
+                        return environment;
+                    }
+                    default:
+                        return element('span', 'atom', '');
+                }
+            }
+
+            function topLevelLines() {
+                const lines = [[]];
+                for (const item of documentModel.root.items) {
+                    if (item.type === 'lineBreak') lines.push([]);
+                    else lines[lines.length - 1].push(item);
+                }
+                return lines;
+            }
+
+            function measureNaturalLineWidth() {
+                measurementHost.replaceChildren();
+                let maximum = 0;
+                renderingMeasurement = true;
+                try {
+                    const lines = topLevelLines();
+                    for (let index = 0; index < lines.length; index++) {
+                        const probeModel = {
+                            type: 'sequence',
+                            id: `measurement-${index}`,
+                            role: 'measurement',
+                            items: lines[index]
+                        };
+                        const probe = renderSequence(probeModel, 'math-document', false);
+                        probe.style.fontSize = `${preferredMathFontSize}px`;
+                        measurementHost.appendChild(probe);
+                        maximum = Math.max(maximum, probe.getBoundingClientRect().width);
+                    }
+                } finally {
+                    renderingMeasurement = false;
+                    measurementHost.replaceChildren();
+                }
+                return maximum;
+            }
+
+            function applyAutoFit(documentElement) {
+                const computed = getComputedStyle(editor);
+                const horizontalPadding = parseFloat(computed.paddingLeft || '0') + parseFloat(computed.paddingRight || '0');
+                const measuredEditorWidth = editor.clientWidth || editor.getBoundingClientRect().width || 0;
+                const availableWidth = Math.max(0, measuredEditorWidth - horizontalPadding);
+                const naturalWidth = measureNaturalLineWidth();
+                const hasExplicitBreak = Boolean(documentElement.querySelector('.line-break-item'));
+                const proportionalSize = naturalWidth > 0 && availableWidth > 0
+                    ? preferredMathFontSize * availableWidth / naturalWidth
+                    : preferredMathFontSize;
+                const fontSize = Math.max(
+                    minimumMathFontSize,
+                    Math.min(preferredMathFontSize, proportionalSize));
+                const fittedWidth = naturalWidth * fontSize / preferredMathFontSize;
+                const requiresVisualWrap = availableWidth > 0 && fittedWidth > availableWidth + 1;
+                const wrapped = hasExplicitBreak || requiresVisualWrap;
+
+                documentElement.style.fontSize = `${fontSize}px`;
+                documentElement.style.width = '100%';
+                documentElement.style.minWidth = '100%';
+                documentElement.style.maxWidth = '100%';
+                documentElement.style.flexWrap = 'wrap';
+                editor.classList.toggle('minimum-wrapped', requiresVisualWrap);
+
+                // A wrapped logical line should not expose horizontal
+                // overflow. Keep this metric for genuinely indivisible math
+                // structures that are wider than the editor viewport.
+                const overflow = editor.scrollWidth > editor.clientWidth + 1;
+
+                fitMetrics = {
+                    fontSize,
+                    preferredFontSize: preferredMathFontSize,
+                    minimumFontSize: minimumMathFontSize,
+                    naturalWidth: Math.round(naturalWidth * 10) / 10,
+                    availableWidth: Math.round(availableWidth * 10) / 10,
+                    overflow,
+                    wrapped
+                };
+            }
+
+            function scheduleInitialFitRetry() {
+                requestAnimationFrame(() => {
+                    const documentElement = editor.querySelector('.math-document');
+                    if (!documentElement) return;
+                    const before = JSON.stringify(fitMetrics);
+                    applyAutoFit(documentElement);
+                    const after = JSON.stringify(fitMetrics);
+                    if (before !== after) {
+                        const caretElement = editor.querySelector('.math-caret');
+                        if (caretElement) caretElement.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                        emitState('layout');
+                    }
+                });
+            }
+
+            function render() {
+                editor.replaceChildren();
+                const documentElement = renderSequence(documentModel.root, 'math-document');
+                editor.appendChild(documentElement);
+                applyAutoFit(documentElement);
+                scheduleInitialFitRetry();
+                placeholder.textContent = placeholderText;
+                placeholder.classList.toggle('hidden', hasMeaningfulContent(documentModel.root) || documentModel.root.items.length > 0);
+                editor.setAttribute('aria-label', `${describeDocument()} ${describeFitMetrics()}`);
+
+                requestAnimationFrame(() => {
+                    const caretElement = editor.querySelector('.math-caret');
+                    if (caretElement) caretElement.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                    updateScrollbars();
+                    updateLineLabels();
+                });
+            }
+
+            function refitAfterResize() {
+                if (resizeFrame) cancelAnimationFrame(resizeFrame);
+                resizeFrame = requestAnimationFrame(() => {
+                    resizeFrame = 0;
+                    const documentElement = editor.querySelector('.math-document');
+                    if (!documentElement) return;
+                    const previousSize = fitMetrics.fontSize;
+                    const previousWidth = fitMetrics.availableWidth;
+                    applyAutoFit(documentElement);
+                    const caretElement = editor.querySelector('.math-caret');
+                    if (caretElement) caretElement.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+                    updateScrollbars();
+                    if (Math.abs(previousSize - fitMetrics.fontSize) >= .5 ||
+                        Math.abs(previousWidth - fitMetrics.availableWidth) >= 1) {
+                        emitState('layout');
+                    }
+                });
+            }
+
+            function allCaretPositions() {
+                const positions = [];
+                function visit(model) {
+                    positions.push({ sequenceId: model.id, offset: 0 });
+                    for (let index = 0; index < model.items.length; index++) {
+                        for (const nested of nestedSequences(model.items[index])) visit(nested);
+                        positions.push({ sequenceId: model.id, offset: index + 1 });
+                    }
+                }
+                visit(documentModel.root);
+                return positions;
+            }
+
+            function currentPositionIndex(positions) {
+                return positions.findIndex(position =>
+                    position.sequenceId === caret.sequenceId && position.offset === caret.offset);
+            }
+
+            function moveHorizontal(direction) {
+                selectAllActive = false;
+                const model = currentSequence();
+                const parent = findParent(model.id);
+                if (parent && direction > 0 && caret.offset >= model.items.length) {
+                    const nextSlot = parent.slots[parent.slotIndex + 1];
+                    caret = nextSlot
+                        ? { sequenceId: nextSlot.id, offset: 0 }
+                        : { sequenceId: parent.parentSequence.id, offset: parent.nodeIndex + 1 };
+                    render();
+                    emitState('caret');
+                    return;
+                }
+                if (parent && direction < 0 && caret.offset <= 0) {
+                    const previousSlot = parent.slots[parent.slotIndex - 1];
+                    caret = previousSlot
+                        ? { sequenceId: previousSlot.id, offset: previousSlot.items.length }
+                        : { sequenceId: parent.parentSequence.id, offset: parent.nodeIndex };
+                    render();
+                    emitState('caret');
+                    return;
+                }
+
+                const positions = allCaretPositions();
+                const index = currentPositionIndex(positions);
+                if (index < 0) return;
+                const target = positions[Math.max(0, Math.min(positions.length - 1, index + direction))];
+                caret = { ...target };
+                render();
+                emitState('caret');
+            }
+
+            function moveVertical(direction) {
+                selectAllActive = false;
+                const parent = findParent(caret.sequenceId);
+                if (!parent) return;
+
+                let target = null;
+                if (parent.node.type === 'fraction') {
+                    target = direction < 0 ? parent.node.numerator : parent.node.denominator;
+                } else if (parent.node.type === 'script') {
+                    target = direction < 0 ? parent.node.superscript : parent.node.subscript;
+                } else if (parent.node.type === 'root') {
+                    target = direction < 0 ? parent.node.index : parent.node.radicand;
+                } else if (parent.node.type === 'logarithm') {
+                    target = direction < 0 ? parent.node.base : parent.node.argument;
+                } else if (parent.node.type === 'derivative') {
+                    target = direction < 0 ? parent.node.numerator : parent.node.variable;
+                } else if (parent.node.type === 'integral' || parent.node.type === 'largeOperator') {
+                    target = direction < 0 ? parent.node.upper : parent.node.lower;
+                }
+
+                if (!target || target.id === caret.sequenceId) return;
+                caret = { sequenceId: target.id, offset: Math.min(caret.offset, target.items.length) };
+                render();
+                emitState('caret');
+            }
+
+            function setCaret(sequenceId, offset, eventName = 'caret') {
+                const model = findSequence(sequenceId);
+                if (!model) return;
+                selectAllActive = false;
+                caret = { sequenceId, offset: Math.max(0, Math.min(offset, model.items.length)) };
+                render();
+                emitState(eventName);
+            }
+
+            function insertNode(node, targetSequence, targetOffset) {
+                const model = targetSequence || currentSequence();
+                const offset = targetOffset === undefined ? caret.offset : targetOffset;
+                model.items.splice(offset, 0, node);
+                caret = { sequenceId: model.id, offset: offset + 1 };
+            }
+
+            function appendTextWithoutHistory(value) {
+                for (const character of Array.from(value || '')) {
+                    if (character === '\r') continue;
+                    if (character === '\n') {
+                        if (!currentLineHasVisibleText()) continue;
+                        // Enter exits a fraction/script onto the next logical
+                        // line; it must never insert a line break inside a slot.
+                        while (caret.sequenceId !== documentModel.root.id) {
+                            const parent = findParent(caret.sequenceId);
+                            if (!parent) break;
+                            caret = { sequenceId: parent.parentSequence.id, offset: parent.nodeIndex + 1 };
+                        }
+                        insertNode({ type: 'lineBreak' });
+                        continue;
+                    }
+
+                    if ([')', ']', '}'].includes(character) && tryExitDelimiter(character)) continue;
+                    // A parenthesised exponent is commonly entered as
+                    // `base`, power, `(`, expression, `)`, then the rest of
+                    // the function. The lightweight keyboard inserts the
+                    // parentheses as literal atoms, so the closing bracket
+                    // must also leave the exponent slot; otherwise the next
+                    // term is silently captured inside the exponent (for
+                    // example 2^(x-3)+2 becoming 2^((x-3)+2)).
+                    if (character === ')' && tryExitPowerAfterClosingParenthesis()) continue;
+                    insertNode(atom(character === '-' ? '−' : character));
+                }
+            }
+
+            function tryExitDelimiter(closing) {
+                const model = currentSequence();
+                const parent = findParent(model.id);
+                if (!parent || parent.node.type !== 'delimiter' || parent.node.close !== closing || caret.offset !== model.items.length) {
+                    return false;
+                }
+                caret = { sequenceId: parent.parentSequence.id, offset: parent.nodeIndex + 1 };
+                return true;
+            }
+
+            function tryExitPowerAfterClosingParenthesis() {
+                const model = currentSequence();
+                if (model.role !== 'exponent' || caret.offset !== model.items.length)
+                    return false;
+
+                // Only treat a final unmatched literal '(' as the grouping
+                // opened in this exponent. Nested literal parentheses remain
+                // ordinary text until their own closing parenthesis arrives.
+                let depth = 0;
+                for (const item of model.items) {
+                    if (item.type !== 'atom') continue;
+                    if (item.value === '(') depth++;
+                    else if (item.value === ')' && depth > 0) depth--;
+                }
+                if (depth <= 0) return false;
+
+                const parent = findParent(model.id);
+                if (!parent || parent.node.type !== 'script' || parent.node.superscript !== model)
+                    return false;
+
+                insertNode(atom(')'), model, caret.offset);
+                caret = { sequenceId: parent.parentSequence.id, offset: parent.nodeIndex + 1 };
+                return true;
+            }
+
+            function insertText(value) {
+                if (!value) return;
+                if (/^[\r\n]+$/.test(value) && !currentLineHasVisibleText()) return;
+                recordHistory();
+                deleteSelectionWithoutHistory();
+                appendTextWithoutHistory(value);
+                finishChange();
+            }
+
+            function insertFraction() {
+                recordHistory();
+                const node = {
+                    type: 'fraction',
+                    numerator: sequence([], 'numerator'),
+                    denominator: sequence([], 'denominator')
+                };
+                insertNode(node);
+                caret = { sequenceId: node.numerator.id, offset: 0 };
+                finishChange();
+            }
+
+            function insertRoot(withIndex) {
+                recordHistory();
+                const node = {
+                    type: 'root',
+                    index: withIndex ? sequence([], 'root index') : null,
+                    radicand: sequence([], 'radicand')
+                };
+                insertNode(node);
+                caret = { sequenceId: withIndex ? node.index.id : node.radicand.id, offset: 0 };
+                finishChange();
+            }
+
+            function isExpressionBoundary(node) {
+                return node.type === 'lineBreak' ||
+                    (node.type === 'atom' && isRelation(node.value));
+            }
+
+            function takeTrailingExpression(model, role = 'base') {
+                const end = caret.offset;
+                let start = end;
+                while (start > 0 && !isExpressionBoundary(model.items[start - 1])) start--;
+                while (start < end && model.items[start].type === 'atom' && /^\s+$/.test(model.items[start].value)) start++;
+                if (start >= end) return sequence([], role);
+
+                const selected = model.items.splice(start, end - start);
+                caret.offset = start;
+                // Fixed-power and subscript keys must never manufacture
+                // parentheses around the expression. Only an explicit
+                // bracket key creates a delimiter/atom; keeping the selected
+                // sequence intact preserves the textbook caret/slot model.
+                return sequence(selected, role);
+            }
+
+            function insertPower(fixedExponent) {
+                recordHistory();
+                const model = currentSequence();
+                const base = takeTrailingExpression(model);
+                const exponent = sequence([], 'exponent');
+                if (fixedExponent !== undefined && fixedExponent !== null) {
+                    exponent.items.push(atom(String(fixedExponent)));
+                }
+                const node = { type: 'script', base, superscript: exponent, subscript: null };
+                insertNode(node, model, caret.offset);
+                if (fixedExponent === undefined || fixedExponent === null) {
+                    caret = { sequenceId: exponent.id, offset: 0 };
+                } else if (base.items.length === 0) {
+                    caret = { sequenceId: base.id, offset: 0 };
+                }
+                finishChange();
+            }
+
+            function insertSubscript() {
+                recordHistory();
+                const model = currentSequence();
+                const base = takeTrailingExpression(model);
+                const subscript = sequence([], 'subscript');
+                const node = { type: 'script', base, superscript: null, subscript };
+                insertNode(node, model, caret.offset);
+                caret = { sequenceId: subscript.id, offset: 0 };
+                finishChange();
+            }
+
+            function insertDelimiter(kind) {
+                const pairs = { '()': ['(', ')'], '[]': ['[', ']'], '{}': ['{', '}'], '||': ['|', '|'] };
+                const pair = pairs[kind] || ['(', ')'];
+                recordHistory();
+                const node = { type: 'delimiter', open: pair[0], close: pair[1], body: sequence([], 'delimited expression') };
+                insertNode(node);
+                caret = { sequenceId: node.body.id, offset: 0 };
+                finishChange();
+            }
+
+            function insertFunction(name) {
+                recordHistory();
+                const safeName = String(name || 'sin').replace(/[^A-Za-z]/g, '') || 'sin';
+                const node = { type: 'function', name: safeName, argument: sequence([], `${safeName} argument`) };
+                insertNode(node);
+                caret = { sequenceId: node.argument.id, offset: 0 };
+                finishChange();
+            }
+
+            function insertLogarithm() {
+                recordHistory();
+                const node = {
+                    type: 'logarithm',
+                    base: sequence([], 'logarithm base'),
+                    argument: sequence([], 'logarithm argument')
+                };
+                insertNode(node);
+                caret = { sequenceId: node.base.id, offset: 0 };
+                finishChange();
+            }
+
+            function insertFactorial() {
+                recordHistory();
+                const model = currentSequence();
+                const operand = takeTrailingExpression(model, 'factorial operand');
+                const node = { type: 'factorial', operand };
+                insertNode(node, model, caret.offset);
+                if (operand.items.length === 0) caret = { sequenceId: operand.id, offset: 0 };
+                finishChange();
+            }
+
+            function insertInfinity() {
+                recordHistory();
+                insertNode(atom('∞'));
+                finishChange();
+            }
+
+            function insertDerivative(order) {
+                recordHistory();
+                const node = {
+                    type: 'derivative',
+                    order: Number(order) === 2 ? 2 : 1,
+                    numerator: sequence([], 'derivative numerator'),
+                    variable: sequence([], 'differentiation variable')
+                };
+                insertNode(node);
+                caret = { sequenceId: node.variable.id, offset: 0 };
+                finishChange();
+            }
+
+            function insertLimit(kind) {
+                recordHistory();
+                const node = {
+                    type: 'limit',
+                    variable: sequence([], 'limit variable'),
+                    destination: sequence([], 'limit destination'),
+                    direction: kind === 'right'
+                        ? sequence([atom('+')], 'limit direction')
+                        : kind === 'left'
+                            ? sequence([atom('−')], 'limit direction')
+                            : null
+                };
+                insertNode(node);
+                caret = { sequenceId: node.variable.id, offset: 0 };
+                finishChange();
+            }
+
+            function insertIntegral(kind) {
+                recordHistory();
+                const definite = kind === 'definite';
+                const node = {
+                    type: 'integral',
+                    lower: definite ? sequence([], 'lower bound') : null,
+                    upper: definite ? sequence([], 'upper bound') : null,
+                    body: sequence([], 'integrand'),
+                    differential: kind === 'dx' || definite ? 'x' : null
+                };
+                insertNode(node);
+                caret = { sequenceId: definite ? node.lower.id : node.body.id, offset: 0 };
+                finishChange();
+            }
+
+            function insertCombination(symbol) {
+                recordHistory();
+                const node = {
+                    type: 'combination', symbol: symbol === 'P' ? 'P' : 'C',
+                    left: sequence([], 'first argument'), right: sequence([], 'second argument')
+                };
+                insertNode(node);
+                caret = { sequenceId: node.left.id, offset: 0 };
+                finishChange();
+            }
+
+            function insertLargeOperator(operator) {
+                recordHistory();
+                const node = {
+                    type: 'largeOperator', operator: operator === 'product' ? 'product' : 'sum',
+                    lower: sequence([], 'lower bound'), upper: sequence([], 'upper bound'),
+                    body: sequence([], 'operator expression')
+                };
+                insertNode(node);
+                caret = { sequenceId: node.lower.id, offset: 0 };
+                finishChange();
+            }
+
+            function insertScientificPower() {
+                recordHistory();
+                const model = currentSequence();
+                insertNode(atom('×'), model, caret.offset);
+                const exponent = sequence([], 'exponent');
+                const node = { type: 'script', base: sequence([atom('10')], 'base'), superscript: exponent, subscript: null };
+                insertNode(node, model, caret.offset);
+                caret = { sequenceId: exponent.id, offset: 0 };
+                finishChange();
+            }
+
+            function deepestSequence(node, first) {
+                const slots = nestedSequences(node);
+                if (!slots.length) return null;
+                const slot = first ? slots[0] : slots[slots.length - 1];
+                if (!slot.items.length) return slot;
+                const child = first ? slot.items[0] : slot.items[slot.items.length - 1];
+                return deepestSequence(child, first) || slot;
+            }
+
+            function collapseStructuredParent(parent) {
+                const preservedItems = parent.slots.flatMap(slot => slot.items);
+                recordHistory();
+                parent.parentSequence.items.splice(parent.nodeIndex, 1, ...preservedItems);
+                caret = {
+                    sequenceId: parent.parentSequence.id,
+                    offset: parent.nodeIndex + preservedItems.length
+                };
+                finishChange();
+            }
+
+            function backspace() {
+                const model = currentSequence();
+                if (caret.offset > 0) {
+                    const previous = model.items[caret.offset - 1];
+                    const nested = deepestSequence(previous, false);
+                    if (nested) {
+                        caret = { sequenceId: nested.id, offset: nested.items.length };
+                        render();
+                        emitState('caret');
+                        return;
+                    }
+                    recordHistory();
+                    model.items.splice(caret.offset - 1, 1);
+                    caret.offset--;
+                    finishChange();
+                    return;
+                }
+
+                const parent = findParent(model.id);
+                if (!parent) return;
+                if (model.items.length === 0) {
+                    collapseStructuredParent(parent);
+                    return;
+                }
+                if (parent.slotIndex > 0) {
+                    const previousSlot = parent.slots[parent.slotIndex - 1];
+                    caret = { sequenceId: previousSlot.id, offset: previousSlot.items.length };
+                    render();
+                    emitState('caret');
+                    return;
+                }
+
+                recordHistory();
+                parent.parentSequence.items.splice(parent.nodeIndex, 1);
+                caret = { sequenceId: parent.parentSequence.id, offset: parent.nodeIndex };
+                finishChange();
+            }
+
+            function deleteForward() {
+                const model = currentSequence();
+                if (caret.offset < model.items.length) {
+                    const next = model.items[caret.offset];
+                    const nested = deepestSequence(next, true);
+                    if (nested) {
+                        caret = { sequenceId: nested.id, offset: 0 };
+                        render();
+                        emitState('caret');
+                        return;
+                    }
+                    recordHistory();
+                    model.items.splice(caret.offset, 1);
+                    finishChange();
+                    return;
+                }
+                moveHorizontal(1);
+            }
+
+            function clearDocument() {
+                if (documentModel.root.items.length) recordHistory();
+                documentModel = createDocument();
+                caret = { sequenceId: documentModel.root.id, offset: 0 };
+                render();
+                emitState('cleared');
+            }
+
+            function moveHome() {
+                selectAllActive = false;
+                caret = { sequenceId: documentModel.root.id, offset: 0 };
+                render();
+                emitState('caret');
+            }
+
+            function moveEnd() {
+                selectAllActive = false;
+                caret = { sequenceId: documentModel.root.id, offset: documentModel.root.items.length };
+                render();
+                emitState('caret');
+            }
+
+            function undo() {
+                if (!undoStack.length) return;
+                redoStack.push(JSON.stringify({ documentModel, caret }));
+                restoreSnapshot(undoStack.pop());
+            }
+
+            function redo() {
+                if (!redoStack.length) return;
+                undoStack.push(JSON.stringify({ documentModel, caret }));
+                restoreSnapshot(redoStack.pop());
+            }
+
+            function finishChange(preserveSource = false) {
+                if (!preserveSource) documentModel.sourceLatex = null;
+                selectAllActive = false;
+                render();
+                emitState('change');
+            }
+
+            function insertLatex(value) {
+                if (!value) return;
+
+                const normalized = normalizeLatexForLoad(value);
+                const parser = new LatexParser(normalized);
+                const parsed = parser.parse();
+                if (!parser.valid) {
+                    emitState('rejected');
+                    return;
+                }
+
+                const replacesWholeDocument = selectAllActive || documentModel.root.items.length === 0;
+                recordHistory();
+                deleteSelectionWithoutHistory();
+                for (const node of parsed.items) {
+                    if (node.type === 'lineBreak') appendTextWithoutHistory('\n');
+                    else insertNode(node);
+                }
+                if (replacesWholeDocument) documentModel.sourceLatex = normalized;
+                finishChange(replacesWholeDocument);
+            }
+
+            const latexSymbols = {
+                '×': '\\times', '÷': '\\div', '≤': '\\le', '≥': '\\ge',
+                '≠': '\\ne', '≈': '\\approx', '≡': '\\equiv', '±': '\\pm',
+                '∪': '\\cup', '∩': '\\cap', 'π': '\\pi', '∞': '\\infty',
+                'Δ': '\\Delta', 'Ω': '\\Omega', 'θ': '\\theta', 'α': '\\alpha',
+                'β': '\\beta', 'γ': '\\gamma', 'δ': '\\delta', 'ε': '\\epsilon',
+                'λ': '\\lambda', 'μ': '\\mu', 'ρ': '\\rho', 'σ': '\\sigma',
+                'φ': '\\phi', 'ω': '\\omega', 'η': '\\eta', 'κ': '\\kappa',
+                'τ': '\\tau', '∂': '\\partial', '∇': '\\nabla', '→': '\\to',
+                '−': '-', '°': '\\circ'
+            };
+
+            function serializeSequence(model) {
+                return model.items.map(serializeNode).join('');
+            }
+
+            function serializeDocument() {
+                return typeof documentModel.sourceLatex === 'string'
+                    ? documentModel.sourceLatex
+                    : serializeSequence(documentModel.root);
+            }
+
+            function serializeNode(node) {
+                switch (node.type) {
+                    case 'atom':
+                        return node.latex || latexSymbols[node.value] || node.value;
+                    case 'lineBreak':
+                        return '\n';
+                    case 'fraction':
+                        return `\\frac{${serializeSequence(node.numerator)}}{${serializeSequence(node.denominator)}}`;
+                    case 'root':
+                        return node.index
+                            ? `\\sqrt[${serializeSequence(node.index)}]{${serializeSequence(node.radicand)}}`
+                            : node.braced === false
+                                ? `\\sqrt${serializeSequence(node.radicand)}`
+                                : `\\sqrt{${serializeSequence(node.radicand)}}`;
+                    case 'script': {
+                        let result = node.explicitEmptyBase ? '{}' : serializeSequence(node.base);
+                        if (node.subscript) result += `_{${serializeSequence(node.subscript)}}`;
+                        if (node.superscript) result += `^{${serializeSequence(node.superscript)}}`;
+                        return result;
+                    }
+                    case 'function': {
+                        let result = `\\${node.name}`;
+                        if (node.power) result += `^{${serializeSequence(node.power)}}`;
+                        return result + (node.argumentSeparator || '') + serializeSequence(node.argument);
+                    }
+                    case 'logarithm': {
+                        let result = '\\log';
+                        if (node.base) result += `_{${serializeSequence(node.base)}}`;
+                        return result + (node.argumentSeparator || '') + serializeSequence(node.argument);
+                    }
+                    case 'factorial':
+                        return `${serializeSequence(node.operand)}!`;
+                    case 'delimiter':
+                        return node.latexOpen
+                            ? `${node.latexOpen}${serializeSequence(node.body)}${node.latexClose}`
+                            : `${node.open}${serializeSequence(node.body)}${node.close}`;
+                    case 'derivative': {
+                        const numerator = serializeSequence(node.numerator);
+                        const variable = serializeSequence(node.variable);
+                        return node.order === 2
+                            ? `\\frac{d^{2}${numerator}}{d${variable}^{2}}`
+                            : `\\frac{d${numerator}}{d${variable}}`;
+                    }
+                    case 'limit':
+                        return `\\lim_{${serializeSequence(node.variable)}\\to ${serializeSequence(node.destination)}${node.direction ? `^{${serializeSequence(node.direction)}}` : ''}}`;
+                    case 'integral': {
+                        let result = '\\int';
+                        if (node.lower) result += `_{${serializeSequence(node.lower)}}`;
+                        if (node.upper) result += `^{${serializeSequence(node.upper)}}`;
+                        result += `{${serializeSequence(node.body)}}`;
+                        if (node.differential) result += `\\,d${node.differential}`;
+                        return result;
+                    }
+                    case 'combination':
+                        return node.symbol === 'binom'
+                            ? `\\binom{${serializeSequence(node.left)}}{${serializeSequence(node.right)}}`
+                            : `${node.symbol}(${serializeSequence(node.left)},${serializeSequence(node.right)})`;
+                    case 'largeOperator':
+                        return `${node.operator === 'product' ? '\\prod' : '\\sum'}_{${serializeSequence(node.lower)}}^{${serializeSequence(node.upper)}}{${serializeSequence(node.body)}}`;
+                    case 'environment':
+                        return `\\begin{${node.name}}${serializeSequence(node.body).replace(/\n/g, '\\\\')}\\end{${node.name}}`;
+                    default:
+                        return '';
+                }
+            }
+
+            function hasMeaningfulContent(model) {
+                return model.items.some(node => {
+                    if (node.type === 'atom') return /[A-Za-z0-9π∞ΔΩθα-ω∂∇]/u.test(node.value);
+                    if (node.type === 'lineBreak') return false;
+                    if (node.type === 'script') return hasMeaningfulContent(node.base);
+                    if (node.type === 'factorial') return hasMeaningfulContent(node.operand);
+                    if (node.type === 'limit') {
+                        return hasMeaningfulContent(node.variable) || hasMeaningfulContent(node.destination);
+                    }
+                    return nestedSequences(node).some(hasMeaningfulContent);
+                });
+            }
+
+            function describeSequence(model) {
+                const parts = [];
+                let textRun = '';
+                const flushText = () => {
+                    const normalized = textRun.replace(/\s+/g, ' ').trim();
+                    if (normalized) parts.push(normalized);
+                    textRun = '';
+                };
+
+                for (const node of model.items) {
+                    if (node.type === 'atom' && !isOperator(node.value)) {
+                        textRun += node.value;
+                        continue;
+                    }
+                    flushText();
+                    parts.push(describeNode(node));
+                }
+                flushText();
+                const text = parts.join(' ').replace(/\s+/g, ' ').trim();
+                return text || `empty ${model.role || 'maths'} slot`;
+            }
+
+            function describeNode(node) {
+                switch (node.type) {
+                    case 'atom': {
+                        const spokenOperators = {
+                            '−': 'minus', '-': 'minus', '+': 'plus', '×': 'times', '÷': 'divided by',
+                            '=': 'equals', '<': 'less than', '>': 'greater than', '≤': 'less than or equal to',
+                            '≥': 'greater than or equal to', '≠': 'not equal to', '≈': 'approximately',
+                            '±': 'plus or minus', '→': 'approaches'
+                        };
+                        return spokenOperators[node.value] || node.value;
+                    }
+                    case 'lineBreak': return 'new line';
+                    case 'fraction': return `fraction ${describeSequence(node.numerator)} over ${describeSequence(node.denominator)}`;
+                    case 'root': return node.index
+                        ? `${describeSequence(node.index)} root of ${describeSequence(node.radicand)}`
+                        : `square root of ${describeSequence(node.radicand)}`;
+                    case 'script': return `${describeSequence(node.base)}${node.superscript ? ` to the power ${describeSequence(node.superscript)}` : ''}${node.subscript ? ` subscript ${describeSequence(node.subscript)}` : ''}`;
+                    case 'function': return `${node.name}${node.power ? ` to the power ${describeSequence(node.power)}` : ''} of ${describeSequence(node.argument)}`;
+                    case 'logarithm': return node.base
+                        ? `log base ${describeSequence(node.base)} of ${describeSequence(node.argument)}`
+                        : `log of ${describeSequence(node.argument)}`;
+                    case 'factorial': return `${describeSequence(node.operand)} factorial`;
+                    case 'delimiter': return `${node.open} ${describeSequence(node.body)} ${node.close}`;
+                    case 'derivative': return `${node.order === 2 ? 'second derivative' : 'derivative'}${hasMeaningfulContent(node.numerator) ? ` of ${describeSequence(node.numerator)}` : ''} with respect to ${describeSequence(node.variable)}`;
+                    case 'limit': return `limit as ${describeSequence(node.variable)} approaches ${describeSequence(node.destination)}${node.direction ? ` from ${describeSequence(node.direction)}` : ''}`;
+                    case 'integral': return `integral ${describeSequence(node.body)}`;
+                    case 'combination': return `${node.symbol} of ${describeSequence(node.left)}, ${describeSequence(node.right)}`;
+                    case 'largeOperator': return `${node.operator} ${describeSequence(node.body)}`;
+                    case 'environment': return `${node.name} ${describeSequence(node.body)}`;
+                    default: return '';
+                }
+            }
+
+            function describeDocument() {
+                return `Structured mathematics editor. ${describeSequence(documentModel.root)}. Caret in ${currentSequence().role || 'expression'}.`;
+            }
+
+            class LatexParser {
+                constructor(source) {
+                    this.source = String(source || '').replace(/\r\n?/g, '\n');
+                    this.index = 0;
+                    this.valid = true;
+                }
+
+                parse() {
+                    return this.parseSequence(null, 'document');
+                }
+
+                parseSequence(stop, role = 'expression') {
+                    const result = sequence([], role);
+                    let closed = !stop;
+                    while (this.index < this.source.length) {
+                        const character = this.source[this.index];
+                        if (stop && character === stop) {
+                            this.index++;
+                            closed = true;
+                            break;
+                        }
+                        if (character === '\\') {
+                            const node = this.parseCommand();
+                            if (Array.isArray(node)) result.items.push(...node);
+                            else if (node) result.items.push(node);
+                            continue;
+                        }
+                        if (character === '$') {
+                            // Accept legacy model output such as $x^2$ and
+                            // $$x^2$$ without turning delimiters into atoms.
+                            this.index++;
+                            continue;
+                        }
+                        if (character === '^' || character === '_') {
+                            this.index++;
+                            this.attachScript(result, character === '^');
+                            continue;
+                        }
+                        if (character === '(' || character === '[' || character === '{') {
+                            const close = character === '(' ? ')' : character === '[' ? ']' : '}';
+                            this.index++;
+                            const body = this.parseSequence(close, 'delimited expression');
+                            if (character === '{') result.items.push(...body.items);
+                            else result.items.push({ type: 'delimiter', open: character, close, body });
+                            continue;
+                        }
+                        if (character === '\n') {
+                            this.index++;
+                            result.items.push({ type: 'lineBreak' });
+                            continue;
+                        }
+                        if ('²³'.includes(character)) {
+                            this.index++;
+                            this.attachFixedScript(result, character === '²' ? '2' : '3');
+                            continue;
+                        }
+                        if (character === '!') {
+                            this.index++;
+                            let start = result.items.length;
+                            while (start > 0 && !isExpressionBoundary(result.items[start - 1])) start--;
+                            const operandItems = result.items.splice(start);
+                            result.items.push({ type: 'factorial', operand: sequence(operandItems, 'factorial operand') });
+                            continue;
+                        }
+                        this.index++;
+                        result.items.push(atom(character === '-' ? '−' : character));
+                    }
+                    if (!closed) this.valid = false;
+                    return result;
+                }
+
+                parseCommand() {
+                    this.index++;
+                    if (this.index >= this.source.length) return atom('');
+                    if (!/[A-Za-z]/.test(this.source[this.index])) {
+                        const escaped = this.source[this.index++];
+                        if (escaped === ',') return atom(' ');
+                        if (escaped === '$' || '()[]'.includes(escaped)) return null;
+                        return atom(escaped);
+                    }
+
+                    const start = this.index;
+                    while (this.index < this.source.length && /[A-Za-z]/.test(this.source[this.index])) this.index++;
+                    const command = this.source.slice(start, this.index);
+
+                    if (command === 'frac') {
+                        const fraction = {
+                            type: 'fraction',
+                            numerator: this.parseRequiredGroup('numerator'),
+                            denominator: this.parseRequiredGroup('denominator')
+                        };
+                        return this.asDerivative(fraction) || fraction;
+                    }
+                    if (command === 'sqrt') {
+                        const index = this.peek() === '[' ? this.parseBracketGroup('root index') : null;
+                        const braced = this.peek() === '{';
+                        const radicand = braced
+                            ? this.parseRequiredGroup('radicand')
+                            : this.parseImplicitArgument('radicand').argument;
+                        if (!radicand.items.length) this.valid = false;
+                        return { type: 'root', index, radicand, braced };
+                    }
+                    if (command === 'log') {
+                        const base = this.readScriptGroup('_', 'logarithm base');
+                        const parsedArgument = this.parseImplicitArgument('logarithm argument');
+                        return {
+                            type: 'logarithm',
+                            base,
+                            argument: parsedArgument.argument,
+                            argumentSeparator: parsedArgument.separator
+                        };
+                    }
+                    if (['sin', 'cos', 'tan', 'csc', 'sec', 'cot', 'arcsin', 'arccos', 'arctan', 'ln'].includes(command)) {
+                        const power = this.readScriptGroup('^', `${command} power`);
+                        const parsedArgument = this.parseImplicitArgument(`${command} argument`);
+                        return {
+                            type: 'function',
+                            name: command,
+                            power,
+                            argument: parsedArgument.argument,
+                            argumentSeparator: parsedArgument.separator
+                        };
+                    }
+                    if (command === 'lim') {
+                        const target = this.readScriptGroup('_', 'limit target') || sequence([], 'limit target');
+                        return this.splitLimitTarget(target);
+                    }
+                    if (command === 'int') {
+                        const lower = this.readScriptGroup('_', 'lower bound');
+                        const upper = this.readScriptGroup('^', 'upper bound');
+                        while (this.peek() === ' ') this.index++;
+                        let body = sequence([], 'integrand');
+                        let differential = null;
+                        const remaining = this.source.slice(this.index);
+                        const differentialMatch = /\\,\s*d([A-Za-z])/.exec(remaining);
+                        if (differentialMatch) {
+                            const bodySource = remaining.slice(0, differentialMatch.index);
+                            const bodyParser = new LatexParser(bodySource);
+                            body = bodyParser.parse();
+                            if (!bodyParser.valid) this.valid = false;
+                            this.index += differentialMatch.index + differentialMatch[0].length;
+                            differential = differentialMatch[1];
+                        } else {
+                            body = this.peek() === '{'
+                                ? this.parseRequiredGroup('integrand')
+                                : this.parseImplicitArgument('integrand').argument;
+                        }
+                        return { type: 'integral', lower, upper, body, differential };
+                    }
+                    if (command === 'sum' || command === 'prod') {
+                        const node = {
+                            type: 'largeOperator', operator: command === 'prod' ? 'product' : 'sum',
+                            lower: this.readScriptGroup('_', 'lower bound') || sequence([], 'lower bound'),
+                            upper: this.readScriptGroup('^', 'upper bound') || sequence([], 'upper bound'),
+                            body: sequence([], 'operator expression')
+                        };
+                        while (this.peek() === ' ') this.index++;
+                        node.body = this.peek() === '{'
+                            ? this.parseRequiredGroup('operator expression')
+                            : this.parseImplicitArgument('operator expression').argument;
+                        return node;
+                    }
+                    if (command === 'binom') {
+                        return {
+                            type: 'combination',
+                            symbol: 'binom',
+                            left: this.parseRequiredGroup('first argument'),
+                            right: this.parseRequiredGroup('second argument')
+                        };
+                    }
+                    if (command === 'pmod') {
+                        const modulus = this.parseRequiredGroup('modulus');
+                        return atom(`mod ${serializeSequence(modulus)}`, `\\pmod{${serializeSequence(modulus)}}`);
+                    }
+                    if ([
+                        'text', 'textbf', 'textit', 'textnormal', 'textrm', 'textsf', 'texttt',
+                        'emph', 'mathbf', 'mathit', 'mathrm', 'mathsf', 'mathtt', 'underline',
+                        'overline', 'boxed', 'boldsymbol', 'bm', 'pmb', 'operatorname'
+                    ].includes(command)) {
+                        return this.parseRequiredGroup('text wrapper').items;
+                    }
+                    if (command === 'textcolor' || command === 'color') {
+                        this.parseRequiredGroup('text colour');
+                        return this.parseRequiredGroup('coloured text').items;
+                    }
+                    if (command === 'begin') {
+                        const name = this.readRawRequiredGroup();
+                        const endToken = `\\end{${name}}`;
+                        const endIndex = name ? this.source.indexOf(endToken, this.index) : -1;
+                        if (endIndex < 0) {
+                            this.valid = false;
+                            return null;
+                        }
+                        const bodySource = this.source.slice(this.index, endIndex);
+                        this.index = endIndex + endToken.length;
+                        const rows = bodySource.split(/\\\\/);
+                        const body = sequence([], `${name} rows`);
+                        rows.forEach((row, rowIndex) => {
+                            const rowParser = new LatexParser(row);
+                            const parsedRow = rowParser.parse();
+                            if (!rowParser.valid) this.valid = false;
+                            body.items.push(...parsedRow.items);
+                            if (rowIndex < rows.length - 1) body.items.push({ type: 'lineBreak' });
+                        });
+                        return { type: 'environment', name, body };
+                    }
+                    if (command === 'end') {
+                        this.valid = false;
+                        return null;
+                    }
+                    if (command === 'left') return this.parseLeftRightDelimiter();
+                    if (command === 'right') {
+                        this.valid = false;
+                        return null;
+                    }
+                    if (command === 'lvert') return this.parseVerticalDelimiter();
+                    if (command === 'rvert') {
+                        this.valid = false;
+                        return null;
+                    }
+
+                    const symbolMap = {
+                        times: '×', div: '÷', le: '≤', ge: '≥', ne: '≠', approx: '≈', equiv: '≡', pm: '±',
+                        cup: '∪', cap: '∩',
+                        pi: 'π', infty: '∞', Delta: 'Δ', Omega: 'Ω', theta: 'θ', alpha: 'α',
+                        beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', lambda: 'λ', mu: 'μ',
+                        rho: 'ρ', sigma: 'σ', phi: 'φ', omega: 'ω', eta: 'η', kappa: 'κ', tau: 'τ',
+                        partial: '∂', nabla: '∇', to: '→', circ: '°'
+                    };
+                    // serializeNode appends one command terminator space.
+                    // Consume it on import, otherwise each copy/paste grows
+                    // the spacing after π and other textbook symbols.
+                    if (symbolMap[command] && this.source[this.index] === ' ') this.index++;
+                    return atom(symbolMap[command] || command);
+                }
+
+                attachScript(result, superscript) {
+                    const scriptValue = this.parseScriptValue(superscript ? 'exponent' : 'subscript');
+                    const baseNode = result.items.length ? result.items.pop() : null;
+                    let node;
+                    if (baseNode && baseNode.type === 'script') node = baseNode;
+                    else node = {
+                        type: 'script',
+                        base: sequence(baseNode ? [baseNode] : [], 'base'),
+                        superscript: null,
+                        subscript: null,
+                        explicitEmptyBase: !baseNode
+                    };
+                    if (superscript) node.superscript = scriptValue;
+                    else node.subscript = scriptValue;
+                    result.items.push(node);
+                }
+
+                attachFixedScript(result, value) {
+                    const baseNode = result.items.length ? result.items.pop() : null;
+                    result.items.push({
+                        type: 'script',
+                        base: sequence(baseNode ? [baseNode] : [], 'base'),
+                        superscript: sequence([atom(value)], 'exponent'),
+                        subscript: null
+                    });
+                }
+
+                asDerivative(fraction) {
+                    const numeratorItems = fraction.numerator.items.slice();
+                    const denominatorItems = fraction.denominator.items.slice();
+                    let order = 1;
+                    let numeratorStart = 1;
+                    let variableItems;
+
+                    if (numeratorItems[0]?.type === 'atom' && numeratorItems[0].value === 'd' &&
+                        denominatorItems[0]?.type === 'atom' && denominatorItems[0].value === 'd') {
+                        variableItems = denominatorItems.slice(1);
+                    } else if (this.isSquaredD(numeratorItems[0]) &&
+                        denominatorItems[0]?.type === 'atom' && denominatorItems[0].value === 'd') {
+                        const squaredVariable = denominatorItems[denominatorItems.length - 1];
+                        if (!this.isPowerOfTwo(squaredVariable)) return null;
+                        order = 2;
+                        numeratorStart = 1;
+                        variableItems = denominatorItems.slice(1, -1).concat(squaredVariable.base.items);
+                    } else {
+                        return null;
+                    }
+
+                    return {
+                        type: 'derivative',
+                        order,
+                        numerator: sequence(numeratorItems.slice(numeratorStart), 'derivative numerator'),
+                        variable: sequence(variableItems, 'differentiation variable')
+                    };
+                }
+
+                isSquaredD(node) {
+                    return this.isPowerOfTwo(node) &&
+                        node.base.items.length === 1 &&
+                        node.base.items[0].type === 'atom' &&
+                        node.base.items[0].value === 'd';
+                }
+
+                isPowerOfTwo(node) {
+                    return node?.type === 'script' &&
+                        node.superscript?.items.length === 1 &&
+                        node.superscript.items[0].type === 'atom' &&
+                        node.superscript.items[0].value === '2';
+                }
+
+                splitLimitTarget(target) {
+                    const items = target.items.filter(node => !(node.type === 'atom' && /^\s+$/.test(node.value)));
+                    const arrowIndex = items.findIndex(node => node.type === 'atom' && node.value === '→');
+                    if (arrowIndex < 0) {
+                        return {
+                            type: 'limit',
+                            variable: sequence(items, 'limit variable'),
+                            destination: sequence([], 'limit destination'),
+                            direction: null
+                        };
+                    }
+
+                    const variableItems = items.slice(0, arrowIndex);
+                    const destinationItems = items.slice(arrowIndex + 1);
+                    let direction = null;
+                    const finalNode = destinationItems[destinationItems.length - 1];
+                    if (finalNode?.type === 'script' && finalNode.superscript &&
+                        finalNode.superscript.items.every(node => node.type === 'atom' && ['+', '−', '-'].includes(node.value))) {
+                        destinationItems.splice(destinationItems.length - 1, 1, ...finalNode.base.items);
+                        direction = finalNode.superscript;
+                    }
+                    return {
+                        type: 'limit',
+                        variable: sequence(variableItems, 'limit variable'),
+                        destination: sequence(destinationItems, 'limit destination'),
+                        direction
+                    };
+                }
+
+                parseImplicitArgument(role) {
+                    let separator = '';
+                    while (this.peek() === ' ') {
+                        separator += ' ';
+                        this.index++;
+                    }
+
+                    const result = sequence([], role);
+                    if (this.index >= this.source.length) return { argument: result, separator };
+
+                    const character = this.peek();
+                    if (character === '{') return { argument: this.parseRequiredGroup(role), separator };
+                    if (character === '(' || character === '[') {
+                        const close = character === '(' ? ')' : ']';
+                        this.index++;
+                        result.items.push({
+                            type: 'delimiter',
+                            open: character,
+                            close,
+                            body: this.parseSequence(close, 'delimited expression')
+                        });
+                        return { argument: result, separator };
+                    }
+                    if (character === '\\') {
+                        const node = this.parseCommand();
+                        if (Array.isArray(node)) result.items.push(...node);
+                        else if (node) result.items.push(node);
+                    } else {
+                        const numeric = /[0-9.]/.test(character);
+                        do {
+                            const value = this.source[this.index++];
+                            result.items.push(atom(value === '-' ? '−' : value));
+                        } while (numeric && /[0-9.]/.test(this.peek()));
+                    }
+
+                    while (this.peek() === '^' || this.peek() === '_') {
+                        const superscript = this.source[this.index++] === '^';
+                        this.attachScript(result, superscript);
+                    }
+                    return { argument: result, separator };
+                }
+
+                parseLeftRightDelimiter() {
+                    while (this.peek() === ' ') this.index++;
+                    let open = this.peek();
+                    if (!'([{'.includes(open)) {
+                        this.valid = false;
+                        return null;
+                    }
+                    this.index++;
+                    const rightIndex = this.source.indexOf('\\right', this.index);
+                    if (rightIndex < 0) {
+                        this.valid = false;
+                        return null;
+                    }
+                    const bodyParser = new LatexParser(this.source.slice(this.index, rightIndex));
+                    const body = bodyParser.parse();
+                    if (!bodyParser.valid) this.valid = false;
+                    this.index = rightIndex + '\\right'.length;
+                    const expectedClose = open === '(' ? ')' : open === '[' ? ']' : '}';
+                    const close = this.peek();
+                    if (close !== expectedClose) this.valid = false;
+                    else this.index++;
+                    return {
+                        type: 'delimiter', open, close: expectedClose, body,
+                        latexOpen: `\\left${open}`, latexClose: `\\right${expectedClose}`
+                    };
+                }
+
+                parseVerticalDelimiter() {
+                    const endIndex = this.source.indexOf('\\rvert', this.index);
+                    if (endIndex < 0) {
+                        this.valid = false;
+                        return null;
+                    }
+                    const bodyParser = new LatexParser(this.source.slice(this.index, endIndex));
+                    const body = bodyParser.parse();
+                    if (!bodyParser.valid) this.valid = false;
+                    this.index = endIndex + '\\rvert'.length;
+                    return {
+                        type: 'delimiter', open: '|', close: '|', body,
+                        latexOpen: '\\lvert', latexClose: '\\rvert'
+                    };
+                }
+
+                readRawRequiredGroup() {
+                    while (this.peek() === ' ') this.index++;
+                    if (this.peek() !== '{') {
+                        this.valid = false;
+                        return '';
+                    }
+                    const start = ++this.index;
+                    let depth = 1;
+                    while (this.index < this.source.length && depth > 0) {
+                        const character = this.source[this.index++];
+                        if (character === '{') depth++;
+                        else if (character === '}') depth--;
+                    }
+                    if (depth !== 0) {
+                        this.valid = false;
+                        return '';
+                    }
+                    return this.source.slice(start, this.index - 1);
+                }
+
+                parseScriptValue(role) {
+                    if (this.peek() === '{') return this.parseRequiredGroup(role);
+                    if (this.peek() === '\\') {
+                        const command = this.parseCommand();
+                        return sequence(Array.isArray(command) ? command : command ? [command] : [], role);
+                    }
+                    const value = this.index < this.source.length ? this.source[this.index++] : '';
+                    if (!value) this.valid = false;
+                    return sequence(value ? [atom(value)] : [], role);
+                }
+
+                readScriptGroup(marker, role) {
+                    const saved = this.index;
+                    while (this.peek() === ' ') this.index++;
+                    if (this.peek() !== marker) {
+                        this.index = saved;
+                        return null;
+                    }
+                    this.index++;
+                    return this.parseScriptValue(role);
+                }
+
+                parseRequiredGroup(role) {
+                    while (this.peek() === ' ') this.index++;
+                    if (this.peek() !== '{') {
+                        this.valid = false;
+                        return sequence([], role);
+                    }
+                    this.index++;
+                    return this.parseSequence('}', role);
+                }
+
+                parseBracketGroup(role) {
+                    this.index++;
+                    return this.parseSequence(']', role);
+                }
+
+                peek() {
+                    return this.source[this.index] || '';
+                }
+            }
+
+            function normalizeLatexForLoad(latex) {
+                let text = String(latex || '').replace(/\u000crac/gi, '\\frac');
+
+                // Be defensive at the final editor boundary. Older formatter
+                // responses and previously damaged WebView messages may contain
+                // rac{3}{4}, frac34 or rac34. Canonicalize those forms before
+                // the parser builds visible nodes.
+                text = text.replace(
+                    /(^|[^A-Za-z])\\?(?:frac|rac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}/gi,
+                    (_, prefix, numerator, denominator) =>
+                        `${prefix}\\frac{${numerator}}{${denominator}}`);
+                text = text.replace(
+                    /(^|[^A-Za-z])\\?(?:frac|rac)\s*(\d)\s*(\d)(?!\d)/gi,
+                    (_, prefix, numerator, denominator) =>
+                        `${prefix}\\frac{${numerator}}{${denominator}}`);
+
+                return text;
+            }
+
+            function loadLatex(latex, announce = true) {
+                nextId = 1;
+                const normalized = normalizeLatexForLoad(latex);
+                const parser = new LatexParser(normalized);
+                const parsed = parser.parse();
+                documentModel = parser.valid
+                    ? { type: 'document', root: parsed, sourceLatex: normalized }
+                    : createDocument();
+                caret = { sequenceId: documentModel.root.id, offset: documentModel.root.items.length };
+                selectAllActive = false;
+                undoStack = [];
+                redoStack = [];
+                render();
+                if (announce)
+                    emitState(parser.valid ? 'loaded' : 'rejected');
+            }
+
+            function selectAll() {
+                selectAllActive = true;
+                caret = { sequenceId: documentModel.root.id, offset: documentModel.root.items.length };
+                const range = document.createRange();
+                range.selectNodeContents(editor);
+                const selection = window.getSelection();
+                if (selection) {
+                    selection.removeAllRanges();
+                    selection.addRange(range);
+                }
+                editor.focus({ preventScroll: true });
+            }
+
+            function structuredNodeTypes() {
+                const types = new Set();
+                function visit(model) {
+                    for (const node of model.items) {
+                        if (node.type !== 'atom' && node.type !== 'lineBreak') types.add(node.type);
+                        if (node.type === 'derivative') {
+                            types.add('fraction');
+                            if (node.order === 2) types.add('script');
+                        }
+                        if ((node.type === 'integral' || node.type === 'largeOperator') &&
+                            (node.lower || node.upper)) types.add('script');
+                        if (node.type === 'logarithm' && node.base) types.add('script');
+                        if (node.type === 'function' && node.power) types.add('script');
+                        if (node.type === 'limit' && node.direction) types.add('script');
+                        for (const nested of nestedSequences(node)) visit(nested);
+                    }
+                }
+                visit(documentModel.root);
+                return Array.from(types).join(',');
+            }
+
+            // Keep the rendered sizing state in the editor's accessibility
+            // label. It is not visible text, but it lets Android automation
+            // and screen-reader clients verify that a long expression stayed
+            // textbook-sized and wrapped without creating a logical line.
+            function describeFitMetrics() {
+                const scrollState = `; scroll-left=${editor.scrollLeft.toFixed(1)}; scroll-top=${editor.scrollTop.toFixed(1)}`;
+                const caretState = `; caret=${Math.max(0, currentPositionIndex(allCaretPositions()))}`;
+                return `math-editor-state font-size=${fitMetrics.fontSize.toFixed(1)}; preferred=${fitMetrics.preferredFontSize.toFixed(1)}; minimum=${fitMetrics.minimumFontSize.toFixed(1)}; natural-width=${fitMetrics.naturalWidth.toFixed(1)}; available-width=${fitMetrics.availableWidth.toFixed(1)}; overflow=${String(fitMetrics.overflow)}; wrapped=${String(fitMetrics.wrapped)}${caretState}${scrollState}; tap=${caretHitDebug}; command=${lastCommandDebug}; stateEvent=${lastStateEventDebug}`;
+            }
+
+            function emitState(eventName) {
+                lastStateEventDebug = String(eventName || 'none');
+                const state = {
+                    event: eventName,
+                    sequence: activeCommandSequence,
+                    latex: serializeDocument(),
+                    accessible: `${describeDocument()} ${describeFitMetrics()}`,
+                    empty: !hasMeaningfulContent(documentModel.root),
+                    height: Math.max(56, Math.ceil(editor.scrollHeight + 4)),
+                    caretRole: currentSequence().role || 'expression',
+                    caretPosition: Math.max(0, currentPositionIndex(allCaretPositions())),
+                    nodeTypes: structuredNodeTypes(),
+                    fontSize: fitMetrics.fontSize,
+                    preferredFontSize: fitMetrics.preferredFontSize,
+                    minimumFontSize: fitMetrics.minimumFontSize,
+                    naturalWidth: fitMetrics.naturalWidth,
+                    availableWidth: fitMetrics.availableWidth,
+                    horizontalOverflow: fitMetrics.overflow
+                    ,wrapped: fitMetrics.wrapped
+                };
+                editor.dataset.latex = state.latex;
+                editor.dataset.caretRole = state.caretRole;
+                editor.dataset.caretPosition = String(state.caretPosition);
+                editor.dataset.nodeTypes = state.nodeTypes;
+                editor.dataset.fontSize = String(state.fontSize);
+                editor.dataset.horizontalOverflow = String(state.horizontalOverflow);
+                const payload = encodeURIComponent(JSON.stringify(state));
+                if (window.parent !== window) {
+                    window.parent.postMessage({ type: 'sharper-math-editor-state', state }, window.location.origin);
+                }
+                return state;
+            }
+
+            function caretOffsetFromPointer(sequenceElement, event) {
+                const items = Array.from(sequenceElement.children)
+                    .filter(child => child.classList.contains('math-item'));
+                if (!items.length) {
+                    items.push(...Array.from(sequenceElement.querySelectorAll('.math-item'))
+                        .filter(item => item.closest('.math-sequence') === sequenceElement));
+                }
+                if (!items.length) return 0;
+
+                const clientX = Number(event.clientX) || 0;
+                const clientY = Number(event.clientY) || 0;
+                const geometry = items.map((item, index) => {
+                    const bounds = item.getBoundingClientRect();
+                    const verticalDistance = clientY < bounds.top
+                        ? bounds.top - clientY
+                        : clientY > bounds.bottom
+                            ? clientY - bounds.bottom
+                            : 0;
+                    return {
+                        item,
+                        index,
+                        bounds,
+                        verticalDistance,
+                        centerX: bounds.left + (bounds.width / 2)
+                    };
+                });
+
+                // Pick the visual row nearest the finger first. Within that row,
+                // use symbol centres as caret boundaries. This is stable even if
+                // Chromium reports overlapping/flex item rectangles where the old
+                // "inside rectangle = score 0" algorithm always chose item zero.
+                const nonBreaks = geometry.filter(entry => !entry.item.classList.contains('line-break-item'));
+                if (!nonBreaks.length) return items.length;
+                const nearestVertical = Math.min(...nonBreaks.map(entry => entry.verticalDistance));
+                const row = nonBreaks.filter(entry => entry.verticalDistance <= nearestVertical + 2);
+                let resolvedOffset = row[0]?.index ?? 0;
+                for (const entry of row) {
+                    if (clientX < entry.centerX) {
+                        resolvedOffset = entry.index;
+                        break;
+                    }
+                    resolvedOffset = entry.index + 1;
+                }
+
+                return clamp(resolvedOffset, 0, items.length);
+            }
+
+            editor.tabIndex = 0;
+
+            function keepEditorFocused() {
+                try {
+                    editor.focus({ preventScroll: true });
+                } catch {
+                    editor.focus();
+                }
+            }
+
+            function sequenceAtClientPoint(clientX, clientY, fallbackTarget) {
+                const hit = document.elementFromPoint(clientX, clientY);
+                const target = hit && editor.contains(hit)
+                    ? hit
+                    : (fallbackTarget && editor.contains(fallbackTarget) ? fallbackTarget : editor);
+                return (target.closest ? target.closest('.math-sequence') : null) ||
+                    editor.querySelector('.math-document');
+            }
+
+            function placeCaretFromPointer(event) {
+                const clientX = Number(event.clientX) || 0;
+                const clientY = Number(event.clientY) || 0;
+                const sequenceElement = sequenceAtClientPoint(clientX, clientY, event.target);
+                if (!sequenceElement) return false;
+
+                const sequenceId = sequenceElement.dataset.sequenceId;
+                if (!sequenceId || !findSequence(sequenceId)) return false;
+
+                const resolvedOffset = caretOffsetFromPointer(sequenceElement, { clientX, clientY });
+                const hitElement = document.elementFromPoint(clientX, clientY);
+                const hitClass = hitElement && typeof hitElement.className === 'string'
+                    ? hitElement.className.replace(/\s+/g, '.')
+                    : (hitElement?.tagName || 'none');
+                caretHitDebug = `css=${clientX.toFixed(1)},${clientY.toFixed(1)};hit=${hitClass};seq=${sequenceId};offset=${resolvedOffset}`;
+                keepEditorFocused();
+                setCaret(sequenceId, resolvedOffset, 'activate');
+                clearPlatformSelection();
+
+                // The visible WebView owns the physical hit-test. Keep the exact
+                // structured location it resolved until the first keyboard
+                // command consumes it. This prevents Samsung WebView focus
+                // restoration from silently returning insertion to the end.
+                pendingPhysicalTapCaret = { sequenceId, offset: resolvedOffset };
+                lastCaretPlacementAt = performance.now();
+                caretPlacementRevision++;
+                return true;
+            }
+
+            // Retained as a narrow compatibility API for callers that can only
+            // provide a point. The WebView still owns hit-testing: coordinates
+            // are resolved with elementFromPoint/getBoundingClientRect against
+            // the currently rendered math document, with no native text/model
+            // rehydration and no command-sequence retry state.
+            function placeCaretAtPoint(clientX, clientY) {
+                return placeCaretFromPointer({
+                    target: document.elementFromPoint(Number(clientX) || 0, Number(clientY) || 0) || editor,
+                    clientX,
+                    clientY
+                });
+            }
+
+            function placeCaretAtNativePoint(nativeX, nativeY, nativeWidth, nativeHeight) {
+                const width = Math.max(1, Number(nativeWidth) || 1);
+                const height = Math.max(1, Number(nativeHeight) || 1);
+                const cssWidth = Math.max(1, window.innerWidth || document.documentElement.clientWidth || width);
+                const cssHeight = Math.max(1, window.innerHeight || document.documentElement.clientHeight || height);
+                const cssX = (Number(nativeX) || 0) * (cssWidth / width);
+                const cssY = (Number(nativeY) || 0) * (cssHeight / height);
+                caretHitDebug = `native=${Number(nativeX).toFixed(1)},${Number(nativeY).toFixed(1)};nativeSize=${width.toFixed(1)}x${height.toFixed(1)};inner=${cssWidth.toFixed(1)}x${cssHeight.toFixed(1)};mapped=${cssX.toFixed(1)},${cssY.toFixed(1)}`;
+                return placeCaretAtPoint(cssX, cssY);
+            }
+            function beginPointerGesture(event) {
+                if (event.pointerType === 'mouse' && event.button !== 0) return;
+                pointerGesture = {
+                    pointerId: event.pointerId,
+                    startX: event.clientX,
+                    startY: event.clientY,
+                    caretPlacementAtStart: caretPlacementRevision,
+                    moved: false
+                };
+                keepEditorFocused();
+            }
+
+            function updatePointerGesture(event) {
+                if (!pointerGesture || pointerGesture.pointerId !== event.pointerId) return;
+                pointerGesture.moved ||=
+                    Math.abs(event.clientX - pointerGesture.startX) > 8 ||
+                    Math.abs(event.clientY - pointerGesture.startY) > 8;
+            }
+
+            function endPointerGesture(event) {
+                if (!pointerGesture || pointerGesture.pointerId !== event.pointerId) return false;
+                updatePointerGesture(event);
+                const moved = pointerGesture.moved;
+                const caretPlacementAtStart = pointerGesture.caretPlacementAtStart;
+                pointerGesture = null;
+                if (moved) return false;
+
+                // Android's confirmed-tap bridge and Chromium pointerup can be
+                // delivered in either order on the S8. If the native bridge has
+                // already placed the caret, do not let a trailing pointerup move
+                // it again. If pointerup arrives first, the later native placement
+                // still becomes authoritative.
+                // Only deduplicate a native placement during THIS gesture.
+                // A new desktop click after Hide is a new activation even if
+                // it arrives within 450 ms and the DOM still has focus.
+                if (caretPlacementRevision !== caretPlacementAtStart) return true;
+                return placeCaretFromPointer(event);
+            }
+
+            function beginEditorTouch(event) {
+                const touch = event.touches && event.touches[0];
+                if (!touch) return;
+                editorTouchDrag = {
+                    startX: touch.clientX,
+                    startY: touch.clientY,
+                    startScrollLeft: editor.scrollLeft,
+                    startScrollTop: editor.scrollTop,
+                    caretPlacementAtStart: caretPlacementRevision,
+                    moved: false
+                };
+            }
+
+            function moveEditorTouch(event) {
+                if (!editorTouchDrag) return;
+                const touch = Array.from(event.touches || [])[0];
+                if (!touch) return;
+                const deltaX = touch.clientX - editorTouchDrag.startX;
+                const deltaY = touch.clientY - editorTouchDrag.startY;
+                editorTouchDrag.moved ||= Math.abs(deltaX) > 8 || Math.abs(deltaY) > 8;
+                if (!editorTouchDrag.moved) return;
+
+                event.preventDefault();
+                editor.scrollLeft = clamp(
+                    editorTouchDrag.startScrollLeft - deltaX,
+                    0,
+                    Math.max(0, editor.scrollWidth - editor.clientWidth));
+                editor.scrollTop = clamp(
+                    editorTouchDrag.startScrollTop - deltaY,
+                    0,
+                    Math.max(0, editor.scrollHeight - editor.clientHeight));
+                updateScrollbars();
+            }
+
+            function endEditorTouch() {
+                const moved = editorTouchDrag?.moved === true;
+                editorTouchDrag = null;
+                return moved;
+            }
+
+            function scrollBy(deltaX, deltaY) {
+                const horizontalRange = Math.max(0, editor.scrollWidth - editor.clientWidth);
+                const verticalRange = Math.max(0, editor.scrollHeight - editor.clientHeight);
+                editor.scrollLeft = clamp(editor.scrollLeft + (Number(deltaX) || 0), 0, horizontalRange);
+                editor.scrollTop = clamp(editor.scrollTop + (Number(deltaY) || 0), 0, verticalRange);
+                updateScrollbars();
+                editor.setAttribute('aria-label', `${describeDocument()} ${describeFitMetrics()}`);
+                emitState('scroll');
+            }
+
+            editor.addEventListener('pointerdown', beginPointerGesture);
+            editor.addEventListener('pointermove', updatePointerGesture);
+            editor.addEventListener('pointerup', endPointerGesture);
+            editor.addEventListener('pointercancel', event => {
+                if (pointerGesture?.pointerId === event.pointerId) pointerGesture = null;
+            });
+
+            // Keep a touch fallback for WebView builds that do not surface a
+            // complete pointer sequence. A tap is applied once; compatibility
+            // touch/click events that follow a successful pointerup are ignored.
+            editor.addEventListener('touchstart', beginEditorTouch, { passive: true });
+            editor.addEventListener('touchmove', moveEditorTouch, { passive: false });
+            editor.addEventListener('touchend', event => {
+                const gesture = editorTouchDrag;
+                if (endEditorTouch()) return;
+                // Deduplicate only placement during this touch. A separate tap
+                // after Hide must work even within the compatibility-click delay.
+                if (!gesture || caretPlacementRevision !== gesture.caretPlacementAtStart) return;
+                const touch = event.changedTouches && event.changedTouches[0];
+                if (!touch) return;
+                placeCaretFromPointer({
+                    target: document.elementFromPoint(touch.clientX, touch.clientY) || event.target,
+                    clientX: touch.clientX,
+                    clientY: touch.clientY
+                });
+            }, { passive: true });
+            editor.addEventListener('touchcancel', endEditorTouch, { passive: true });
+            editor.addEventListener('click', event => {
+                if (physicalKeyboardEnabled && selectedModelRange()) return;
+                if (performance.now() - lastCaretPlacementAt < 450) return;
+                placeCaretFromPointer(event);
+            });
+            document.addEventListener('selectionchange', clearPlatformSelection);
+
+            // WebView2 exposes the contenteditable as a virtual UIA Edit node.
+            // WinAppDriver can focus that node without delivering the full
+            // pointer sequence, so a desktop activation could otherwise stop
+            // at DOM focus and never open the shared in-app keyboard. Focus is
+            // a valid desktop edit request once the Windows host has enabled
+            // physical keys; Android keeps this path disabled and retains its
+            // confirmed-touch/custom-keyboard routing.
+            editor.addEventListener('focus', () => {
+                if (!physicalKeyboardEnabled) return;
+                emitState('activate');
+            });
+
+            // The textbook surface is a focusable structured document rather
+            // than a native text box. Forward ordinary PC keyboard input into
+            // the same command/caret model used by the on-screen math keys so
+            // both input methods can be used in one editing session.
+            function executePhysicalCommand(command) {
+                if (window.SharperMathEditor?.execute) {
+                    window.SharperMathEditor.execute(command);
+                }
+            }
+
+            function handlePhysicalKeyDown(event) {
+                const key = String(event.key || '');
+                const isNewLineKey = key === 'Enter' || key === 'Return';
+                // Enter must never bubble out of the structured editor into
+                // the host page/window. If the Windows bridge has not yet
+                // enabled physical editing, route it through the same editor
+                // command model instead of allowing WebView/WinUI default
+                // navigation or button activation to close the current page.
+                if (isNewLineKey && !physicalKeyboardEnabled) {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    executePhysicalCommand({ name: 'newLine' });
+                    return;
+                }
+                if (!physicalKeyboardEnabled) return;
+                if (event.isComposing) return;
+
+                const modifier = event.ctrlKey || event.metaKey;
+                if (modifier) {
+                    const lower = key.toLowerCase();
+                    if (['c', 'x', 'v'].includes(lower)) {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        requestClipboardAction({ c: 'copy', x: 'cut', v: 'paste' }[lower]);
+                    } else if (lower === 'a') {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        executePhysicalCommand({ name: 'selectAll' });
+                    } else if (lower === 'z') {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        executePhysicalCommand({ name: event.shiftKey ? 'redo' : 'undo' });
+                    } else if (lower === 'y') {
+                        event.preventDefault();
+                        event.stopPropagation();
+                        executePhysicalCommand({ name: 'redo' });
+                    }
+                    return;
+                }
+
+                const commands = {
+                    Backspace: 'backspace',
+                    Delete: 'delete',
+                    ArrowLeft: 'moveLeft',
+                    ArrowRight: 'moveRight',
+                    ArrowUp: 'moveUp',
+                    ArrowDown: 'moveDown',
+                    Home: 'moveHome',
+                    End: 'moveEnd',
+                    Enter: 'newLine',
+                    Return: 'newLine',
+                    Tab: event.shiftKey ? 'moveLeft' : 'moveRight'
+                };
+                const commandName = commands[key];
+                const command = commandName
+                    ? { name: commandName }
+                    : key.length === 1 && key !== '\u0000'
+                        ? { name: 'insertText', value: key }
+                        : null;
+                if (!command) return;
+
+                event.preventDefault();
+                event.stopPropagation();
+                executePhysicalCommand(command);
+            }
+
+            function handleNativeLineBreakInput(event) {
+                if (!editor.contains(event.target)) return;
+
+                const inputType = String(event.inputType || '');
+                const isLineBreakInput = inputType === 'insertParagraph' ||
+                    inputType === 'insertLineBreak' ||
+                    String(event.data || '') === '\n' ||
+                    String(event.data || '') === '\r';
+                if (!isLineBreakInput) return;
+
+                // WebView2 can bypass keydown for contenteditable Enter and
+                // send beforeinput directly. Stop Chromium's native paragraph
+                // insertion and feed the same guarded command model instead.
+                event.preventDefault();
+                event.stopPropagation();
+                executePhysicalCommand({ name: 'newLine' });
+            }
+
+            // Enter is handled by the structured editor command model so it
+            // cannot fall through to a WinUI default-button/window accelerator
+            // when the WebView is focused.
+            document.addEventListener('beforeinput', handleNativeLineBreakInput, true);
+            editor.addEventListener('keydown', handlePhysicalKeyDown);
+
+            const caretRelativeCommandNames = new Set([
+                'insertText', 'insertLatex', 'insertFraction', 'insertRoot',
+                'insertNthRoot', 'insertPower', 'insertFixedPower',
+                'insertSubscript', 'insertAbsolute', 'insertDelimiter',
+                'insertFunction', 'insertLogarithm', 'insertFactorial',
+                'insertInfinity', 'insertDerivative', 'insertLimit',
+                'insertIntegral', 'insertCombination', 'insertLargeOperator',
+                'insertScientificPower', 'backspace', 'delete', 'newLine',
+                'moveLeft', 'moveRight', 'moveUp', 'moveDown'
+            ]);
+
+            const explicitCaretResetCommandNames = new Set([
+                'clear', 'moveHome', 'moveEnd', 'selectAll', 'undo', 'redo'
+            ]);
+
+            function prepareCaretForCommand(command) {
+                const commandName = String(command?.name || '');
+                if (caretRelativeCommandNames.has(commandName) && pendingPhysicalTapCaret) {
+                    const pending = pendingPhysicalTapCaret;
+                    pendingPhysicalTapCaret = null;
+                    const model = findSequence(pending.sequenceId);
+                    if (model) {
+                        selectAllActive = false;
+                        caret = {
+                            sequenceId: model.id,
+                            offset: clamp(Number(pending.offset) || 0, 0, model.items.length)
+                        };
+                    }
+                    return;
+                }
+
+                if (explicitCaretResetCommandNames.has(commandName)) {
+                    pendingPhysicalTapCaret = null;
+                    return;
+                }
+
+                if (commandName === 'loadLatex' &&
+                    String(command?.value || '') !== serializeDocument()) {
+                    pendingPhysicalTapCaret = null;
+                }
+            }
+
+            function selectedModelRange() {
+                if (selectAllActive)
+                    return { model: documentModel.root, start: 0, end: documentModel.root.items.length };
+                const selection = window.getSelection();
+                if (!selection || !selection.rangeCount || selection.isCollapsed) return null;
+                const range = selection.getRangeAt(0);
+                if (!editor.contains(range.commonAncestorContainer)) return null;
+                const ancestor = range.commonAncestorContainer.nodeType === 1
+                    ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
+                const sequenceElement = ancestor.closest('.math-sequence') || editor.querySelector('.math-document');
+                if (!sequenceElement) return null;
+                const model = findSequence(sequenceElement.dataset.sequenceId);
+                if (!model) return null;
+                const from = range.cloneRange(), to = range.cloneRange();
+                from.collapse(true);
+                to.collapse(false);
+                const indices = Array.from(sequenceElement.children)
+                    .filter(child => child.classList.contains('math-item'))
+                    .filter(child => {
+                        const span = document.createRange();
+                        span.selectNodeContents(child);
+                        const left = span.cloneRange(), right = span.cloneRange();
+                        left.collapse(true);
+                        right.collapse(false);
+                        return to.compareBoundaryPoints(0, left) > 0 && from.compareBoundaryPoints(0, right) < 0;
+                    })
+                    .map(child => Number(child.dataset.itemIndex));
+                return indices.length ? { model, start: Math.min(...indices), end: Math.max(...indices) + 1 } : null;
+            }
+
+            function getClipboardText(scope = 'selection') {
+                if (scope === 'all') return serializeDocument();
+                const range = scope === 'line' ? currentLineRange() : selectedModelRange();
+                return range ? serializeSequence({ items: range.model.items.slice(range.start, range.end) }) : '';
+            }
+
+            function getClipboardPayload(scope = 'selection') {
+                const range = selectedModelRange();
+                return JSON.stringify({
+                    text: getClipboardText(scope),
+                    document: serializeDocument(),
+                    sequenceId: range?.model.id,
+                    start: range?.start,
+                    end: range?.end
+                });
+            }
+
+            function deleteSelectionWithoutHistory(range = selectedModelRange()) {
+                if (!range) return;
+                range.model.items.splice(range.start, range.end - range.start);
+                caret = { sequenceId: range.model.id, offset: range.start };
+                selectAllActive = false;
+                pendingPhysicalTapCaret = null;
+                window.getSelection()?.removeAllRanges();
+            }
+
+            function deleteClipboardSelection(payload) {
+                const saved = JSON.parse(payload || '{}');
+                // Do not cut newer edits if the OS clipboard write finished late.
+                if (saved.document !== serializeDocument()) return;
+                const model = findSequence(saved.sequenceId);
+                if (!model || !Number.isInteger(saved.start) || !Number.isInteger(saved.end) ||
+                    saved.start < 0 || saved.end <= saved.start || saved.end > model.items.length) return;
+                recordHistory();
+                deleteSelectionWithoutHistory({ model, start: saved.start, end: saved.end });
+                finishChange();
+            }
+
+            let clipboardMenu = null;
+            function hideClipboardMenu() {
+                clipboardMenu?.remove();
+                clipboardMenu = null;
+            }
+
+            function requestClipboardAction(action) {
+                pendingPhysicalTapCaret = null;
+                hideClipboardMenu();
+                // Native clipboard access works for local WebViews without
+                // browser permission prompts. The host reads semantic LaTeX.
+                emitState('clipboard-' + action);
+            }
+
+            function showClipboardMenu(event) {
+                event.preventDefault();
+                if (!physicalKeyboardEnabled) return;
+                hideClipboardMenu();
+                if (!selectedModelRange()) placeCaretFromPointer(event);
+                pendingPhysicalTapCaret = null;
+                clipboardMenu = document.createElement('div');
+                clipboardMenu.setAttribute('role', 'toolbar');
+                clipboardMenu.setAttribute('aria-label', 'Text clipboard');
+                clipboardMenu.style.cssText = 'position:fixed;z-index:10000;display:flex;gap:2px;padding:5px;background:white;border:1px solid #cbd5e1;border-radius:8px;box-shadow:0 3px 12px #0003;';
+                clipboardMenu.addEventListener('pointerdown', e => e.preventDefault());
+                for (const [label, action] of [['Cut', 'cut'], ['Copy', 'copy'], ['Paste', 'paste'], ['Select all', 'selectAll']]) {
+                    const button = document.createElement('button');
+                    button.type = 'button';
+                    button.textContent = label;
+                    button.style.cssText = 'font:14px system-ui;padding:7px 9px;border:0;border-radius:4px;background:#f1f5f9;color:#0f172a;cursor:pointer;';
+                    button.addEventListener('click', () => {
+                        if (action === 'selectAll') { hideClipboardMenu(); selectAll(); }
+                        else requestClipboardAction(action);
+                    });
+                    clipboardMenu.appendChild(button);
+                }
+                document.body.appendChild(clipboardMenu);
+                const bounds = clipboardMenu.getBoundingClientRect();
+                clipboardMenu.style.left = Math.max(0, Math.min(event.clientX, window.innerWidth - bounds.width - 4)) + 'px';
+                clipboardMenu.style.top = Math.max(0, Math.min(event.clientY, window.innerHeight - bounds.height - 4)) + 'px';
+            }
+
+            document.addEventListener('pointerdown', event => {
+                if (clipboardMenu && !clipboardMenu.contains(event.target)) hideClipboardMenu();
+            });
+            document.addEventListener('keydown', event => {
+                if (event.key === 'Escape') hideClipboardMenu();
+            });
+            // Also intercept native clipboard events (e.g. accessibility and
+            // WebView menu commands), so Chromium never flattens a fraction.
+            for (const action of ['copy', 'cut', 'paste']) {
+                editor.addEventListener(action, event => {
+                    event.preventDefault();
+                    requestClipboardAction(action);
+                });
+            }
+
+            function decodeCommandPayload(encodedPayload) {
+                const binary = atob(String(encodedPayload || ''));
+                const bytes = Uint8Array.from(binary, character => character.charCodeAt(0));
+                return JSON.parse(new TextDecoder().decode(bytes));
+            }
+
+            window.SharperMathEditor = {
+                getClipboardText,
+                getClipboardPayload,
+                getLatex() {
+                    // Send actions can arrive in the same event turn as the
+                    // last keyboard command. Expose the model's authoritative
+                    // serialized document so the native shell can fetch the
+                    // complete visible expression instead of relying on the
+                    // last asynchronous state URL.
+                    return serializeDocument();
+                },
+                placeCaretAtPoint,
+                placeCaretAtNativePoint,
+                scrollBy,
+                setPhysicalKeyboardEnabled(enabled) {
+                    physicalKeyboardEnabled = enabled === true || String(enabled).toLowerCase() === 'true';
+                },
+                focusForPhysicalKeyboard() {
+                    keepEditorFocused();
+                },
+                executeEncoded(encodedPayload) {
+                    window.SharperMathEditor.execute(decodeCommandPayload(encodedPayload));
+                },
+                execute(command) {
+                    lastCommandDebug = String(command?.name || 'none');
+                    if (!command || !command.name) return emitState('noop');
+                    // Physical keys and DOM-only actions have no host sequence.
+                    // Preserve the last applied host command so subsequent
+                    // changes/activations are not rejected by MAUI's clear and
+                    // external-load guards as stale (sequence zero).
+                    const commandSequence = Number(command.sequence);
+                    if (command.sequence != null &&
+                        Number.isFinite(commandSequence) && commandSequence >= 0) {
+                        activeCommandSequence = commandSequence;
+                    }
+                    prepareCaretForCommand(command);
+                    // Do not refocus the DOM editor for custom-keyboard input.
+                    // The structured caret is model state and remains valid
+                    // while the cell is blurred. Only a physical cell touch or
+                    // the explicit focus command should focus the editor.
+                    switch (command.name) {
+                        case 'loadLatex': loadLatex(command.value || ''); break;
+                        case 'setPhysicalKeyboardEnabled':
+                            physicalKeyboardEnabled = String(command.value).toLowerCase() === 'true';
+                            emitState('layout');
+                            break;
+                        case 'setPlaceholder': placeholderText = command.value || ''; render(); emitState('layout'); break;
+                        case 'setLineLabels':
+                            showLineLabels = String(command.value).toLowerCase() === 'true';
+                            editorShell.classList.toggle('line-labels-visible', showLineLabels);
+                            render();
+                            emitState('layout');
+                            break;
+                        case 'setFontSize': setFontSize(command.value); break;
+                        case 'setAutomationId': editor.id = String(command.value || 'StructuredMathEditor').replace(/[^A-Za-z0-9_.-]/g, '_'); emitState('layout'); break;
+                        case 'focus': keepEditorFocused(); render(); emitState('activate'); break;
+                        case 'insertText': insertText(command.value || ''); break;
+                        // Bracket keys are deliberately a one-character
+                        // operation. They never create a delimiter node or
+                        // an empty body; the learner supplies both sides.
+                        case 'insertLiteralBracket':
+                            if (['(', '[', '{'].includes(String(command.value || ''))) {
+                                recordHistory();
+                                insertNode(atom(String(command.value)));
+                                finishChange();
+                            }
+                            break;
+                        case 'insertLatex': insertLatex(command.value || ''); break;
+                        case 'insertFraction': insertFraction(); break;
+                        case 'insertRoot': insertRoot(false); break;
+                        case 'insertNthRoot': insertRoot(true); break;
+                        case 'insertPower': insertPower(); break;
+                        case 'insertFixedPower': insertPower(command.value || '2'); break;
+                        case 'insertSubscript': insertSubscript(); break;
+                        case 'insertAbsolute': insertDelimiter('||'); break;
+                        case 'insertDelimiter': insertDelimiter(command.value || '()'); break;
+                        case 'insertFunction': insertFunction(command.value); break;
+                        case 'insertLogarithm': insertLogarithm(); break;
+                        case 'insertFactorial': insertFactorial(); break;
+                        case 'insertInfinity': insertInfinity(); break;
+                        case 'insertDerivative': insertDerivative(command.value); break;
+                        case 'insertLimit': insertLimit(command.value); break;
+                        case 'insertIntegral': insertIntegral(command.value); break;
+                        case 'insertCombination': insertCombination(command.value); break;
+                        case 'insertLargeOperator': insertLargeOperator(command.value); break;
+                        case 'insertScientificPower': insertScientificPower(); break;
+                        case 'backspace': backspace(); break;
+                        case 'delete': deleteForward(); break;
+                        case 'newLine': insertText('\n'); break;
+                        case 'moveLeft': moveHorizontal(-1); break;
+                        case 'moveRight': moveHorizontal(1); break;
+                        case 'moveUp': moveVertical(-1); break;
+                        case 'moveDown': moveVertical(1); break;
+                        case 'moveHome': moveHome(); break;
+                        case 'moveEnd': moveEnd(); break;
+                        case 'undo': undo(); break;
+                        case 'redo': redo(); break;
+                        case 'selectAll': selectAll(); break;
+                        case 'deleteClipboardSelection': deleteClipboardSelection(command.value); break;
+                        case 'clear': clearDocument(); break;
+                        case 'getState': return emitState('state');
+                        default: return emitState('noop');
+                    }
+                    return null;
+                }
+            };
+
+            if (typeof ResizeObserver !== 'undefined') {
+                const resizeObserver = new ResizeObserver(refitAfterResize);
+                resizeObserver.observe(editor);
+                window.__sharperMathResizeObserver = resizeObserver;
+            } else {
+                window.addEventListener('resize', refitAfterResize);
+            }
+
+            render();
+            setTimeout(() => emitState('ready'), 0);
+        })();
+    </script>
+</body>
+</html>

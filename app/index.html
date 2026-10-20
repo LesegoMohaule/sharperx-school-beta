@@ -12,21 +12,28 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icon.svg">
-  <link rel="stylesheet" href="./styles.css">
+  <link rel="stylesheet" href="./styles.css?v=17">
+  <script>
+    try {
+      if (localStorage.getItem("sharperx_access_token")) {
+        document.documentElement.classList.add("checking-session");
+      }
+    } catch { /* The login form remains available when browser storage is disabled. */ }
+  </script>
   <script>window.MathJax = { tex: { inlineMath: [["\\(", "\\)"], ["$", "$"]], displayMath: [["\\[", "\\]"], ["$$", "$$"]] }, options: { skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"] } };</script>
   <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
   <title>SharperTime workspace</title>
 </head>
 <body>
+  <div class="session-checking" role="status" aria-live="polite">Restoring your SharperTime workspace…</div>
   <div id="authScreen" class="auth-screen">
     <a class="auth-brand" href="../" aria-label="SharperTime home">
-      <img src="../assets/brand/sharperx-logo.png" alt="">
+      <img src="../assets/brand/sharperx-logo.png" alt="SharperX — Sharper Solutions Brighter Futures">
       <span><strong>SharperTime</strong><small>Mathematics workspace</small></span>
     </a>
     <section class="auth-card" aria-labelledby="authTitle">
       <p class="eyebrow">Your learning space</p>
       <h1 id="authTitle">Sign in to SharperTime</h1>
-      <p class="muted">Use your existing SharperTime account. Your AI key stays on the SharperTime server.</p>
       <form id="loginForm" class="form-stack">
         <label>Email or username<input name="email" type="text" autocomplete="username" required></label>
         <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
@@ -108,7 +115,7 @@
         </section>
 
         <section class="view" data-view-panel="practice" aria-labelledby="practiceTitle" hidden>
-          <header class="view-heading"><div><p class="eyebrow">Practice</p><h1 id="practiceTitle">Choose a topic and subtopic</h1><p class="muted">Topics, subtopics, and question records come from the server question bank for the selected grade.</p></div></header>
+          <header class="view-heading"><div><p class="eyebrow">Practice</p><h1 id="practiceTitle">Choose a topic and subtopic</h1><p class="muted">Choose from the topics, subtopics, and questions available for your grade.</p></div></header>
           <div class="filter-card practice-filters">
             <label>Grade<select id="practiceGrade"><option>8</option><option>9</option><option>10</option><option>11</option><option selected>12</option></select></label>
             <label>Topic<select id="practiceTopic" disabled><option value="">Choose grade first</option></select></label>
@@ -121,9 +128,39 @@
             <article id="practiceQuestionCard" class="question-card" hidden>
               <div class="question-card-top"><span id="practiceQuestionMeta" class="eyebrow"></span><button id="practiceFullScreen" class="button subtle" type="button" hidden>View full screen</button></div>
               <h2>Question</h2><div id="practiceQuestionText" class="math-content"></div><div id="practiceVisuals" class="question-visuals"></div>
-              <div class="hint-actions"><button id="practiceHintButton" class="button secondary" type="button">Show a hint</button><button id="practiceFormulaButton" class="button subtle" type="button">Show formulae</button><button id="practiceCanvasButton" class="button subtle" type="button">Open canvas</button></div>
+              <div class="hint-actions"><button id="practiceHintButton" class="button secondary" type="button">Show a hint</button><button id="practiceFormulaButton" class="button subtle" type="button">Show formulae</button></div>
               <div id="practiceHints" class="hint-content" hidden></div>
-              <label class="answer-label">Your working and answer<textarea id="practiceAnswer" rows="7" placeholder="Show each step. Keep your final answer on the last line."></textarea></label>
+              <section class="practice-response" aria-label="Your working and answer">
+                <div class="practice-response-heading"><strong>Your working and answer</strong><span class="muted">Enter steps on separate lines; keep your final answer last.</span></div>
+                <div class="practice-response-tools">
+                  <button id="practiceVoiceButton" class="tool-button" type="button" aria-label="Record a voice note for this answer">🎙<span>Voice</span></button>
+                  <button id="practiceCanvasButton" class="tool-button" type="button" aria-label="Write your working by hand">✎<span>Write / draw</span></button>
+                  <button id="practiceGraphCanvasButton" class="tool-button" type="button" aria-label="Draw a graph for this answer">⌁<span>Draw graph</span></button>
+                  <button id="practiceHandwritingButton" class="tool-button" type="button" aria-label="Upload a photo of handwritten working">📷<span>Upload work</span></button>
+                  <button id="practiceKeyboardToggle" class="tool-button" type="button" aria-expanded="false" aria-controls="practiceMathKeyboard">⌨<span>Math keyboard</span></button>
+                </div>
+                <div id="practiceVoiceStatus" class="status" role="status" aria-live="polite"></div>
+                <div id="practiceVoiceReview" class="voice-review" hidden>
+                  <label>Editable transcript<textarea id="practiceVoiceTranscript" rows="2" placeholder="Review the words recognized from your voice note."></textarea></label>
+                  <label>Mathematical form<textarea id="practiceVoiceMath" rows="2" placeholder="Use Format as math to prepare textbook notation."></textarea></label>
+                  <div class="voice-review-actions"><button id="practiceFormatVoiceMath" class="button subtle" type="button">Format as math</button><button id="practiceUseVoiceTranscript" class="button secondary" type="button">Use transcript</button><button id="practiceUseVoiceMath" class="button secondary" type="button">Use math</button><button id="practiceDismissVoice" class="button subtle" type="button">Dismiss</button></div>
+                </div>
+                <div id="practiceMathKeyboard" class="math-keyboard" hidden>
+                  <div class="math-keyboard-tabs" role="tablist" aria-label="Math keyboard sections">
+                    <button type="button" role="tab" aria-selected="true" data-keyboard-mode="Alphabet">ABC</button>
+                    <button type="button" role="tab" aria-selected="false" data-keyboard-mode="Basic">Alg</button>
+                    <button type="button" role="tab" aria-selected="false" data-keyboard-mode="Advanced">Trig</button>
+                    <button type="button" role="tab" aria-selected="false" data-keyboard-mode="Calculus">Calc</button>
+                    <button type="button" role="tab" aria-selected="false" data-keyboard-mode="Greek">Greek</button>
+                    <button type="button" role="tab" aria-selected="false" data-keyboard-mode="Shorthand">Notation</button>
+                  </div>
+                  <div id="practiceMathKeys" class="math-key-grid" role="group" aria-label="Math keyboard keys"></div>
+                  <div class="math-keyboard-actions"><button type="button" data-editor-action="undo" aria-label="Undo">↶</button><button type="button" data-editor-action="moveLeft" aria-label="Move cursor left">←</button><button type="button" data-editor-action="moveRight" aria-label="Move cursor right">→</button><button type="button" data-editor-action="backspace" aria-label="Delete before cursor">⌫</button><button type="button" class="math-key-enter" data-editor-action="newLine" aria-label="Enter new line">↵ <span>Enter</span></button></div>
+                </div>
+                <div class="math-editor-frame"><iframe id="practiceMathEditor" title="Structured textbook maths editor" src="./math-editor.html?v=15"></iframe></div>
+                <div id="practiceAnswerAttachments" class="practice-answer-attachments" aria-live="polite"></div>
+                <input id="practiceHandwritingInput" type="file" accept="image/*" capture="environment" hidden>
+              </section>
               <div class="answer-actions"><button id="markPracticeAnswer" class="button primary" type="button">Send for marking</button><span id="practiceMarkStatus" class="status" role="status"></span></div>
               <div id="practiceFeedback" class="feedback-card" hidden></div>
             </article>
@@ -131,7 +168,7 @@
         </section>
 
         <section class="view" data-view-panel="exam" aria-labelledby="examTitle" hidden>
-          <header class="view-heading"><div><p class="eyebrow">Test / exam prep</p><h1 id="examTitle">Build a paper from the server bank</h1><p class="muted">Choose a grade and topics, then work through the generated assessment at your pace.</p></div></header>
+          <header class="view-heading"><div><p class="eyebrow">Test / exam prep</p><h1 id="examTitle">Build a practice paper</h1><p class="muted">Choose a grade and topics, then work through the generated assessment at your pace.</p></div></header>
           <div id="examSetup" class="exam-setup">
             <div class="filter-card exam-filters"><label>Grade<select id="examGrade"><option>8</option><option>9</option><option>10</option><option>11</option><option selected>12</option></select></label><label>Assessment<select id="examType"><option value="test">Test</option><option value="exam">Exam</option></select></label><label>Session mode<select id="examSessionMode"><option value="guided">Guided practice</option><option value="strict">Strict mock exam</option></select></label><button id="loadExamTopics" class="button secondary" type="button">Load topics</button><button id="generateExam" class="button primary" type="button" disabled>Generate assessment</button></div>
             <p id="examStatus" class="status" role="status" aria-live="polite"></p>
@@ -173,12 +210,16 @@
   </dialog>
 
   <dialog id="canvasDialog" class="canvas-dialog" aria-label="Writing canvas">
-    <div class="dialog-toolbar canvas-toolbar"><strong id="canvasTitle">Canvas</strong><div class="canvas-actions"><button id="undoCanvas" class="button subtle" type="button">Undo</button><button id="clearCanvas" class="button subtle" type="button">Clear</button><button id="toggleQuestionSidebar" class="button subtle" type="button" hidden>Show Q</button><button id="canvasPanButton" class="button subtle" type="button" aria-pressed="false">☝ Pan</button><button id="canvasFitButton" class="button subtle" type="button">Fit</button><button class="button subtle" type="button" data-close-dialog>Cancel</button><button id="finishCanvas" class="button primary" type="button">Use canvas</button></div></div>
+    <div class="dialog-toolbar canvas-toolbar"><strong id="canvasTitle">Canvas</strong><div class="canvas-actions"><button id="undoCanvas" class="button subtle" type="button">Undo</button><button id="clearCanvas" class="button subtle" type="button">Clear</button><button id="toggleQuestionSidebar" class="button subtle" type="button" hidden>Show Q</button><button id="canvasPanButton" class="button subtle" type="button" aria-pressed="false">☝ Pan</button><button id="canvasFitButton" class="button subtle" type="button">Fit</button><button id="usePhoneCanvas" class="button secondary" type="button" aria-expanded="false" aria-controls="phoneCanvasPairPanel">Use phone</button><button class="button subtle" type="button" data-close-dialog>Cancel</button><button id="finishCanvas" class="button primary" type="button">Use canvas</button></div></div>
+    <section id="phoneCanvasPairPanel" class="phone-canvas-pair-panel" aria-label="Connect a phone for drawing" hidden>
+      <div id="phoneCanvasPairQr" class="phone-canvas-pair-qr" aria-label="Phone connection QR code"></div>
+      <div class="phone-canvas-pair-details"><strong>Draw on your phone</strong><p>Scan this code, sign in to the same SharperTime account, and the phone canvas will connect here. Or open the page below on your phone and enter the code.</p><div class="phone-canvas-code">Pairing code <strong id="phoneCanvasPairCode">------</strong></div><a id="phoneCanvasRemoteLink" href="./canvas-remote.html" target="_blank" rel="noopener">Open the phone canvas page</a><div id="phoneCanvasPairStatus" class="status" role="status" aria-live="polite">Waiting for your phone…</div><button id="stopPhoneCanvas" class="button subtle" type="button">Disconnect phone</button></div>
+    </section>
     <div class="canvas-layout"><div class="drawing-surface"><canvas id="workingCanvas" aria-label="Write or draw your answer"></canvas></div><aside id="canvasQuestionSidebar" class="canvas-question-sidebar" hidden><button id="closeCanvasQuestion" class="icon-button" type="button" aria-label="Hide question">×</button><h2>Question</h2><div id="canvasQuestionText" class="math-content"></div><img id="canvasQuestionImage" alt="Question page" hidden></aside></div>
     <p class="image-help">Write or draw with a finger, stylus, mouse, or trackpad. Use the pan tool or a two-finger pinch to move and zoom.</p>
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="./app.js"></script>
+  <script type="module" src="./app.js?v=17"></script>
 </body>
 </html>

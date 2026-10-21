@@ -73,7 +73,7 @@ Smallest AI’s `math_notation` option is a provider-specific TTS feature for di
 
 ### 1. Validate the hosted learner flow
 
-- Check the signed-in call from the hosted PWA after GitHub Pages serves the updated bundle.
+- Run the signed-in call from the hosted PWA and verify the deployed client bundle.
 - Try Ask and Practice on desktop Chrome/Edge, Android Chrome, and iPhone/iPad Safari; check microphone denial, reconnect, mute, interruption, device voices, common notation, and the explicit **Send for marking** action.
 - Confirm direct ICE and TURN fallback from school and mobile networks, including any separate cloud firewall.
 - Verify transcription and tutor usage are charged through the learner's existing account limits.

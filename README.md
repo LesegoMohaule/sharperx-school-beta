@@ -16,7 +16,7 @@ The question bank, marking, paper OCR/snapshots, lesson catalog, speech transcri
 
 Ask and Practice now include Pipecat SmallWebRTC live tutoring. Pipecat runs on the Ubuntu server behind `/voice/` on the existing API hostname; the static app contains the browser client. The service forwards audio segments and tutor turns through SharperTime's authenticated API. Tutor replies use the voice installed on each learner's device and remain visible as captions. Math notation is converted to spoken wording. The service does not store audio recordings, add an AI provider key, or mark a spoken Practice answer. Replies are turn-based because the existing tutor API returns complete responses. The deployment guide configures self-hosted coturn with short-lived credentials for networks that block direct WebRTC.
 
-GitHub Pages now publishes the site from main/root at https://sharperx.co.za/, with the learner app at https://sharperx.co.za/app/. The API allows both https://sharperx.co.za and https://www.sharperx.co.za as app origins.
+GitHub Pages is disabled for now. The local intranet server serves the learner app on the A013G hotspot at http://192.168.43.13:5501/app/ (the host address can change when it reconnects). On the host PC, use http://localhost:5501/app/ for browser microphone access. Other hotspot devices need trusted HTTPS before browser microphone access is available.
 
 ## Public evidence pages
 

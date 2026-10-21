@@ -67,15 +67,16 @@ Smallest AI’s `math_notation` option is a provider-specific TTS feature for di
 - Added a Pipecat FastAPI service that validates existing SharperTime sign-in, creates expiring one-use call tokens, forwards audio to the existing transcription API, and sends tutoring-only requests to the existing Ask endpoint.
 - Added local browser speech with math-aware formatting and installed voice selection. Voice input is not sent to marking, and raw audio is not retained.
 - Deployed the voice service on Ubuntu as a restricted, single-worker systemd service. HTTPS /voice/ proxying, UFW rules, short-lived TURN credentials, coturn UDP/TCP/TLS listeners, and certificate renewal are configured.
-- The public health endpoint returns HTTP 200; an unauthenticated session request returns HTTP 401. A full signed-in browser call still needs learner acceptance on supported desktop/mobile browsers and school networks.
+- GitHub Pages is disabled. The app is served locally by local_intranet_server.py at port 5501 on the A013G hotspot; the host PC can use localhost for microphone access. Other hotspot devices need trusted HTTPS for browser microphone access.
+- The public voice health endpoint returns HTTP 200; an unauthenticated session request returns HTTP 401. A full signed-in browser call still needs learner acceptance on supported desktop/mobile browsers and school networks.
 
 ## Remaining delivery phases
 
 ### 1. Validate the hosted learner flow
 
-- Run the signed-in call from the hosted PWA and verify the deployed client bundle.
+- Run the signed-in call from the locally served app on the hotspot and verify the current client bundle.
 - Try Ask and Practice on desktop Chrome/Edge, Android Chrome, and iPhone/iPad Safari; check microphone denial, reconnect, mute, interruption, device voices, common notation, and the explicit **Send for marking** action.
-- Confirm direct ICE and TURN fallback from school and mobile networks, including any separate cloud firewall.
+- Confirm direct ICE and TURN fallback from the A013G hotspot and other target networks, including any separate cloud firewall.
 - Verify transcription and tutor usage are charged through the learner's existing account limits.
 
 ### 2. Improve mathematical speech

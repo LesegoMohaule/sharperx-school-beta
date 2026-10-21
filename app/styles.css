@@ -110,6 +110,23 @@ input:focus, select:focus, textarea:focus { border-color: #188d82; box-shadow: 0
 .tool-button { flex: 0 0 auto; min-width: 70px; min-height: 46px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; padding: 5px 9px; border: 1px solid #dce6e4; border-radius: 11px; color: var(--teal-dark); background: #f5faf8; font-size: 16px; }
 .tool-button span { font-size: 10px; font-weight: 650; }
 .tool-button:hover { background: var(--teal-pale); }
+.live-tutor-launch { border-color: #8bc5b8; color: #07574f; background: #e8f7f2; font-weight: 750; }
+.live-tutor-launch:hover { border-color: #0e766e; background: #d8f1e9; }
+.live-tutor-panel { display: grid; grid-template-columns: minmax(0, 1fr) minmax(180px, 250px); align-items: center; gap: 10px 14px; margin: 0 0 12px; padding: 12px; border: 1px solid #b7d5ce; border-radius: 13px; background: #f1faf7; }
+.live-tutor-session-copy { display: grid; gap: 3px; min-width: 0; }
+.live-tutor-session-copy strong { color: var(--teal-dark); font-size: 13px; }
+.live-tutor-session-copy span { color: var(--ink-soft); font-size: 12px; line-height: 1.4; }
+.live-tutor-voice-label { display: grid; gap: 4px; color: var(--ink-soft); font-size: 11px; font-weight: 700; }
+.live-tutor-voice-label select { min-height: 36px; margin: 0; padding: 6px 9px; font-size: 12px; }
+.live-tutor-actions { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 6px; }
+.live-tutor-actions .button { min-height: 35px; padding: 7px 10px; font-size: 11px; }
+.live-tutor-note { grid-column: 1 / -1; margin: 0; color: var(--ink-soft); font-size: 11px; line-height: 1.4; }
+.practice-live-tutor-panel { margin: 0 0 15px; }
+.live-tutor-transcript { grid-column: 1 / -1; display: grid; gap: 7px; max-height: 220px; overflow-y: auto; }
+.live-tutor-transcript:empty { display: none; }
+.live-tutor-transcript-item { padding: 9px 11px; border-radius: 10px; background: #fff; color: var(--ink); font-size: 12px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.live-tutor-transcript-item strong { display: block; margin-bottom: 3px; color: var(--teal-dark); font-size: 10px; }
+.live-tutor-transcript-item p { margin: 0; }
 .composer-label { display: block; margin: 0 0 5px 2px; color: #526a68; font-size: 11px; font-weight: 700; }
 .composer textarea { min-height: 68px; max-height: 210px; border: 0; padding: 7px 3px; border-radius: 0; box-shadow: none; font-size: 15px; resize: vertical; }
 .composer textarea:focus { box-shadow: none; }
@@ -345,6 +362,9 @@ input:focus, select:focus, textarea:focus { border-color: #188d82; box-shadow: 0
   .composer-tools { gap: 5px; padding-bottom: 6px; }
   .tool-button { min-width: 54px; min-height: 42px; padding: 4px 6px; font-size: 15px; }
   .tool-button span { font-size: 9px; }
+  .live-tutor-panel { grid-template-columns: minmax(0, 1fr); gap: 9px; padding: 10px; }
+  .live-tutor-actions { grid-column: 1; }
+  .live-tutor-note, .live-tutor-transcript { grid-column: 1; }
   .composer textarea { min-height: 58px; font-size: 15px; }
   .ask-help-panel { display: none; }
   .paper-tools { margin: 8px 8px 0; padding: 10px; }

@@ -313,6 +313,11 @@ export function installRealtimeTutor({ apiBaseUrl, getAccessToken, ensureInspect
       if (activeContext === contextType) await stop();
       return;
     }
+    if (window.isSecureContext === false) {
+      setStatus(contextType, "Microphone access needs HTTPS or localhost. On this computer, open http://localhost:5501/app/; hotspot devices need a trusted HTTPS link. You can still type here.", "error");
+      panel(contextType).hidden = false;
+      return;
+    }
     if (!window.RTCPeerConnection || !navigator.mediaDevices?.getUserMedia) {
       setStatus(contextType, "Live audio is not supported by this browser. You can still type or record a voice note.", "error");
       panel(contextType).hidden = false;

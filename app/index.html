@@ -12,16 +12,18 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icon.svg">
-  <link rel="stylesheet" href="./styles.css?v=17">
+  <link rel="stylesheet" href="./styles.css?v=26">
   <script>
     try {
+      if (/[?&](email|password)=/i.test(window.location.search) && window.history && window.history.replaceState) {
+        window.history.replaceState(null, document.title, window.location.pathname + window.location.hash);
+      }
       if (localStorage.getItem("sharperx_access_token")) {
         document.documentElement.classList.add("checking-session");
       }
-    } catch { /* The login form remains available when browser storage is disabled. */ }
+    } catch (error) { /* The login form remains available when browser storage is disabled. */ }
   </script>
   <script>window.MathJax = { tex: { inlineMath: [["\\(", "\\)"], ["$", "$"]], displayMath: [["\\[", "\\]"], ["$$", "$$"]] }, options: { skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"] } };</script>
-  <script defer src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"></script>
   <title>SharperTime workspace</title>
 </head>
 <body>
@@ -34,11 +36,11 @@
     <section class="auth-card" aria-labelledby="authTitle">
       <p class="eyebrow">Your learning space</p>
       <h1 id="authTitle">Sign in to SharperTime</h1>
-      <form id="loginForm" class="form-stack">
+      <form id="loginForm" class="form-stack" method="post">
         <label>Email or username<input name="email" type="text" autocomplete="username" required></label>
         <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
-        <button class="button primary" type="submit">Sign in</button>
-        <p id="loginStatus" class="status" role="status" aria-live="polite"></p>
+        <button class="button primary" type="submit" disabled>Preparing sign in…</button>
+        <p id="loginStatus" class="status" role="status" aria-live="polite">Starting SharperTime…</p>
       </form>
       <div class="auth-links"><a href="../login.html">Account help</a><a href="../privacy-policy.html">Privacy</a></div>
     </section>
@@ -52,6 +54,9 @@
       </a>
       <div class="topbar-tools">
         <label class="grade-quick">Grade <select id="globalGrade" aria-label="Current grade"><option>8</option><option>9</option><option>10</option><option>11</option><option selected>12</option></select></label>
+        <span id="deviceTypeStatus" class="device-type-status">Phone remote available</span>
+        <button id="deviceRemoteButton" class="button primary device-remote-launch" type="button" aria-haspopup="dialog" title="Show a QR code to connect your phone">▦ Connect phone · QR</button>
+        <span id="deviceRemoteBadge" class="device-remote-badge" role="status" aria-live="polite" hidden>Phone connected</span>
         <span id="accountLabel" class="account-label"></span>
         <button id="logoutButton" class="button subtle" type="button">Sign out</button>
       </div>
@@ -210,16 +215,61 @@
   </dialog>
 
   <dialog id="canvasDialog" class="canvas-dialog" aria-label="Writing canvas">
-    <div class="dialog-toolbar canvas-toolbar"><strong id="canvasTitle">Canvas</strong><div class="canvas-actions"><button id="undoCanvas" class="button subtle" type="button">Undo</button><button id="clearCanvas" class="button subtle" type="button">Clear</button><button id="toggleQuestionSidebar" class="button subtle" type="button" hidden>Show Q</button><button id="canvasPanButton" class="button subtle" type="button" aria-pressed="false">☝ Pan</button><button id="canvasFitButton" class="button subtle" type="button">Fit</button><button id="usePhoneCanvas" class="button secondary" type="button" aria-expanded="false" aria-controls="phoneCanvasPairPanel">Use phone</button><button class="button subtle" type="button" data-close-dialog>Cancel</button><button id="finishCanvas" class="button primary" type="button">Use canvas</button></div></div>
+    <div class="dialog-toolbar canvas-toolbar"><strong id="canvasTitle">Canvas</strong><div class="canvas-actions"><button id="undoCanvas" class="button subtle" type="button">Undo</button><button id="clearCanvas" class="button subtle" type="button">Clear</button><button id="canvasEraserButton" class="button subtle" type="button" aria-pressed="false" aria-label="Enable eraser">Eraser</button><button id="canvasReadMathButton" class="button subtle" type="button" aria-label="Recognize maths in this canvas">Read maths</button><button id="toggleQuestionSidebar" class="button subtle" type="button" hidden>Show Q</button><button id="canvasPanButton" class="button subtle phone-pan-control" type="button" aria-pressed="false" aria-label="Enable pan mode"><span class="pan-hand-badge" aria-hidden="true"><svg class="pan-hand-icon" viewBox="0 0 24 24"><path d="M23.5 12.5c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V6c0-.83-.67-1.5-1.5-1.5S17.5 5.17 17.5 6v6c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V4c0-.83-.67-1.5-1.5-1.5S11.5 3.17 11.5 4v8c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V8c0-.83-.67-1.5-1.5-1.5S5.5 7.17 5.5 8v9l-2.27-2.28c-.29-.29-.68-.44-1.06-.44s-.77.15-1.06.44c-.59.59-.59 1.54 0 2.12L6.5 23.5c.94.94 2.22 1.5 3.54 1.5H19c1.66 0 3-1.34 3-3v-9.5z"/></svg></span><span id="canvasPanLabel">Pan</span></button><button id="canvasZoomButton" class="button subtle" type="button" aria-pressed="false" aria-label="Enable zoom">Zoom off</button><button id="canvasFitButton" class="button subtle" type="button">Fit</button><button id="usePhoneCanvas" class="button secondary" type="button" aria-expanded="false" aria-controls="phoneCanvasPairPanel">Use phone</button><button class="button subtle" type="button" data-close-dialog>Cancel</button><button id="finishCanvas" class="button primary" type="button">Use canvas</button></div></div>
     <section id="phoneCanvasPairPanel" class="phone-canvas-pair-panel" aria-label="Connect a phone for drawing" hidden>
       <div id="phoneCanvasPairQr" class="phone-canvas-pair-qr" aria-label="Phone connection QR code"></div>
-      <div class="phone-canvas-pair-details"><strong>Draw on your phone</strong><p>Scan this code, sign in to the same SharperTime account, and the phone canvas will connect here. Or open the page below on your phone and enter the code.</p><div class="phone-canvas-code">Pairing code <strong id="phoneCanvasPairCode">------</strong></div><a id="phoneCanvasRemoteLink" href="./canvas-remote.html" target="_blank" rel="noopener">Open the phone canvas page</a><div id="phoneCanvasPairStatus" class="status" role="status" aria-live="polite">Waiting for your phone…</div><button id="stopPhoneCanvas" class="button subtle" type="button">Disconnect phone</button></div>
+      <div class="phone-canvas-pair-details"><strong>Draw on your phone</strong><p>Scan this code or open the canvas page and enter the code. Local sessions need both devices on the same Wi-Fi.</p><div class="phone-canvas-code">Pairing code <strong id="phoneCanvasPairCode">------</strong></div><a id="phoneCanvasRemoteLink" href="./canvas-remote.html" target="_blank" rel="noopener">Open the phone canvas page</a><div id="phoneCanvasPairStatus" class="status" role="status" aria-live="polite">Waiting for your phone…</div><button id="stopPhoneCanvas" class="button subtle" type="button">Disconnect phone</button></div>
+    </section>
+    <section id="canvasTranscriptionPanel" class="canvas-transcription-panel" aria-label="Review recognized maths" hidden>
+      <label for="canvasTranscriptionText">Review and edit the recognized maths</label>
+      <textarea id="canvasTranscriptionText" rows="2" placeholder="Recognized maths will appear here."></textarea>
+      <div class="canvas-transcription-footer"><span id="canvasTranscriptionStatus" class="status" role="status" aria-live="polite"></span><div><button id="canvasTranscriptionUse" class="button primary" type="button">Use text</button><button id="canvasTranscriptionClose" class="button subtle" type="button">Close</button></div></div>
     </section>
     <div class="canvas-layout"><div class="drawing-surface"><canvas id="workingCanvas" aria-label="Write or draw your answer"></canvas></div><aside id="canvasQuestionSidebar" class="canvas-question-sidebar" hidden><button id="closeCanvasQuestion" class="icon-button" type="button" aria-label="Hide question">×</button><h2>Question</h2><div id="canvasQuestionText" class="math-content"></div><img id="canvasQuestionImage" alt="Question page" hidden></aside></div>
-    <p class="image-help">Write or draw with a finger, stylus, mouse, or trackpad. Use the pan tool or a two-finger pinch to move and zoom.</p>
+    <p class="image-help">Write or draw with a finger, stylus, mouse, or trackpad. Use Pan to move; turn Zoom on before pinching or scrolling to zoom.</p>
+  </dialog>
+
+  <dialog id="deviceRemoteDialog" class="device-remote-dialog" aria-labelledby="deviceRemoteTitle">
+    <div class="device-remote-heading"><div><p class="eyebrow">SharperTime remote</p><h2 id="deviceRemoteTitle">Use your phone as a remote</h2></div><button class="icon-button" type="button" data-close-dialog aria-label="Close phone remote">×</button></div>
+    <div class="device-remote-pair-panel">
+      <div id="deviceRemoteQr" class="device-remote-qr" aria-label="Phone remote connection QR code"></div>
+      <div class="device-remote-pair-details"><p>Scan with your phone, or open the remote page and enter the code. Local sessions need both devices on the same Wi-Fi; hosted sessions use your SharperTime sign-in.</p><div class="phone-canvas-code">Pairing code <strong id="deviceRemoteCode">------</strong></div><a id="deviceRemoteLink" href="./remote-control.html" target="_blank" rel="noopener">Open the phone remote page</a><div id="deviceRemoteStatus" class="status" role="status" aria-live="polite">Select Connect phone to create a pairing code.</div><button id="stopDeviceRemote" class="button subtle" type="button">Disconnect phone</button></div>
+    </div>
+    <p class="muted device-remote-note">This remote controls SharperTime in this browser tab. It does not control other TV apps.</p>
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
-  <script type="module" src="./app.js?v=18"></script>
+  <script>
+    (function () {
+      var supportsModules = "noModule" in document.createElement("script");
+      var loginForm = document.getElementById("loginForm");
+      var loginButton = loginForm.querySelector("button[type='submit']");
+      var loginStatus = document.getElementById("loginStatus");
+      loginForm.addEventListener("submit", function (event) { event.preventDefault(); });
+      var supportsModernSyntax = false;
+      try {
+        new Function("var candidate = {}; return candidate?.value;");
+        supportsModernSyntax = true;
+      } catch (error) { /* Older TV browsers use the compatibility bundle below. */ }
+      var appScript = document.createElement("script");
+      if (supportsModules && supportsModernSyntax) {
+        appScript.type = "module";
+        appScript.src = "./app.js?v=30";
+      } else {
+        appScript.src = "./legacy-app.js?v=8";
+      }
+      appScript.onload = function () {
+        loginButton.disabled = false;
+        loginButton.textContent = "Sign in";
+        loginStatus.textContent = "";
+      };
+      appScript.onerror = function () {
+        loginStatus.textContent = "This browser could not start SharperTime. Reload the page or use a newer browser.";
+        loginStatus.classList.add("is-error");
+      };
+      appScript.async = false;
+      document.body.appendChild(appScript);
+    }());
+  </script>
 </body>
 </html>

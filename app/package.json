@@ -1,0 +1,10 @@
+{
+  "name": "sharpertime-web-app",
+  "private": true,
+  "scripts": {
+    "build:legacy": "esbuild app.js --bundle --format=iife --target=chrome60 --minify --outfile=legacy-app.js"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
+  }
+}

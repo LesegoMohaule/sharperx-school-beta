@@ -1,13 +1,16 @@
-const CACHE_NAME = "sharperx-web-shell-v18";
+const CACHE_NAME = "sharperx-web-shell-v34";
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=17",
-  "./app.js?v=18",
-  "./api.js?v=15",
+  "./styles.css?v=26",
+  "./app.js?v=30",
+  "./legacy-app.js?v=8",
+  "./api.js?v=18",
   "./math-editor.html?v=15",
   "./canvas-remote.html",
-  "./canvas-remote.js?v=1",
+  "./canvas-remote.js?v=9",
+  "./remote-control.html",
+  "./remote-control.js?v=5",
   "./vendor/qrcode-generator.js?v=17",
   "./manifest.webmanifest",
   "./icon.svg",
@@ -32,7 +35,7 @@ self.addEventListener("fetch", (event) => {
   if (request.mode === "navigate") {
     event.respondWith(fetch(request).then((response) => {
       const copy = response.clone();
-      caches.open(CACHE_NAME).then((cache) => cache.put("./index.html", copy));
+      caches.open(CACHE_NAME).then((cache) => cache.put(request, copy));
       return response;
     }).catch(async () => (await caches.match(request)) || (await caches.match("./index.html"))));
     return;

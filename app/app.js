@@ -1,9 +1,10 @@
-import { API_BASE_URL, apiRequest, getAccessToken, getJson, postForm, postJson, setAccessToken, uploadForm } from "./api.js?v=15";
+import { API_BASE_URL, apiRequest, getAccessToken, getJson, postForm, postJson, postPairingJson, pairingWebSocketUrl, isLocalIntranetPage, setAccessToken, uploadForm } from "./api.js?v=18";
 import qrcode from "./vendor/qrcode-generator.js?v=17";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
 const APP_VIEWS = new Set(["ask", "practice", "exam", "lessons", "reports"]);
+let mathJaxLoadPromise = null;
 const savedView = sessionStorage.getItem("sharperx_web_current_view");
 const PRACTICE_SESSION_KEYS = {
   grade: "sharperx_web_practice_grade",
@@ -71,7 +72,7 @@ const state = {
   reportObjectUrls: new Set(),
   recorder: null,
   audioChunks: [],
-  canvas: { mode: "write", strokes: [], scale: 1, offsetX: 0, offsetY: 0, pan: false, active: null, pointers: new Map(), pinch: null, size: { width: 0, height: 0 } },
+  canvas: { mode: "write", strokes: [], scale: 1, offsetX: 0, offsetY: 0, pan: false, zoom: false, eraser: false, revision: 0, transcribedPhoto: null, photoPromise: null, active: null, pointers: new Map(), pinch: null, size: { width: 0, height: 0 } },
   imageView: { scale: 1, x: 0, y: 0, pointers: new Map(), pinch: null, drag: null },
   toastTimer: 0,
 };
@@ -102,16 +103,39 @@ function renderMath(target, text) {
     return result;
   }).join("\n");
   target.innerHTML = escapeHtml(normalized).replace(/\r?\n/g, "<br>");
-  if (window.MathJax?.typesetPromise) {
-    window.MathJax.typesetClear?.([target]);
-    window.MathJax.typesetPromise([target]).catch(() => {});
+  if (/\\\(|\\\[|\$\$/.test(normalized)) {
+    ensureMathJax().then((mathJax) => {
+      if (!mathJax) return;
+      mathJax.typesetClear?.([target]);
+      return mathJax.typesetPromise([target]);
+    }).catch(() => {});
   }
+}
+
+function ensureMathJax() {
+  if (window.MathJax?.typesetPromise) return Promise.resolve(window.MathJax);
+  if (!mathJaxLoadPromise) {
+    mathJaxLoadPromise = new Promise((resolve) => {
+      const script = document.createElement("script");
+      script.src = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js";
+      script.async = true;
+      script.onload = () => resolve(window.MathJax?.typesetPromise ? window.MathJax : null);
+      script.onerror = () => resolve(null);
+      document.head.appendChild(script);
+    });
+  }
+  return mathJaxLoadPromise;
 }
 
 function escapeHtml(value) {
   return String(value ?? "").replace(/[&<>"']/g, (character) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
   })[character]);
+}
+
+function lastNonEmptyLine(value) {
+  const lines = String(value || "").split(/\r?\n/).filter(Boolean);
+  return lines[lines.length - 1] || "";
 }
 
 function formatGrade(value) {
@@ -158,9 +182,16 @@ async function checkSession() {
   } catch (error) {
     setAccessToken("");
     showAuth();
-    setStatus($("#loginStatus"), "Your session has expired. Sign in again.", "error");
+    setStatus($("#loginStatus"), error.message || "Could not restore your session. Sign in again.", "error");
   }
 }
+
+window.addEventListener("sharperx:auth-expired", () => {
+  state.user = null;
+  if (deviceRemoteDialog?.open) closeDeviceRemoteDialog();
+  showAuth();
+  setStatus($("#loginStatus"), "Your session has expired. Sign in again.", "error");
+});
 
 $("#loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -402,7 +433,8 @@ async function sendAsk(event) {
   }
   const button = $("#sendAskButton");
   button.disabled = true;
-  const attachedImage = state.askPhotos.at(-1)?.previewUrl || "";
+  const lastAskPhoto = state.askPhotos[state.askPhotos.length - 1];
+  const attachedImage = lastAskPhoto?.previewUrl || "";
   const shownText = selected
     ? (text ? `Attempt / request for Question ${selected.number}:\n${text}` : `Question ${selected.number}:\n${selected.text}`)
     : text || "Please look at the attached working.";
@@ -1312,7 +1344,10 @@ window.addEventListener("message", (event) => {
   if (event.source !== practiceMathEditorFrame.contentWindow || event.data?.type !== "sharper-math-editor-state") return;
   state.practiceEditorState = event.data.state || null;
   if (!state.practiceEditorReady && event.data.state?.event === "ready") initializePracticeMathEditor();
-  if (event.data.state?.event === "activate") setPracticeKeyboardVisible(true);
+  if (event.data.state?.event === "activate") {
+    setPracticeKeyboardVisible(true);
+    deviceRemoteNotifyFocus(practiceMathEditorFrame);
+  } else if (deviceRemoteSession && deviceRemoteTargetFrame === practiceMathEditorFrame) deviceRemoteNotifyFocus(practiceMathEditorFrame);
 });
 
 function getPracticeEditorLatex() {
@@ -1594,7 +1629,7 @@ $("#markPracticeAnswer").addEventListener("click", async () => {
       question_text: questionLabel(question),
       marks: question.marks || 0,
       learner_working: working,
-      learner_final_answer: working.split(/\r?\n/).filter(Boolean).at(-1) || working,
+      learner_final_answer: lastNonEmptyLine(working) || working,
       assistance_mode: state.hintIndex ? "Hints" : "SolveItMyself",
       hints_used: state.hintIndex,
       photo_ids: [...state.practiceAnswerPhotoIds],
@@ -1701,7 +1736,7 @@ async function saveReport(title, question, response) {
       body: JSON.stringify({ title, subtitle: "Saved " + new Date().toLocaleString(), body: body.trim() }),
       responseType: "blob",
     });
-    const id = globalThis.crypto && crypto.randomUUID ? crypto.randomUUID() : Date.now() + "-" + Math.random().toString(36).slice(2);
+    const id = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now() + "-" + Math.random().toString(36).slice(2);
     await reportTransaction("readwrite", (store) => store.put({ id, title, createdAt: new Date().toISOString(), pdf }));
     downloadBlob(pdf, safeFileName(title) + ".pdf");
     showToast("PDF report saved on this device.");
@@ -2140,6 +2175,455 @@ async function playLessonVideo(grade, topic, lesson, button) {
 }
 renderSourceLinks();
 
+const deviceRemoteButton = $("#deviceRemoteButton");
+const deviceRemoteDialog = $("#deviceRemoteDialog");
+let deviceRemoteSocket = null;
+let deviceRemoteSession = null;
+let deviceRemoteHeartbeat = 0;
+let deviceRemoteCursor = null;
+let deviceRemotePointer = { x: 0.5, y: 0.5, down: false, downAt: 0, startX: 0, startY: 0, target: null, dragged: false };
+let deviceRemoteZoomScale = 1;
+let deviceRemoteTargetFrame = null;
+let deviceRemotePhoneConnected = false;
+let deviceRemoteClosingAfterPair = false;
+let deviceRemoteCreateRequest = 0;
+
+function detectRunningDevice() {
+  const ua = navigator.userAgent || "";
+  const explicitTv = /(Android\s*(?:TV|tv)|Smart[- ]?TV|Google[- ]?TV|HbbTV|Tizen|Web0S|webOS|BRAVIA|AFT[A-Z0-9]*|NetCast|Viera|Hisense|MiTV|SMART_TV)/i.test(ua);
+  const mobile = /(iPhone|iPod|Android.*Mobile|Windows Phone)/i.test(ua);
+  const androidTvLike = /Android/i.test(ua) && !/Mobile|Mobi/i.test(ua);
+  const cssWidth = Math.max(window.screen?.width || 0, window.screen?.height || 0, window.innerWidth || 0);
+  const pixelWidth = cssWidth * Math.max(1, Number(window.devicePixelRatio) || 1);
+  const bigScreen = !mobile && (cssWidth >= 1100 || pixelWidth >= 1600);
+  const tvLike = explicitTv || androidTvLike;
+  const largeDisplay = tvLike || bigScreen;
+  document.documentElement.dataset.deviceType = tvLike ? "tv" : mobile ? "mobile" : bigScreen ? "large-screen" : "desktop";
+  document.documentElement.classList.toggle("device-tv", largeDisplay);
+  $("#deviceTypeStatus").textContent = explicitTv ? "Smart TV detected" : androidTvLike ? "Android TV detected" : bigScreen ? "Large screen detected" : "Phone remote available";
+  // Some TV browsers report a desktop or mobile user agent and a small CSS
+  // viewport. Keep the QR entry point available even when detection is unsure.
+  deviceRemoteButton.hidden = false;
+  return { explicitTv, androidTvLike, bigScreen, mobile, tvLike };
+}
+
+detectRunningDevice();
+window.addEventListener("resize", detectRunningDevice, { passive: true });
+
+function deviceRemoteSetStatus(message, kind = "") {
+  setStatus($("#deviceRemoteStatus"), message, kind);
+}
+
+function openDeviceRemoteDialog() {
+  if (deviceRemoteDialog.open) return;
+  if (typeof deviceRemoteDialog.showModal === "function") {
+    deviceRemoteDialog.showModal();
+    return;
+  }
+  deviceRemoteDialog.classList.add("device-remote-fallback-open");
+  document.body.classList.add("device-remote-fallback-open");
+  deviceRemoteDialog.setAttribute("open", "");
+}
+
+function closeDeviceRemoteDialog() {
+  if (!deviceRemoteDialog.open) return;
+  if (typeof deviceRemoteDialog.close === "function") {
+    deviceRemoteDialog.close();
+    return;
+  }
+  deviceRemoteDialog.removeAttribute("open");
+  deviceRemoteDialog.classList.remove("device-remote-fallback-open");
+  document.body.classList.remove("device-remote-fallback-open");
+  deviceRemoteDialog.dispatchEvent(new Event("close"));
+}
+
+function deviceRemoteSend(message) {
+  if (deviceRemoteSocket?.readyState !== WebSocket.OPEN) return false;
+  deviceRemoteSocket.send(JSON.stringify(message));
+  return true;
+}
+
+function deviceRemoteGetLink(sessionId, code) {
+  const page = new URL("./remote-control.html", location.href);
+  page.hash = new URLSearchParams({ session_id: sessionId, code }).toString();
+  return page;
+}
+
+function deviceRemoteRenderQr(url) {
+  const host = $("#deviceRemoteQr");
+  host.replaceChildren();
+  const qr = qrcode(0, "M");
+  qr.addData(url, "Byte");
+  qr.make();
+  host.innerHTML = qr.createSvgTag({ cellSize: 4, margin: 4, scalable: true });
+  const svg = host.querySelector("svg");
+  if (svg) {
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "Scan to connect a phone remote");
+  }
+}
+
+function deviceRemoteCreateCursor() {
+  if (deviceRemoteCursor) return deviceRemoteCursor;
+  deviceRemoteCursor = document.createElement("div");
+  deviceRemoteCursor.className = "device-remote-cursor";
+  deviceRemoteCursor.setAttribute("aria-hidden", "true");
+  deviceRemoteCursor.innerHTML = '<svg viewBox="0 0 24 32" aria-hidden="true"><path d="M2 1v25l6.7-6.8 4.8 10.4 4.2-1.9-4.7-10.2H22L2 1Z" fill="#fff" stroke="#172b29" stroke-width="1.5" stroke-linejoin="round"/></svg>';
+  document.body.append(deviceRemoteCursor);
+  return deviceRemoteCursor;
+}
+
+function deviceRemoteNotifyFocus(target = document.activeElement) {
+  if (!deviceRemoteSession) return;
+  const frame = target === practiceMathEditorFrame || target?.tagName === "IFRAME" && target === practiceMathEditorFrame;
+  let editable = null;
+  if (frame) {
+    deviceRemoteTargetFrame = practiceMathEditorFrame;
+  } else {
+    deviceRemoteTargetFrame = null;
+    editable = target instanceof HTMLElement ? target : null;
+  }
+  const type = String(editable?.type || "").toLowerCase();
+  const password = type === "password";
+  const isTextField = editable && ((editable.matches("input, textarea") && !["checkbox", "radio", "button", "submit", "reset", "file", "color", "range", "hidden"].includes(type)) || editable.isContentEditable);
+  const keyboard = Boolean(frame || (isTextField && !password));
+  const value = password ? "" : frame ? (state.practiceEditorState?.latex || "") : isTextField && "value" in editable ? String(editable.value || "").slice(0, 4000) : "";
+  const label = frame ? "maths editor" : editable?.getAttribute("aria-label") || editable?.getAttribute("placeholder") || editable?.name || editable?.id || (editable?.tagName === "TEXTAREA" ? "answer box" : "selected control");
+  deviceRemoteSend({ type: "focus", keyboard, label: String(label).slice(0, 120), value });
+}
+
+function deviceRemoteConnectSocket(session) {
+  const socketUrl = pairingWebSocketUrl("device-remote", session.session_id);
+  socketUrl.searchParams.set("role", "host");
+  deviceRemoteSocket = new WebSocket(socketUrl);
+  deviceRemoteSocket.addEventListener("open", () => {
+    deviceRemoteSocket.send(JSON.stringify({ type: "authenticate", token: session.host_token }));
+    clearInterval(deviceRemoteHeartbeat);
+    deviceRemoteHeartbeat = setInterval(() => deviceRemoteSend({ type: "ping" }), 30_000);
+    deviceRemoteSetStatus(isLocalIntranetPage() ? "Ready. Scan the code or enter it on a phone using this Wi-Fi." : "Ready. Scan the code or enter it on your phone.");
+  });
+  deviceRemoteSocket.addEventListener("message", (event) => {
+    let message;
+    try { message = JSON.parse(event.data); } catch { return; }
+    if (message.type === "authenticated") {
+      deviceRemoteSetStatus(isLocalIntranetPage() ? "Ready. Scan the code or enter it on a phone using this Wi-Fi." : "Ready. Scan the code or enter it on your phone.");
+    } else if (message.type === "phone_connected") {
+      deviceRemotePhoneConnected = true;
+      $("#deviceRemoteBadge").hidden = false;
+      $("#deviceRemoteButton").textContent = "Phone connected";
+      deviceRemoteSetStatus("Phone connected. Tap a text or maths editor on the TV to open the phone keyboard.", "success");
+      const cursor = deviceRemoteCreateCursor();
+      cursor.style.left = `${deviceRemotePointer.x * innerWidth}px`;
+      cursor.style.top = `${deviceRemotePointer.y * innerHeight}px`;
+      cursor.classList.add("is-visible");
+      if (deviceRemoteDialog.open) {
+        deviceRemoteClosingAfterPair = true;
+        closeDeviceRemoteDialog();
+      }
+      deviceRemoteNotifyFocus();
+      deviceRemoteShareCanvasLink();
+    } else if (message.type === "phone_disconnected") {
+      deviceRemotePhoneConnected = false;
+      $("#deviceRemoteBadge").hidden = true;
+      $("#deviceRemoteButton").textContent = "▦ Connect phone · QR";
+      deviceRemoteSetStatus("Phone disconnected. Scan the code again to reconnect.", "error");
+      deviceRemoteCursor?.classList.remove("is-visible");
+    } else if (message.type === "pointer") {
+      deviceRemoteHandlePointer(message);
+    } else if (message.type === "text") {
+      deviceRemoteInsertText(message);
+    } else if (message.type === "key") {
+      deviceRemoteHandleKey(message.key);
+    }
+  });
+  deviceRemoteSocket.addEventListener("close", () => {
+    clearInterval(deviceRemoteHeartbeat);
+    deviceRemoteHeartbeat = 0;
+    deviceRemotePhoneConnected = false;
+    $("#deviceRemoteBadge").hidden = true;
+    $("#deviceRemoteButton").textContent = "▦ Connect phone · QR";
+    if (deviceRemoteSession) deviceRemoteSetStatus("The connection ended. Tap Connect phone · QR to start again.", "error");
+    deviceRemoteCursor?.classList.remove("is-visible");
+    deviceRemoteSocket = null;
+  });
+  deviceRemoteSocket.addEventListener("error", () => deviceRemoteSetStatus("Could not connect to the phone. Check the network and try again.", "error"));
+}
+
+async function startDeviceRemote() {
+  try {
+    openDeviceRemoteDialog();
+  } catch (error) {
+    showToast("Phone connection could not be opened. Reload the page and try again.");
+    return;
+  }
+  if (!isLocalIntranetPage() && !getAccessToken()) {
+    deviceRemoteSetStatus("Close this panel and sign in on the TV first. Then select Connect phone again.", "error");
+    return;
+  }
+  if (deviceRemoteSession && deviceRemoteSocket && deviceRemoteSocket.readyState < WebSocket.CLOSING) return;
+  if (deviceRemoteSession) stopDeviceRemote();
+  const requestId = ++deviceRemoteCreateRequest;
+  deviceRemoteSetStatus(isLocalIntranetPage() ? "Starting a local phone connection…" : "Starting phone connection…");
+  try {
+    const session = await postPairingJson("device-remote", "sessions");
+    if (requestId !== deviceRemoteCreateRequest || !deviceRemoteDialog.open) return;
+    deviceRemoteSession = session;
+    $("#deviceRemoteCode").textContent = session.pairing_code;
+    const page = deviceRemoteGetLink(session.session_id, session.pairing_code);
+    $("#deviceRemoteLink").href = page.href;
+    $("#deviceRemoteLink").textContent = page.host + page.pathname;
+    deviceRemoteRenderQr(page.href);
+    deviceRemoteConnectSocket(session);
+  } catch (error) {
+    deviceRemoteSetStatus(error.message || "Could not start the phone remote. Restart the local SharperTime page and try again.", "error");
+  }
+}
+
+function stopDeviceRemote() {
+  deviceRemoteCreateRequest += 1;
+  clearInterval(deviceRemoteHeartbeat);
+  deviceRemoteHeartbeat = 0;
+  if (deviceRemoteSocket && deviceRemoteSocket.readyState < WebSocket.CLOSING) {
+    if (deviceRemoteSocket.readyState === WebSocket.OPEN) deviceRemoteSend({ type: "cancel" });
+    deviceRemoteSocket.close();
+  }
+  deviceRemoteSocket = null;
+  deviceRemoteSession = null;
+  deviceRemotePhoneConnected = false;
+  $("#deviceRemoteBadge").hidden = true;
+  $("#deviceRemoteButton").textContent = "▦ Connect phone · QR";
+  deviceRemoteCursor?.classList.remove("is-visible");
+  $("#deviceRemoteCode").textContent = "------";
+  $("#deviceRemoteQr").replaceChildren();
+  deviceRemoteSetStatus("Phone connection closed.");
+}
+
+function deviceRemoteActiveEditor() {
+  if (deviceRemoteTargetFrame === practiceMathEditorFrame || document.activeElement === practiceMathEditorFrame) {
+    return practiceMathEditorFrame.contentWindow?.SharperMathEditor || null;
+  }
+  const active = document.activeElement;
+  if (active instanceof HTMLElement && active.isContentEditable) return active;
+  if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return active;
+  return null;
+}
+
+function deviceRemoteInsertText(message) {
+  const editor = deviceRemoteActiveEditor();
+  if (!editor || message.action === "replace") return;
+  const value = String(message.value || "").slice(0, 200);
+  if (editor && typeof editor.execute === "function") {
+    if (message.action === "backspace") editor.execute({ name: "backspace" });
+    else if (value) editor.execute({ name: "insertText", value });
+    return;
+  }
+  if (message.action === "backspace") {
+    if ("selectionStart" in editor && editor.selectionStart !== editor.selectionEnd) editor.setRangeText("", editor.selectionStart, editor.selectionEnd, "end");
+    else if ("selectionStart" in editor && editor.selectionStart > 0) editor.setRangeText("", editor.selectionStart - 1, editor.selectionEnd, "end");
+    else if (editor.isContentEditable) document.execCommand("delete", false);
+  } else if (message.action === "delete") {
+    if ("selectionStart" in editor && editor.selectionStart !== editor.selectionEnd) editor.setRangeText("", editor.selectionStart, editor.selectionEnd, "end");
+    else if ("selectionStart" in editor && editor.selectionStart < editor.value.length) editor.setRangeText("", editor.selectionStart, editor.selectionStart + 1, "end");
+    else if (editor.isContentEditable) document.execCommand("forwardDelete", false);
+  } else if (value && "setRangeText" in editor) {
+    const start = editor.selectionStart ?? editor.value.length;
+    const end = editor.selectionEnd ?? start;
+    editor.setRangeText(value, start, end, "end");
+  } else if (value && editor.isContentEditable) {
+    document.execCommand("insertText", false, value);
+  }
+  const inputEvent = typeof InputEvent === "function"
+    ? new InputEvent("input", { bubbles: true, inputType: message.action === "backspace" ? "deleteContentBackward" : "insertText", data: message.action === "backspace" ? null : value })
+    : new Event("input", { bubbles: true });
+  editor.dispatchEvent(inputEvent);
+}
+
+function deviceRemoteFocusNext(direction = 1) {
+  const selectors = "button:not([disabled]), a[href], input:not([disabled]), textarea:not([disabled]), select:not([disabled]), iframe";
+  const items = [...document.querySelectorAll(selectors)].filter((item) => item.getClientRects().length && !item.closest("[hidden]"));
+  const index = items.indexOf(document.activeElement);
+  const next = items[(index + direction + items.length) % items.length];
+  next?.focus({ preventScroll: true });
+}
+
+function deviceRemoteHandleKey(key) {
+  if (!key || key === "Disconnect") return;
+  if (key === "OpenCanvas") {
+    deviceRemoteOpenCanvas();
+    return;
+  }
+  const editor = deviceRemoteActiveEditor();
+  if (editor && typeof editor.execute === "function") {
+    const names = { Enter: "newLine", Backspace: "backspace", Delete: "delete", ArrowLeft: "moveLeft", ArrowRight: "moveRight", ArrowUp: "moveUp", ArrowDown: "moveDown", Home: "moveHome", End: "moveEnd" };
+    if (names[key]) editor.execute({ name: names[key] });
+    return;
+  }
+  if (key === "Tab") return deviceRemoteFocusNext(1);
+  if (key === "Escape") {
+    const openDialog = [...document.querySelectorAll("dialog[open]")].pop();
+    return openDialog?.close();
+  }
+  if (key === "PageDown" || key === "PageUp") {
+    $("#mainPanel")?.scrollBy({ top: key === "PageDown" ? window.innerHeight * .75 : -window.innerHeight * .75, behavior: "smooth" });
+    return;
+  }
+  if (key === "Enter" && editor instanceof HTMLInputElement) {
+    editor.form?.requestSubmit?.();
+    return;
+  }
+  if (key === "Enter" && editor instanceof HTMLTextAreaElement) return deviceRemoteInsertText({ action: "insert", value: "\n" });
+  if (["Backspace", "Delete"].includes(key)) return deviceRemoteInsertText({ action: key === "Backspace" ? "backspace" : "delete", value: "" });
+  if (["ArrowLeft", "ArrowRight"].includes(key) && editor && "selectionStart" in editor) {
+    const next = Math.max(0, Math.min(editor.value.length, (editor.selectionStart || 0) + (key === "ArrowLeft" ? -1 : 1)));
+    editor.setSelectionRange(next, next);
+    return;
+  }
+  if (["ArrowLeft", "ArrowUp"].includes(key) && !editor) return deviceRemoteFocusNext(-1);
+  if (["ArrowRight", "ArrowDown"].includes(key) && !editor) return deviceRemoteFocusNext(1);
+  const target = editor instanceof HTMLElement ? editor : document.activeElement;
+  if (target instanceof HTMLElement && (key === "Enter" || key === " ") && /^(BUTTON|A)$/.test(target.tagName)) target.click();
+  else if (target instanceof HTMLElement) target.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }));
+}
+
+function deviceRemoteHandlePointer(message) {
+  const action = String(message.action || "");
+  const pointer = deviceRemotePointer;
+  if (action === "scroll") {
+    const amount = Math.max(-1200, Math.min(1200, Number(message.deltaY) || 0));
+    const scrollable = deviceRemoteFindScrollTarget(pointer.x * innerWidth, pointer.y * innerHeight, "y");
+    scrollable?.scrollBy({ top: amount, behavior: "smooth" });
+    return;
+  }
+  if (action === "pan") {
+    const dx = Math.max(-1, Math.min(1, Number(message.dx) || 0));
+    const dy = Math.max(-1, Math.min(1, Number(message.dy) || 0));
+    let scrollable = deviceRemoteFindScrollTarget(pointer.x * innerWidth, pointer.y * innerHeight);
+    const mainPanel = $("#mainPanel");
+    if (scrollable === document.scrollingElement && mainPanel) scrollable = mainPanel;
+    scrollable?.scrollBy({ left: -dx * innerWidth * 1.7, top: -dy * innerHeight * 1.7, behavior: "auto" });
+    return;
+  }
+  if (action === "zoom") {
+    const factor = Math.max(0.75, Math.min(1.35, Number(message.factor) || 1));
+    const nextScale = Math.max(0.6, Math.min(2.5, deviceRemoteZoomScale * factor));
+    if (Math.abs(nextScale - deviceRemoteZoomScale) < 0.002) return;
+    const anchorX = pointer.x * innerWidth;
+    const anchorY = pointer.y * innerHeight;
+    const ratio = nextScale / deviceRemoteZoomScale;
+    const nextScrollX = (window.scrollX + anchorX) * ratio - anchorX;
+    const nextScrollY = (window.scrollY + anchorY) * ratio - anchorY;
+    deviceRemoteZoomScale = nextScale;
+    document.documentElement.style.zoom = String(nextScale);
+    requestAnimationFrame(() => window.scrollTo({ left: Math.max(0, nextScrollX), top: Math.max(0, nextScrollY), behavior: "auto" }));
+    return;
+  }
+  if (action === "cancel") {
+    if (pointer.down) deviceRemoteDispatchPointer("up");
+    pointer.down = false;
+    pointer.target = null;
+    pointer.dragged = false;
+    return;
+  }
+  if (action === "move") {
+    const dx = Math.max(-1, Math.min(1, Number(message.dx) || 0));
+    const dy = Math.max(-1, Math.min(1, Number(message.dy) || 0));
+    pointer.x = Math.max(0, Math.min(1, pointer.x + dx * 1.65));
+    pointer.y = Math.max(0, Math.min(1, pointer.y + dy * 1.65));
+    if (pointer.down) {
+      const distance = Math.hypot((pointer.x - pointer.startX) * innerWidth, (pointer.y - pointer.startY) * innerHeight);
+      if (distance > 8) pointer.dragged = true;
+    }
+    return deviceRemoteDispatchPointer("move");
+  }
+  if (action === "down") {
+    pointer.down = true;
+    pointer.downAt = Date.now();
+    pointer.startX = pointer.x;
+    pointer.startY = pointer.y;
+    pointer.dragged = false;
+    pointer.target = deviceRemoteResolvePointerTarget(pointer.x * innerWidth, pointer.y * innerHeight);
+    return deviceRemoteDispatchPointer("down");
+  }
+  if (action === "up") {
+    deviceRemoteDispatchPointer("up");
+    if (pointer.down && !pointer.dragged && Date.now() - pointer.downAt < 900 && pointer.target?.element?.click) pointer.target.element.click();
+    pointer.down = false;
+    pointer.target = null;
+    deviceRemoteNotifyFocus();
+    return;
+  }
+  if (action === "click") {
+    const target = deviceRemoteResolvePointerTarget(pointer.x * innerWidth, pointer.y * innerHeight);
+    if (message.button === 2 && target?.element) target.element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true, button: 2, clientX: target.clientX, clientY: target.clientY }));
+    else if (target?.element) target.element.click();
+    deviceRemoteNotifyFocus();
+  }
+}
+
+function deviceRemoteFindScrollTarget(x, y, axis = "both") {
+  const element = document.elementFromPoint(x, y);
+  let current = element instanceof HTMLElement ? element : null;
+  while (current && current !== document.body && current !== document.documentElement) {
+    const style = getComputedStyle(current);
+    const canScrollX = current.scrollWidth > current.clientWidth + 2 && /(auto|scroll)/.test(style.overflowX);
+    const canScrollY = current.scrollHeight > current.clientHeight + 2 && /(auto|scroll)/.test(style.overflowY);
+    if (axis === "x" ? canScrollX : axis === "y" ? canScrollY : canScrollX || canScrollY) return current;
+    current = current.parentElement;
+  }
+  return document.scrollingElement;
+}
+
+function deviceRemoteResolvePointerTarget(x, y) {
+  const outer = document.elementFromPoint(x, y);
+  if (outer === practiceMathEditorFrame) {
+    try {
+      const rect = practiceMathEditorFrame.getBoundingClientRect();
+      const doc = practiceMathEditorFrame.contentDocument;
+      const element = doc?.elementFromPoint(x - rect.left, y - rect.top);
+      if (element) return { element, clientX: x - rect.left, clientY: y - rect.top };
+    } catch { /* The frame is same-origin in this app; ignore an unavailable editor. */ }
+  }
+  return outer ? { element: outer, clientX: x, clientY: y } : null;
+}
+
+function deviceRemoteDispatchPointer(action) {
+  const pointer = deviceRemotePointer;
+  const x = pointer.x * innerWidth;
+  const y = pointer.y * innerHeight;
+  const cursor = deviceRemoteCreateCursor();
+  const topDialog = [...document.querySelectorAll("dialog[open]")].pop();
+  const pointerLayer = topDialog || document.body;
+  if (cursor.parentNode !== pointerLayer) pointerLayer.append(cursor);
+  cursor.style.left = `${x}px`;
+  cursor.style.top = `${y}px`;
+  const resolved = action === "move" && pointer.down ? pointer.target : deviceRemoteResolvePointerTarget(x, y);
+  const target = resolved?.element;
+  if (!target || target.nodeType !== 1) return;
+  if (target === workingCanvas || target.closest?.(".editor-surface")) return;
+  const common = { bubbles: true, cancelable: true, pointerId: 97, pointerType: "mouse", isPrimary: true, clientX: resolved.clientX, clientY: resolved.clientY, button: 0, buttons: pointer.down ? 1 : 0 };
+  if (typeof PointerEvent === "function") target.dispatchEvent(new PointerEvent(`pointer${action}`, common));
+  if (action === "down") target.dispatchEvent(new MouseEvent("mousedown", common));
+  else if (action === "move") target.dispatchEvent(new MouseEvent("mousemove", common));
+  else if (action === "up") target.dispatchEvent(new MouseEvent("mouseup", common));
+}
+
+deviceRemoteButton.addEventListener("click", startDeviceRemote);
+$("#deviceRemoteDialog [data-close-dialog]").addEventListener("click", closeDeviceRemoteDialog);
+$("#stopDeviceRemote").addEventListener("click", stopDeviceRemote);
+deviceRemoteDialog.addEventListener("close", () => {
+  if (deviceRemoteClosingAfterPair) {
+    deviceRemoteClosingAfterPair = false;
+    return;
+  }
+  stopDeviceRemote();
+});
+document.addEventListener("focusin", (event) => {
+  if (event.target?.closest?.("#workspace")) deviceRemoteNotifyFocus(event.target);
+}, true);
+document.addEventListener("input", (event) => {
+  if (event.target === document.activeElement && event.target?.closest?.("#workspace")) deviceRemoteNotifyFocus(event.target);
+}, true);
+
 const workingCanvas = $("#workingCanvas");
 let phoneCanvasSocket = null;
 let phoneCanvasSession = null;
@@ -2164,6 +2648,35 @@ function phoneCanvasRemoteUrl(sessionId, code) {
     : new URL("./canvas-remote.html", location.href);
   remoteUrl.hash = new URLSearchParams({ session_id: sessionId, code }).toString();
   return remoteUrl;
+}
+
+function deviceRemoteShareCanvasLink() {
+  if (!phoneCanvasSession?.session_id || !phoneCanvasSession?.pairing_code) return false;
+  const remoteUrl = phoneCanvasRemoteUrl(phoneCanvasSession.session_id, phoneCanvasSession.pairing_code);
+  return deviceRemoteSend({ type: "canvas_link", href: remoteUrl.href });
+}
+
+function deviceRemoteOpenCanvas() {
+  const dialog = $("#canvasDialog");
+  if (!dialog.open) {
+    if (state.view === "practice" && state.currentPracticeQuestion) {
+      openCanvas("practice", state.currentPracticeQuestion);
+    } else if (state.view === "exam" && state.examCurrentQuestion) {
+      openCanvas("exam", state.examCurrentQuestion);
+    } else if (state.view === "ask" && state.selectedPaperQuestion) {
+      openCanvas("ask-write", null);
+    } else {
+      openCanvas("ask-write", null);
+    }
+  }
+  const panel = $("#phoneCanvasPairPanel");
+  panel.hidden = false;
+  $("#usePhoneCanvas").setAttribute("aria-expanded", "true");
+  if (phoneCanvasSession) {
+    deviceRemoteShareCanvasLink();
+    return;
+  }
+  startPhoneCanvas();
 }
 
 function renderPhoneCanvasQr(url) {
@@ -2209,11 +2722,26 @@ function phoneCanvasSnapshot() {
       frame: stroke.remoteFrame,
       width: stroke.remoteWidth,
       color: stroke.color,
+      tool: stroke.tool || "pen",
       points: selected,
     });
     remaining -= count;
   }
   return result.reverse();
+}
+
+function invalidateCanvasTranscription() {
+  if (!state.canvas) return;
+  state.canvas.revision = (state.canvas.revision || 0) + 1;
+  state.canvas.transcribedPhoto = null;
+  state.canvas.photoPromise = null;
+  const panel = $("#canvasTranscriptionPanel");
+  if (panel) panel.hidden = true;
+  const status = $("#canvasTranscriptionStatus");
+  if (status) {
+    status.textContent = "";
+    status.dataset.loading = "false";
+  }
 }
 
 function applyPhoneCanvasMessage(message) {
@@ -2233,6 +2761,7 @@ function applyPhoneCanvasMessage(message) {
   } else if (message.type === "phone_disconnected") {
     phoneCanvasSetStatus("Phone disconnected. Scan the code again to reconnect.", "error");
   } else if (message.type === "stroke_start") {
+    invalidateCanvasTranscription();
     const first = phoneCanvasMapPoint(message.point, message.frame);
     state.canvas.strokes.push({
       id: String(message.id || ""),
@@ -2241,7 +2770,8 @@ function applyPhoneCanvasMessage(message) {
       remoteWidth: Number(message.width) || 2.2,
       remotePoints: [message.point],
       points: [{ x: first.x, y: first.y }],
-      color: "#162a29",
+      color: message.tool === "eraser" ? "#fff" : "#162a29",
+      tool: message.tool === "eraser" ? "eraser" : "pen",
       width: (Number(message.width) || 2.2) * first.scale,
     });
     drawCanvas();
@@ -2263,9 +2793,13 @@ function applyPhoneCanvasMessage(message) {
       const stroke = state.canvas.strokes[i];
       if (stroke.source === "phone" && (!targetId || stroke.id === targetId)) { index = i; break; }
     }
-    if (index >= 0) state.canvas.strokes.splice(index, 1);
+    if (index >= 0) {
+      invalidateCanvasTranscription();
+      state.canvas.strokes.splice(index, 1);
+    }
     drawCanvas();
   } else if (message.type === "clear") {
+    invalidateCanvasTranscription();
     state.canvas.strokes = state.canvas.strokes.filter((stroke) => stroke.source !== "phone");
     drawCanvas();
   } else if (message.type === "submit") {
@@ -2279,6 +2813,7 @@ function stopPhoneCanvas({ notify = true } = {}) {
   phoneCanvasCloseTimer = 0;
   clearInterval(phoneCanvasHeartbeat);
   phoneCanvasHeartbeat = 0;
+  if (notify) deviceRemoteSend({ type: "canvas_unavailable" });
   if (phoneCanvasSocket && phoneCanvasSocket.readyState < WebSocket.CLOSING) {
     if (notify) phoneCanvasSend({ type: "cancel" });
     phoneCanvasSocket.close();
@@ -2300,7 +2835,7 @@ async function startPhoneCanvas() {
   button.disabled = true;
   phoneCanvasSetStatus("Connecting…");
   try {
-    const session = await postJson("/api/canvas-pairing/sessions", {});
+    const session = await postPairingJson("canvas-pairing", "sessions");
     phoneCanvasSession = session;
     $("#phoneCanvasPairCode").textContent = session.pairing_code;
     const remoteUrl = phoneCanvasRemoteUrl(session.session_id, session.pairing_code);
@@ -2309,16 +2844,16 @@ async function startPhoneCanvas() {
     $("#phoneCanvasRemoteLink").href = remotePage.href;
     $("#phoneCanvasRemoteLink").textContent = remotePage.host + remotePage.pathname;
     renderPhoneCanvasQr(remoteUrl.href);
+    deviceRemoteSend({ type: "canvas_link", href: remoteUrl.href });
 
-    const socketUrl = new URL(`${API_BASE_URL}/api/canvas-pairing/ws/${encodeURIComponent(session.session_id)}`);
-    socketUrl.protocol = socketUrl.protocol === "https:" ? "wss:" : "ws:";
+    const socketUrl = pairingWebSocketUrl("canvas-pairing", session.session_id);
     socketUrl.searchParams.set("role", "host");
     phoneCanvasSocket = new WebSocket(socketUrl);
     phoneCanvasSocket.addEventListener("open", () => {
       phoneCanvasSocket.send(JSON.stringify({ type: "authenticate", token: session.host_token }));
       clearInterval(phoneCanvasHeartbeat);
       phoneCanvasHeartbeat = setInterval(() => phoneCanvasSend({ type: "ping" }), 30_000);
-      phoneCanvasSetStatus("Starting secure phone connection…");
+      phoneCanvasSetStatus(isLocalIntranetPage() ? "Waiting for your phone on this Wi-Fi…" : "Waiting for your phone…");
       button.disabled = false;
     });
     phoneCanvasSocket.addEventListener("message", (event) => {
@@ -2334,7 +2869,7 @@ async function startPhoneCanvas() {
       phoneCanvasSocket = null;
       button.disabled = false;
     });
-    phoneCanvasSocket.addEventListener("error", () => phoneCanvasSetStatus("Could not connect to your phone. Check your connection and try again.", "error"));
+    phoneCanvasSocket.addEventListener("error", () => phoneCanvasSetStatus("Could not connect to your phone. Check that both devices are on the same Wi-Fi and try again.", "error"));
   } catch (error) {
     phoneCanvasSetStatus(error.message || "Could not start a phone connection.", "error");
     phoneCanvasSession = null;
@@ -2349,10 +2884,21 @@ function openCanvas(mode, question) {
   state.canvasContext = mode;
   state.canvasQuestion = question || null;
   state.canvasReturnFocus = document.activeElement;
-  state.canvas = { mode: mode.endsWith("graph") ? "graph" : "write", strokes: [], scale: 1, offsetX: 0, offsetY: 0, pan: false, active: null, drag: null, pointers: new Map(), pinch: null, size: { width: 0, height: 0 } };
+  state.canvas = { mode: mode.endsWith("graph") ? "graph" : "write", strokes: [], scale: 1, offsetX: 0, offsetY: 0, pan: false, zoom: false, eraser: false, revision: 0, transcribedPhoto: null, photoPromise: null, active: null, drag: null, pointers: new Map(), pinch: null, size: { width: 0, height: 0 } };
   $("#canvasTitle").textContent = mode.endsWith("graph") ? "Draw a graph" : mode === "ask-write" ? "Write words / maths" : "Write or draw your answer";
   $("#canvasPanButton").setAttribute("aria-pressed", "false");
-  $("#canvasPanButton").textContent = "☝ Pan";
+  $("#canvasPanButton").setAttribute("aria-label", "Enable pan mode");
+  $("#canvasPanLabel").textContent = "Pan";
+  $("#canvasZoomButton").setAttribute("aria-pressed", "false");
+  $("#canvasZoomButton").setAttribute("aria-label", "Enable zoom");
+  $("#canvasZoomButton").textContent = "Zoom off";
+  $("#canvasEraserButton").setAttribute("aria-pressed", "false");
+  $("#canvasEraserButton").setAttribute("aria-label", "Enable eraser");
+  $("#canvasEraserButton").textContent = "Eraser";
+  $("#canvasReadMathButton").hidden = mode.endsWith("graph");
+  $("#canvasTranscriptionPanel").hidden = true;
+  $("#canvasTranscriptionText").value = "";
+  setStatus($("#canvasTranscriptionStatus"), "");
   const askPaperQuestion = (mode === "ask-write" || mode === "ask-graph") && state.selectedPaperQuestion;
   const hasQuestionSidebar = mode.startsWith("practice") || mode === "exam" || Boolean(askPaperQuestion);
   const sidebar = $("#canvasQuestionSidebar");
@@ -2398,6 +2944,7 @@ function resizeCanvas() {
   if (!rect.width || !rect.height) return;
   const old = state.canvas.size || { width: 0, height: 0 };
   if (old.width && old.height && (old.width !== rect.width || old.height !== rect.height)) {
+    if (state.canvas.strokes.length) invalidateCanvasTranscription();
     const xRatio = rect.width / old.width;
     const yRatio = rect.height / old.height;
     state.canvas.strokes.forEach((stroke) => stroke.points.forEach((point) => { point.x *= xRatio; point.y *= yRatio; }));
@@ -2430,7 +2977,7 @@ function drawCanvas() {
   state.canvas.strokes.forEach((stroke) => {
     if (!stroke.points.length) return;
     context.beginPath();
-    context.strokeStyle = stroke.color || "#162a29";
+    context.strokeStyle = stroke.tool === "eraser" ? "#fff" : (stroke.color || "#162a29");
     context.lineWidth = (stroke.width || 2.2) / state.canvas.scale;
     context.moveTo(stroke.points[0].x, stroke.points[0].y);
     if (stroke.points.length === 1) context.lineTo(stroke.points[0].x + 0.1, stroke.points[0].y + 0.1);
@@ -2440,8 +2987,161 @@ function drawCanvas() {
   context.setTransform(1, 0, 0, 1, 0, 0);
 }
 
+function fitCanvasToWriting() {
+  const rect = workingCanvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) return;
+  let hasPoints = false;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  state.canvas.strokes.forEach((stroke) => stroke.points.forEach((point) => {
+    hasPoints = true;
+    minX = Math.min(minX, point.x);
+    maxX = Math.max(maxX, point.x);
+    minY = Math.min(minY, point.y);
+    maxY = Math.max(maxY, point.y);
+  }));
+  if (!hasPoints) {
+    state.canvas.scale = 1;
+    state.canvas.offsetX = 0;
+    state.canvas.offsetY = 0;
+    drawCanvas();
+    return;
+  }
+  const padding = 28;
+  const width = Math.max(8, maxX - minX);
+  const height = Math.max(8, maxY - minY);
+  const fitScale = Math.min((rect.width - padding * 2) / width, (rect.height - padding * 2) / height);
+  state.canvas.scale = Math.min(50, Math.max(.0001, fitScale));
+  state.canvas.offsetX = (rect.width / 2 - (minX + maxX) / 2) * state.canvas.scale;
+  state.canvas.offsetY = (rect.height / 2 - (minY + maxY) / 2) * state.canvas.scale;
+  drawCanvas();
+}
+
 function canvasDistance(a, b) { return Math.hypot(a.x - b.x, a.y - b.y); }
 function canvasMidpoint(a, b) { return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }; }
+
+function assertCanvasSnapshotCurrent(canvas, revision) {
+  if (state.canvas !== canvas || canvas.revision !== revision) {
+    throw new Error("The canvas changed while it was being processed. Please try again.");
+  }
+}
+
+async function ensureCanvasPhoto(canvas, revision) {
+  if (canvas.transcribedPhoto) return canvas.transcribedPhoto;
+  if (canvas.photoPromise) return canvas.photoPromise;
+  const photoPromise = (async () => {
+    fitCanvasToWriting();
+    const blob = await new Promise((resolve, reject) => workingCanvas.toBlob(
+      (value) => value ? resolve(value) : reject(new Error("The canvas image could not be created.")),
+      "image/png",
+    ));
+    assertCanvasSnapshotCurrent(canvas, revision);
+    const file = new File([blob], "sharpertime-canvas-" + Date.now() + ".png", { type: "image/png" });
+    const uploadContext = canvas.mode.startsWith("practice") ? "practice" : canvas.mode === "exam" ? "exam" : "ask";
+    const inspectionId = await ensureInspection(uploadContext);
+    assertCanvasSnapshotCurrent(canvas, revision);
+    const form = new FormData();
+    form.set("photo_type", "school_answer_working");
+    form.set("photo", file, file.name);
+    const uploaded = await uploadForm("/api/inspections/" + encodeURIComponent(inspectionId) + "/upload-photo", form);
+    assertCanvasSnapshotCurrent(canvas, revision);
+    const photoId = uploaded.id || uploaded.photo_id;
+    if (!photoId) throw new Error("The canvas image could not be saved.");
+    canvas.transcribedPhoto = { inspectionId, photoId, file, blob };
+    return canvas.transcribedPhoto;
+  })();
+  canvas.photoPromise = photoPromise;
+  try {
+    return await photoPromise;
+  } finally {
+    if (canvas.photoPromise === photoPromise) canvas.photoPromise = null;
+  }
+}
+
+function setCanvasTranscriptionLoading(loading, message = "") {
+  const status = $("#canvasTranscriptionStatus");
+  status.textContent = message;
+  status.dataset.loading = String(loading);
+}
+
+$("#canvasReadMathButton").addEventListener("click", async (event) => {
+  const button = event.currentTarget;
+  const canvas = state.canvas;
+  const revision = canvas.revision;
+  if (!canvas.strokes.length) {
+    showToast("Write some maths on the canvas first.");
+    return;
+  }
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  button.textContent = "Reading…";
+  $("#canvasTranscriptionPanel").hidden = false;
+  $("#canvasTranscriptionText").value = "";
+  setCanvasTranscriptionLoading(true, "Reading your maths, please wait…");
+  try {
+    const photo = await ensureCanvasPhoto(canvas, revision);
+    assertCanvasSnapshotCurrent(canvas, revision);
+    const result = await postJson("/api/education/photo/transcribe-math", {
+      inspection_id: photo.inspectionId,
+      photo_id: photo.photoId,
+      subject: "Mathematics",
+      grade: Math.max(8, Math.min(12, Number(state.grade) || 12)),
+      context: [
+        "Handwriting canvas. Recognize only the learner's handwritten mathematical expressions as editable LaTeX. Do not solve, correct, or add steps.",
+        state.canvasQuestion?.question_text_latex || state.canvasQuestion?.accessible_text || state.canvasQuestion?.question_text || state.canvasQuestion?.text || "",
+      ].filter(Boolean).join("\n"),
+      ai_tier: "unimernet",
+    });
+    assertCanvasSnapshotCurrent(canvas, revision);
+    const latex = String(result.editable_latex || "").trim();
+    $("#canvasTranscriptionText").value = latex;
+    setCanvasTranscriptionLoading(false, latex
+      ? "Review and edit the recognized maths before using it."
+      : "No maths was recognized. You can enter it here or submit the handwriting as-is.");
+    $("#canvasTranscriptionText").focus({ preventScroll: true });
+  } catch {
+    if (state.canvas === canvas && canvas.revision === revision) {
+      setCanvasTranscriptionLoading(false, "Could not read the maths this time. You can still submit your handwriting.");
+    }
+  } finally {
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+    button.textContent = "Read maths";
+  }
+});
+
+$("#canvasTranscriptionClose").addEventListener("click", () => {
+  $("#canvasTranscriptionPanel").hidden = true;
+  setCanvasTranscriptionLoading(false);
+});
+
+$("#canvasTranscriptionUse").addEventListener("click", () => {
+  const value = $("#canvasTranscriptionText").value.trim();
+  if (!value) {
+    setCanvasTranscriptionLoading(false, "Enter or recognize some maths first.");
+    return;
+  }
+  if (state.canvasContext.startsWith("practice")) {
+    if (getPracticeEditorLatex().trim()) practiceEditorCommand({ name: "newLine" });
+    if (!practiceEditorCommand({ name: "insertLatex", value })) {
+      showToast("The maths editor is not ready yet. Please try again.");
+      return;
+    }
+    setPracticeKeyboardVisible(true);
+  } else if (state.canvasContext === "exam") {
+    const answer = $("#examAnswer");
+    answer.value = [answer.value.trimEnd(), value].filter(Boolean).join(answer.value.trim() ? "\n" : "");
+    answer.dispatchEvent(new Event("input", { bubbles: true }));
+    answer.focus({ preventScroll: true });
+  } else {
+    appendToComposer(value);
+  }
+  $("#canvasTranscriptionPanel").hidden = true;
+  setCanvasTranscriptionLoading(false);
+  showToast("Recognized maths added. Check it before submitting your answer.");
+});
 
 workingCanvas.addEventListener("pointerdown", (event) => {
   const current = state.canvas;
@@ -2449,16 +3149,22 @@ workingCanvas.addEventListener("pointerdown", (event) => {
   workingCanvas.setPointerCapture(event.pointerId);
   current.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
   if (current.pointers.size === 2) {
-    if (current.active) { current.strokes.pop(); current.active = null; }
+    if (current.active) {
+      invalidateCanvasTranscription();
+      current.strokes.pop();
+      current.active = null;
+    }
     const pair = [...current.pointers.values()];
-    current.pinch = { distance: canvasDistance(pair[0], pair[1]), scale: current.scale, offsetX: current.offsetX, offsetY: current.offsetY, midpoint: canvasMidpoint(pair[0], pair[1]) };
+    current.pinch = current.zoom ? { distance: canvasDistance(pair[0], pair[1]), scale: current.scale, offsetX: current.offsetX, offsetY: current.offsetY, midpoint: canvasMidpoint(pair[0], pair[1]) } : null;
     return;
   }
   if (current.pan) {
     current.drag = { x: event.clientX, y: event.clientY, offsetX: current.offsetX, offsetY: current.offsetY };
     return;
   }
-  const stroke = { points: [canvasPoint(event)], color: "#162a29", width: event.pointerType === "pen" ? 2.5 : 2.2 };
+  invalidateCanvasTranscription();
+  const eraser = current.eraser;
+  const stroke = { points: [canvasPoint(event)], color: eraser ? "#fff" : "#162a29", tool: eraser ? "eraser" : "pen", width: eraser ? 24 : (event.pointerType === "pen" ? 2.5 : 2.2) };
   current.strokes.push(stroke);
   current.active = stroke;
   drawCanvas();
@@ -2471,7 +3177,7 @@ workingCanvas.addEventListener("pointermove", (event) => {
   const rect = workingCanvas.getBoundingClientRect();
   if (pair.length >= 2 && current.pinch) {
     const midpoint = canvasMidpoint(pair[0], pair[1]);
-    const scale = Math.min(4, Math.max(0.45, current.pinch.scale * canvasDistance(pair[0], pair[1]) / Math.max(1, current.pinch.distance)));
+    const scale = Math.min(50, Math.max(.0001, current.pinch.scale * canvasDistance(pair[0], pair[1]) / Math.max(1, current.pinch.distance)));
     const fx = current.pinch.midpoint.x - rect.left - rect.width / 2;
     const fy = current.pinch.midpoint.y - rect.top - rect.height / 2;
     current.offsetX = fx - (fx - current.pinch.offsetX) * scale / current.pinch.scale + midpoint.x - current.pinch.midpoint.x;
@@ -2494,13 +3200,14 @@ workingCanvas.addEventListener("pointermove", (event) => {
   if (!current.pointers.size) { current.active = null; current.drag = null; }
 }));
 workingCanvas.addEventListener("wheel", (event) => {
+  if (!state.canvas.zoom) return;
   event.preventDefault();
   const current = state.canvas;
   const rect = workingCanvas.getBoundingClientRect();
   const fx = event.clientX - rect.left - rect.width / 2;
   const fy = event.clientY - rect.top - rect.height / 2;
   const oldScale = current.scale;
-  current.scale = Math.min(4, Math.max(0.45, oldScale * (event.deltaY < 0 ? 1.12 : 0.89)));
+  current.scale = Math.min(50, Math.max(.0001, oldScale * (event.deltaY < 0 ? 1.12 : 0.89)));
   current.offsetX = fx - (fx - current.offsetX) * current.scale / oldScale;
   current.offsetY = fy - (fy - current.offsetY) * current.scale / oldScale;
   drawCanvas();
@@ -2509,18 +3216,34 @@ workingCanvas.addEventListener("wheel", (event) => {
 $("#canvasPanButton").addEventListener("click", (event) => {
   state.canvas.pan = !state.canvas.pan;
   event.currentTarget.setAttribute("aria-pressed", String(state.canvas.pan));
-  event.currentTarget.textContent = state.canvas.pan ? "☝ Pan on" : "☝ Pan";
+  event.currentTarget.setAttribute("aria-label", state.canvas.pan ? "Disable pan mode" : "Enable pan mode");
+  $("#canvasPanLabel").textContent = state.canvas.pan ? "Pan on" : "Pan";
+});
+$("#canvasZoomButton").addEventListener("click", (event) => {
+  state.canvas.zoom = !state.canvas.zoom;
+  state.canvas.pinch = null;
+  event.currentTarget.setAttribute("aria-pressed", String(state.canvas.zoom));
+  event.currentTarget.setAttribute("aria-label", state.canvas.zoom ? "Disable zoom" : "Enable zoom");
+  event.currentTarget.textContent = state.canvas.zoom ? "Zoom on" : "Zoom off";
+});
+$("#canvasEraserButton").addEventListener("click", (event) => {
+  state.canvas.eraser = !state.canvas.eraser;
+  event.currentTarget.setAttribute("aria-pressed", String(state.canvas.eraser));
+  event.currentTarget.setAttribute("aria-label", state.canvas.eraser ? "Disable eraser" : "Enable eraser");
+  event.currentTarget.textContent = state.canvas.eraser ? "Eraser on" : "Eraser";
 });
 $("#canvasDialog").addEventListener("close", () => {
   if (state.canvasReturnFocus instanceof HTMLElement) state.canvasReturnFocus.focus({ preventScroll: true });
 });
-$("#canvasFitButton").addEventListener("click", () => { state.canvas.scale = 1; state.canvas.offsetX = 0; state.canvas.offsetY = 0; drawCanvas(); });
+$("#canvasFitButton").addEventListener("click", fitCanvasToWriting);
 $("#undoCanvas").addEventListener("click", () => {
+  if (state.canvas.strokes.length) invalidateCanvasTranscription();
   state.canvas.strokes.pop();
   drawCanvas();
   if (phoneCanvasSession) phoneCanvasSend({ type: "setup", strokes: phoneCanvasSnapshot() });
 });
 $("#clearCanvas").addEventListener("click", () => {
+  if (state.canvas.strokes.length) invalidateCanvasTranscription();
   state.canvas.strokes = [];
   drawCanvas();
   if (phoneCanvasSession) phoneCanvasSend({ type: "setup", strokes: [] });
@@ -2539,7 +3262,11 @@ $("#closeCanvasQuestion").addEventListener("click", () => {
 $("#canvasDialog").addEventListener("close", () => {
   if (state.canvasReturnFocus instanceof HTMLElement) state.canvasReturnFocus.focus({ preventScroll: true });
 });
-new ResizeObserver(() => { if ($("#canvasDialog").open) resizeCanvas(); }).observe($(".drawing-surface"));
+if (window.ResizeObserver) {
+  new ResizeObserver(() => { if ($("#canvasDialog").open) resizeCanvas(); }).observe($(".drawing-surface"));
+} else {
+  window.addEventListener("resize", () => { if ($("#canvasDialog").open) resizeCanvas(); });
+}
 window.addEventListener("resize", () => { if ($("#canvasDialog").open) resizeCanvas(); });
 
 $("#usePhoneCanvas").addEventListener("click", async () => {
@@ -2565,6 +3292,8 @@ $("#canvasDialog").addEventListener("close", () => {
 
 $("#finishCanvas").addEventListener("click", async () => {
   const button = $("#finishCanvas");
+  const canvas = state.canvas;
+  const revision = canvas.revision;
   if (state.canvasContext.startsWith("practice") && state.practiceAnswerPhotoIds.length >= 3) {
     showToast("The limit is three handwritten images per practice attempt.");
     if (phoneCanvasSession) phoneCanvasSend({ type: "submission_error", message: "This attempt already has the maximum number of handwritten images." });
@@ -2572,16 +3301,10 @@ $("#finishCanvas").addEventListener("click", async () => {
   }
   button.disabled = true;
   try {
-    const blob = await new Promise((resolve, reject) => workingCanvas.toBlob((value) => value ? resolve(value) : reject(new Error("The canvas image could not be created.")), "image/png"));
-    const file = new File([blob], "sharpertime-canvas-" + Date.now() + ".png", { type: "image/png" });
-    const uploadContext = state.canvasContext.startsWith("practice") ? "practice" : state.canvasContext === "exam" ? "exam" : "ask";
-    const inspectionId = await ensureInspection(uploadContext);
-    const form = new FormData();
-    form.set("photo_type", state.canvasContext + "_handwritten_working");
-    form.set("photo", file, file.name);
-    const uploaded = await uploadForm("/api/inspections/" + encodeURIComponent(inspectionId) + "/upload-photo", form);
-    const photoId = uploaded.id || uploaded.photo_id;
-    if (!photoId) throw new Error("The canvas working was not attached. Please try again.");
+    fitCanvasToWriting();
+    const photo = await ensureCanvasPhoto(canvas, revision);
+    assertCanvasSnapshotCurrent(canvas, revision);
+    const { file, blob, photoId } = photo;
     const previewUrl = URL.createObjectURL(blob);
     if (state.canvasContext === "ask-write" || state.canvasContext === "ask-graph") {
       state.askPhotos.push({ id: photoId, filename: file.name, previewUrl });

@@ -2,9 +2,15 @@
   "name": "sharpertime-web-app",
   "private": true,
   "scripts": {
+    "build": "npm run build:modern && npm run build:legacy",
+    "build:modern": "esbuild app.js --bundle --format=esm --target=es2020 --minify --outfile=app.bundle.js",
     "build:legacy": "esbuild app.js --bundle --format=iife --target=chrome60 --minify --outfile=legacy-app.js"
   },
   "devDependencies": {
     "esbuild": "0.28.2"
+  },
+  "dependencies": {
+    "@pipecat-ai/client-js": "1.14.0",
+    "@pipecat-ai/small-webrtc-transport": "1.11.0"
   }
 }

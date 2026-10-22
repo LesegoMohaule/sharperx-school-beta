@@ -1,0 +1,4 @@
+pipecat-ai[webrtc,silero]==1.13.0
+fastapi>=0.115.6,<1
+uvicorn[standard]>=0.32,<1
+httpx>=0.27,<1

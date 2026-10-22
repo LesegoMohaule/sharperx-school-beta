@@ -12,7 +12,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icon.svg">
-  <link rel="stylesheet" href="./styles.css?v=26">
+  <link rel="stylesheet" href="./styles.css?v=27">
   <script>
     try {
       if (/[?&](email|password)=/i.test(window.location.search) && window.history && window.history.replaceState) {
@@ -99,9 +99,21 @@
                   <button class="tool-button" type="button" data-file-trigger="paperInput" aria-label="Upload a question paper">▤<span>Paper</span></button>
                   <button class="tool-button" type="button" data-file-trigger="memoInput" aria-label="Upload a marking memo">▧<span>Memo</span></button>
                   <button id="voiceButton" class="tool-button" type="button" aria-label="Record a voice note">🎙<span>Voice</span></button>
+                  <button id="askLiveTutorButton" class="tool-button live-tutor-launch" data-live-start="ask" type="button" aria-label="Start a live audio tutoring session">◖<span>Talk to tutor</span></button>
                   <button class="tool-button" type="button" data-open-canvas="ask-write">✎ / ☝<span>Write</span></button>
                   <button class="tool-button" type="button" data-open-canvas="ask-graph">✎ / ☝<span>Draw graph</span></button>
                 </div>
+                <section class="live-tutor-panel" data-live-panel="ask" aria-label="Live tutor audio controls" hidden>
+                  <div class="live-tutor-session-copy"><strong>Live tutor</strong><span data-live-status role="status" aria-live="polite">Connecting status will appear here.</span></div>
+                  <label class="live-tutor-voice-label">Voice on this device<select data-live-voice aria-label="Choose a voice installed on this device"></select></label>
+                  <div class="live-tutor-actions">
+                    <button class="button subtle" data-live-action="mute" type="button" aria-pressed="false">Mute microphone</button>
+                    <button class="button subtle" data-live-action="stop-speaking" type="button">Stop speaking</button>
+                    <button class="button subtle" data-live-action="repeat" type="button" disabled>Repeat tutor</button>
+                    <button class="button subtle" data-live-action="end" type="button">End session</button>
+                  </div>
+                  <p class="live-tutor-note">Audio is sent to SharperTime for transcription. The live voice service does not store recordings. Captions stay in this conversation.</p>
+                </section>
                 <label class="composer-label" for="askInput">Your question or instruction</label>
                 <textarea id="askInput" rows="3" placeholder="Type a question or instruction. Add your working if you want it marked." maxlength="20000"></textarea>
                 <div class="composer-footer"><span id="voiceStatus" class="muted" role="status"></span><button id="sendAskButton" class="button primary send-button" type="submit">Send <span aria-hidden="true">➤</span></button></div>
@@ -133,7 +145,19 @@
             <article id="practiceQuestionCard" class="question-card" hidden>
               <div class="question-card-top"><span id="practiceQuestionMeta" class="eyebrow"></span><button id="practiceFullScreen" class="button subtle" type="button" hidden>View full screen</button></div>
               <h2>Question</h2><div id="practiceQuestionText" class="math-content"></div><div id="practiceVisuals" class="question-visuals"></div>
-              <div class="hint-actions"><button id="practiceHintButton" class="button secondary" type="button">Show a hint</button><button id="practiceFormulaButton" class="button subtle" type="button">Show formulae</button></div>
+              <div class="hint-actions"><button id="practiceHintButton" class="button secondary" type="button">Show a hint</button><button id="practiceFormulaButton" class="button subtle" type="button">Show formulae</button><button id="practiceLiveTutorButton" class="button secondary live-tutor-launch" data-live-start="practice" type="button">Talk through this question</button></div>
+              <section class="live-tutor-panel practice-live-tutor-panel" data-live-panel="practice" aria-label="Live tutor audio controls" hidden>
+                <div class="live-tutor-session-copy"><strong>Live tutor</strong><span data-live-status role="status" aria-live="polite">Connecting status will appear here.</span></div>
+                <label class="live-tutor-voice-label">Voice on this device<select data-live-voice aria-label="Choose a voice installed on this device"></select></label>
+                <div class="live-tutor-actions">
+                  <button class="button subtle" data-live-action="mute" type="button" aria-pressed="false">Mute microphone</button>
+                  <button class="button subtle" data-live-action="stop-speaking" type="button">Stop speaking</button>
+                  <button class="button subtle" data-live-action="repeat" type="button" disabled>Repeat tutor</button>
+                  <button class="button subtle" data-live-action="end" type="button">End session</button>
+                </div>
+                <div class="live-tutor-transcript" data-live-transcript aria-live="polite" aria-label="Live tutoring transcript"></div>
+                <p class="live-tutor-note">Audio is sent to SharperTime for transcription. The live voice service does not store recordings. Speaking an answer never submits it for marking.</p>
+              </section>
               <div id="practiceHints" class="hint-content" hidden></div>
               <section class="practice-response" aria-label="Your working and answer">
                 <div class="practice-response-heading"><strong>Your working and answer</strong><span class="muted">Enter steps on separate lines; keep your final answer last.</span></div>
@@ -254,9 +278,9 @@
       var appScript = document.createElement("script");
       if (supportsModules && supportsModernSyntax) {
         appScript.type = "module";
-        appScript.src = "./app.js?v=30";
+        appScript.src = "./app.bundle.js?v=1";
       } else {
-        appScript.src = "./legacy-app.js?v=8";
+        appScript.src = "./legacy-app.js?v=9";
       }
       appScript.onload = function () {
         loginButton.disabled = false;

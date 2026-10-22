@@ -1,0 +1,26 @@
+[Unit]
+Description=SharperTime Pipecat realtime voice service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=sharpertime-voice
+Group=sharpertime-voice
+WorkingDirectory=/opt/sharpertime-voice
+EnvironmentFile=/opt/sharpertime-voice/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=PIPECAT_LOG_LLM_CONTEXT=off
+Environment=PIPECAT_LOG_LEVEL=INFO
+ExecStart=/opt/sharpertime-voice/.venv/bin/uvicorn server:app --host 127.0.0.1 --port 7860 --workers 1 --no-access-log
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadWritePaths=/opt/sharpertime-voice
+
+[Install]
+WantedBy=multi-user.target

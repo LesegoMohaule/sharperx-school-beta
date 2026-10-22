@@ -1,4 +1,5 @@
 import { API_BASE_URL, apiRequest, getAccessToken, getJson, postForm, postJson, postPairingJson, pairingWebSocketUrl, isLocalIntranetPage, setAccessToken, uploadForm } from "./api.js?v=18";
+import { installRealtimeTutor } from "./realtime-tutor.js";
 import qrcode from "./vendor/qrcode-generator.js?v=17";
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -159,6 +160,7 @@ function showWorkspace() {
 }
 
 function clearPracticeSessionSelection() {
+  realtimeTutor?.stopIfContext("practice");
   for (const key of Object.values(PRACTICE_SESSION_KEYS)) sessionStorage.removeItem(key);
   state.practiceQuestions = [];
   state.currentPracticeQuestion = null;
@@ -187,6 +189,7 @@ async function checkSession() {
 }
 
 window.addEventListener("sharperx:auth-expired", () => {
+  void realtimeTutor.stop();
   state.user = null;
   if (deviceRemoteDialog?.open) closeDeviceRemoteDialog();
   showAuth();
@@ -228,6 +231,7 @@ $("#logoutButton").addEventListener("click", async () => {
 
 function activateView(viewName) {
   if (!APP_VIEWS.has(viewName)) return;
+  if (realtimeTutor.activeContext && realtimeTutor.activeContext !== viewName) void realtimeTutor.stop();
   state.view = viewName;
   sessionStorage.setItem("sharperx_web_current_view", viewName);
   $$("[data-view]").forEach((button) => button.classList.toggle("is-active", button.dataset.view === viewName));
@@ -367,6 +371,7 @@ $("#paperInput").addEventListener("change", (event) => uploadPaper(event.current
 $("#memoInput").addEventListener("change", (event) => uploadPaper(event.currentTarget.files?.[0], "memo"));
 
 $("#showPaperQuestionButton").addEventListener("click", async () => {
+  realtimeTutor.stopIfContext("ask");
   const questionNumber = $("#paperQuestionNumber").value.trim();
   if (!state.paperDocumentId || !state.inspectionId) return setStatus($("#paperStatus"), "Upload a question paper first.", "error");
   if (!questionNumber) return setStatus($("#paperStatus"), "Enter the question number shown on the paper.", "error");
@@ -411,6 +416,7 @@ $("#paperSnapshotImage").addEventListener("click", () => openImageViewer(state.p
 $("#openPaperSnapshot").addEventListener("click", () => openImageViewer(state.paperPageImage, `Question ${state.selectedPaperQuestion?.number || ""} · full page`));
 
 $("#clearPaperButton").addEventListener("click", () => {
+  realtimeTutor.stopIfContext("ask");
   state.paperDocumentId = "";
   state.memoDocumentId = "";
   state.paperFileName = "";
@@ -424,6 +430,7 @@ $("#clearPaperButton").addEventListener("click", () => {
 
 async function sendAsk(event) {
   event.preventDefault();
+  realtimeTutor.stopIfContext("ask");
   const input = $("#askInput");
   const text = input.value.trim();
   const selected = state.selectedPaperQuestion;
@@ -491,6 +498,69 @@ function requireLunaXhigh(result, operation) {
     throw new Error(`${operation} could not be completed. Your work is still here; please retry.`);
   }
 }
+
+function practiceVoiceTranscriptMessage(role, text) {
+  const transcript = $("[data-live-transcript]", $("[data-live-panel='practice']"));
+  if (!transcript) return;
+  const item = document.createElement("div");
+  item.className = "live-tutor-transcript-item";
+  const label = document.createElement("strong");
+  label.textContent = role === "learner" ? "You said" : "Tutor";
+  const body = document.createElement("p");
+  if (role === "learner") body.textContent = text;
+  else renderMath(body, text);
+  item.append(label, body);
+  transcript.append(item);
+  while (transcript.children.length > 20) transcript.firstElementChild.remove();
+  transcript.scrollTop = transcript.scrollHeight;
+}
+
+const realtimeTutor = installRealtimeTutor({
+  apiBaseUrl: API_BASE_URL,
+  getAccessToken,
+  ensureInspection: (context) => ensureInspection(context === "practice" ? "practice" : "ask"),
+  getContext: async (context, inspectionId) => {
+    if (context === "practice") {
+      const question = state.currentPracticeQuestion;
+      if (!question) throw new Error("Choose a practice question before starting a live tutor session.");
+      return {
+        context_type: "practice",
+        grade: formatGrade(question.grade || $("#practiceGrade").value),
+        topic: question.topic || $("#practiceSubtopic").selectedOptions[0]?.textContent || "Mathematics",
+        inspection_id: inspectionId,
+        question_text: questionLabel(question),
+        question_id: question.question_id || question.bank_question_id || question.id || null,
+        bank_version: question.bank_version || "",
+        marks: Number.parseInt(question.marks, 10) || 0,
+        hints_used: state.hintIndex,
+        learner_working: getPracticeEditorLatex().trim().slice(0, 12000),
+      };
+    }
+    const selected = state.selectedPaperQuestion;
+    const history = $$(".message", $("#chatMessages")).slice(-8).map((message) => ({
+      role: message.classList.contains("user-message") ? "learner" : "tutor",
+      text: $("p", message)?.textContent?.trim().slice(0, 1200) || "",
+    })).filter((turn) => turn.text);
+    return {
+      context_type: "ask",
+      grade: state.grade,
+      topic: selected ? "Question paper" : null,
+      inspection_id: inspectionId,
+      question_text: selected?.text || $("#askInput").value.trim() || null,
+      question_paper_document_id: selected ? state.paperDocumentId : null,
+      question_paper_question_number: selected ? String(selected.number || "") : null,
+      conversation_history: history,
+    };
+  },
+  onTranscript: (context, text) => {
+    if (context === "practice") practiceVoiceTranscriptMessage("learner", text);
+    else appendMessage(text, { mine: true, kind: "Voice transcript" });
+  },
+  onTutorReply: (context, text) => {
+    if (context === "practice") practiceVoiceTranscriptMessage("tutor", text);
+    else appendMessage(text, { kind: "Live tutor" });
+  },
+});
 
 $("#askForm").addEventListener("submit", sendAsk);
 $$("[data-open-canvas]").forEach((button) => button.addEventListener("click", () => openCanvas(button.dataset.openCanvas)));
@@ -1190,6 +1260,7 @@ async function preparePracticeVisuals(question) {
 }
 
 async function selectPracticeQuestion(question) {
+  realtimeTutor.stopIfContext("practice");
   state.currentPracticeQuestion = question;
   const questionId = String(question.question_id || question.bank_question_id || question.id || "");
   state.practiceInspectionId = sessionStorage.getItem(practiceQuestionStorageKey(PRACTICE_SESSION_KEYS.inspectionPrefix, questionId)) || "";

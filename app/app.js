@@ -1,11 +1,22 @@
-import { API_BASE_URL, apiRequest, getAccessToken, getJson, postForm, postJson, postPairingJson, pairingWebSocketUrl, isLocalIntranetPage, setAccessToken, uploadForm } from "./api.js?v=18";
+import { API_BASE_URL, apiRequest, getAccessToken, getClientDeviceLabel, getJson, postForm, postJson, postPairingJson, pairingWebSocketUrl, isLocalIntranetPage, setAccessToken, uploadForm } from "./api.js?v=25";
 import { installRealtimeTutor } from "./realtime-tutor.js";
+import { buildLiveTutorPayload, selectLiveSpeechTranscript } from "./live-tutor-payload.mjs";
+import { supportedLocalAsrLanguage } from "./tutor-languages.mjs";
+import { ensureMathJax, renderTextbookMath as renderMath, splitTextbookMath } from "./math-display.js";
 import qrcode from "./vendor/qrcode-generator.js?v=17";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
+function sanitizeLearnerFacingText(value) {
+  return String(value || "")
+    .replace(/gpt\s*[- ]?\s*6\s*[- ]?\s*luna/gi, "tutor")
+    .replace(/\bluna\b/gi, "tutor")
+    .replace(/\bunimernet\b/gi, "handwriting recognition")
+    .trim();
+}
+const VOICE_SERVICE_BASE_URL = (window.SHARPERTIME_VOICE_BASE_URL || `${API_BASE_URL}/voice`).replace(/\/$/, "");
 const APP_VIEWS = new Set(["ask", "practice", "exam", "lessons", "reports"]);
-let mathJaxLoadPromise = null;
+const TUTOR_WELCOME_KEY_PREFIX = "sharperx_tutor_welcomed_v1_";
 const savedView = sessionStorage.getItem("sharperx_web_current_view");
 const PRACTICE_SESSION_KEYS = {
   grade: "sharperx_web_practice_grade",
@@ -21,16 +32,23 @@ function practiceQuestionStorageKey(prefix, questionId = state.currentPracticeQu
 }
 
 function updateAppViewportHeight() {
-  const height = window.visualViewport?.height || window.innerHeight;
+  // Desktop browser zoom changes the visual viewport scale and can report a
+  // transiently tiny height. Use the layout viewport on desktop so canvas
+  // sizing does not collapse when the learner presses Ctrl +/-.
+  const desktop = matchMedia("(hover: hover) and (pointer: fine)").matches;
+  const height = desktop ? window.innerHeight : (window.visualViewport?.height || window.innerHeight);
   document.documentElement.style.setProperty("--app-viewport-height", `${Math.round(height)}px`);
 }
 
 updateAppViewportHeight();
 window.addEventListener("resize", updateAppViewportHeight, { passive: true });
-window.visualViewport?.addEventListener("resize", updateAppViewportHeight, { passive: true });
+if (!matchMedia("(hover: hover) and (pointer: fine)").matches) {
+  window.visualViewport?.addEventListener("resize", updateAppViewportHeight, { passive: true });
+}
 
 const state = {
   user: null,
+  tutorLoginGreeting: "",
   grade: formatGrade(sessionStorage.getItem("sharperx_web_grade") || 12),
   view: APP_VIEWS.has(savedView) ? savedView : "ask",
   inspectionId: sessionStorage.getItem("sharperx_web_inspection_id") || "",
@@ -48,6 +66,7 @@ const state = {
   practiceQuestions: [],
   currentPracticeQuestion: null,
   hintIndex: 0,
+  practiceHintsUsed: 0,
   practiceVisuals: [],
   examTopics: [],
   exam: null,
@@ -63,22 +82,28 @@ const state = {
   attachedCanvasPhotoId: "",
   practiceAnswerPhotoIds: [],
   practiceAnswerPhotoPreviews: [],
-  practiceVoiceRecorder: null,
-  practiceVoiceChunks: [],
-  practiceVoiceTranscript: "",
-  practiceVoiceMath: "",
   practiceEditorReady: false,
   practiceEditorState: null,
-  practiceKeyboardMode: "Alphabet",
+  practiceKeyboardMode: "Basic",
   reportObjectUrls: new Set(),
   recorder: null,
-  audioChunks: [],
-  canvas: { mode: "write", strokes: [], scale: 1, offsetX: 0, offsetY: 0, pan: false, zoom: false, eraser: false, revision: 0, transcribedPhoto: null, photoPromise: null, active: null, pointers: new Map(), pinch: null, size: { width: 0, height: 0 } },
+  voiceRecorderContext: "",
+  voiceReviewContext: "",
+  canvas: { mode: "write", strokes: [], scale: 1, offsetX: 0, offsetY: 0, pan: false, zoom: false, eraser: false, revision: 0, transcribedPhoto: null, photoPromise: null, active: null, pointers: new Map(), pinch: null, size: { width: 0, height: 0 }, readingConfirmed: false, readingApplied: false, confirmedReading: null, readingAlternatives: [], graphWorkflow: null },
   imageView: { scale: 1, x: 0, y: 0, pointers: new Map(), pinch: null, drag: null },
   toastTimer: 0,
+  welcomeAudioTimer: 0,
+  creditRefreshTimer: 0,
+  creditRefreshPromise: null,
+  creditRefreshInterval: 0,
+  sessionHeartbeatInterval: 0,
+  sessionHeartbeatInFlight: false,
+  sessionHeartbeatFailures: 0,
 };
 
 const dbPromise = openReportsDatabase();
+let paperCatalogPromise = null;
+let activePaperCatalog = { grade: 12, source: "stanmore", entries: [], newestFirst: true };
 
 function setStatus(element, text, kind = "") {
   if (!element) return;
@@ -93,39 +118,6 @@ function showToast(message) {
   toast.classList.add("is-visible");
   clearTimeout(state.toastTimer);
   state.toastTimer = setTimeout(() => toast.classList.remove("is-visible"), 2800);
-}
-
-function renderMath(target, text) {
-  const raw = String(text || "").replace(/\\vspace\{[^}]*\}/g, "\n").replace(/\\\\\s+/g, "\n");
-  const normalized = /\\\(|\\\[|\$\$/.test(raw) ? raw : raw.split(/\r?\n/).map((line) => {
-    let result = line.replace(/(^|[^\\])\bLongrightarrow\b/g, "$1\\(\\Longrightarrow\\)");
-    if (/[=^√±]/.test(result) && /\bimplies\b/i.test(result)) result = result.replace(/\bimplies\b/gi, "\\(\\Rightarrow\\)");
-    result = result.replace(/(^|[^\\])\b([A-Za-z][A-Za-z0-9_]*)\s*\^\s*\{?([^\s{}]+)\}?/g, "$1\\($2^{$3}\\)");
-    return result;
-  }).join("\n");
-  target.innerHTML = escapeHtml(normalized).replace(/\r?\n/g, "<br>");
-  if (/\\\(|\\\[|\$\$/.test(normalized)) {
-    ensureMathJax().then((mathJax) => {
-      if (!mathJax) return;
-      mathJax.typesetClear?.([target]);
-      return mathJax.typesetPromise([target]);
-    }).catch(() => {});
-  }
-}
-
-function ensureMathJax() {
-  if (window.MathJax?.typesetPromise) return Promise.resolve(window.MathJax);
-  if (!mathJaxLoadPromise) {
-    mathJaxLoadPromise = new Promise((resolve) => {
-      const script = document.createElement("script");
-      script.src = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js";
-      script.async = true;
-      script.onload = () => resolve(window.MathJax?.typesetPromise ? window.MathJax : null);
-      script.onerror = () => resolve(null);
-      document.head.appendChild(script);
-    });
-  }
-  return mathJaxLoadPromise;
 }
 
 function escapeHtml(value) {
@@ -144,11 +136,42 @@ function formatGrade(value) {
   return Number.isInteger(parsed) ? Math.max(8, Math.min(12, parsed)) : 12;
 }
 
+function tutorWelcomeStorageKey() {
+  const user = state.user || {};
+  const identity = String(user.id ?? user.user_id ?? user.email ?? user.username ?? "default").trim().toLocaleLowerCase();
+  let hash = 2166136261;
+  for (let index = 0; index < identity.length; index += 1) {
+    hash ^= identity.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${TUTOR_WELCOME_KEY_PREFIX}${(hash >>> 0).toString(36)}`;
+}
+
+function prepareTutorWelcome() {
+  const message = $("#appWelcomeMessage");
+  if (!message || !state.user) return "";
+  const key = tutorWelcomeStorageKey();
+  const returning = localStorage.getItem(key) === "1";
+  state.tutorLoginGreeting = returning ? "returning" : "first";
+  localStorage.setItem(key, "1");
+  message.textContent = returning
+    ? "Hi, welcome back! I'm here to help with maths and show you how to use the app. To talk to me and ask a question, press Talk to tutor. Then press Voice, speak, and press Voice again when you're finished. You can also type a question or ask me for help with any app tool."
+    : "Welcome to SharperTime! I'm here to help you with maths and show you how to use the app. To talk to me and ask a question, press Talk to tutor. Then press Voice, speak, and press Voice again when you're finished. You can also type a question or ask me for help with any app tool.";
+  return message.textContent;
+}
+
 function showWorkspace() {
+  const welcomeMessage = prepareTutorWelcome();
   $("#authScreen").hidden = true;
   $("#workspace").hidden = false;
   document.documentElement.classList.remove("checking-session");
+  updatePrimarySessionStatus();
+  startSessionHeartbeat();
   $("#accountLabel").textContent = state.user?.full_name || state.user?.email || "";
+  void refreshAiCreditBalance();
+  if (!state.creditRefreshInterval) {
+    state.creditRefreshInterval = window.setInterval(() => void refreshAiCreditBalance(), 60_000);
+  }
   ["#globalGrade", "#practiceGrade", "#examGrade", "#lessonGrade"].forEach((selector) => {
     $(selector).value = String(state.grade);
   });
@@ -157,6 +180,84 @@ function showWorkspace() {
   renderSourceLinks();
   activateView(state.view);
   restoreExamSession();
+  return welcomeMessage;
+}
+
+function renderAiCreditBalance(balance) {
+  const badge = $("#aiCreditBalance");
+  const value = $("#aiCreditsRemaining");
+  if (!badge || !value) return;
+  const exempt = balance?.credit_exempt === true || state.user?.role === "admin";
+  const remaining = Number(balance?.ai_credits_remaining);
+  value.textContent = exempt
+    ? "Unlimited"
+    : Number.isFinite(remaining)
+      ? new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }).format(Math.max(0, remaining))
+      : "—";
+  badge.classList.remove("is-loading", "is-error");
+  badge.setAttribute("aria-label", exempt ? "Unlimited AI credits" : "AI credits remaining: " + value.textContent);
+  badge.title = exempt ? "Administrator access" : "Your remaining SharperTime AI credits";
+}
+
+async function refreshAiCreditBalance() {
+  if (!state.user || !getAccessToken()) return;
+  if (state.creditRefreshPromise) return state.creditRefreshPromise;
+  const badge = $("#aiCreditBalance");
+  badge?.classList.add("is-loading");
+  state.creditRefreshPromise = getJson("/api/accounts/credits")
+    .then((balance) => renderAiCreditBalance(balance))
+    .catch((error) => {
+      if (error?.status !== 401 && badge) {
+        badge.classList.remove("is-loading");
+        badge.classList.add("is-error");
+        const value = $("#aiCreditsRemaining");
+        if (value) value.textContent = "—";
+        badge.setAttribute("aria-label", "AI credit balance unavailable");
+        badge.title = "Could not refresh the AI credit balance";
+      }
+    })
+    .finally(() => { state.creditRefreshPromise = null; });
+  return state.creditRefreshPromise;
+}
+
+window.addEventListener("sharperx:credits-refresh", () => {
+  clearTimeout(state.creditRefreshTimer);
+  state.creditRefreshTimer = setTimeout(() => void refreshAiCreditBalance(), 180);
+});
+window.addEventListener("focus", () => void refreshAiCreditBalance());
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) void refreshAiCreditBalance();
+});
+
+function playTutorWelcome(text, { force = false } = {}) {
+  if (!text || !state.user) return;
+  const sessionKey = `${tutorWelcomeStorageKey()}_spoken`;
+  if (!force && sessionStorage.getItem(sessionKey) === "1") {
+    state.tutorLoginGreeting = "";
+    return;
+  }
+  sessionStorage.setItem(sessionKey, "1");
+  state.tutorLoginGreeting = "";
+  const status = $("#welcomeAudioStatus");
+  clearTimeout(state.welcomeAudioTimer);
+  if (status) status.textContent = "Playing your welcome message…";
+  state.welcomeAudioTimer = setTimeout(() => {
+    if (status) status.textContent = "If you don’t hear the welcome, tap Listen to welcome to play it.";
+  }, 2500);
+  realtimeTutor.speakReply(text, "ask", {
+    onStart: () => {
+      clearTimeout(state.welcomeAudioTimer);
+      if (status) status.textContent = "Welcome message is playing.";
+    },
+    onComplete: () => {
+      clearTimeout(state.welcomeAudioTimer);
+      if (status) status.textContent = "Welcome message finished.";
+    },
+    onError: () => {
+      clearTimeout(state.welcomeAudioTimer);
+      if (status) status.textContent = "Audio didn’t play automatically. Tap Listen to welcome to try again.";
+    },
+  });
 }
 
 function clearPracticeSessionSelection() {
@@ -171,16 +272,62 @@ function clearPracticeSessionSelection() {
 }
 
 function showAuth() {
+  stopSessionHeartbeat();
   $("#workspace").hidden = true;
   $("#authScreen").hidden = false;
   document.documentElement.classList.remove("checking-session");
+}
+
+function updatePrimarySessionStatus(message = "") {
+  const status = $("#primarySessionStatus");
+  if (!status) return;
+  const label = getClientDeviceLabel() || state.user?.active_device?.label || "this device";
+  const text = message || `${label} · Active`;
+  status.textContent = text;
+  status.classList.toggle("is-error", Boolean(message));
+  status.title = message || `Your SharperTime account is active on this ${label}.`;
+  status.setAttribute("aria-label", message || `Signed in and active on this ${label}`);
+}
+
+function startSessionHeartbeat() {
+  if (!getAccessToken() || !state.user) return;
+  state.sessionHeartbeatFailures = 0;
+  const sendHeartbeat = async () => {
+    if (!state.user || !getAccessToken() || state.sessionHeartbeatInFlight) return;
+    state.sessionHeartbeatInFlight = true;
+    try {
+      await postJson("/api/auth/heartbeat", {});
+      state.sessionHeartbeatFailures = 0;
+      updatePrimarySessionStatus();
+    } catch (error) {
+      if (error?.status !== 401) {
+        state.sessionHeartbeatFailures += 1;
+        // A single transient heartbeat failure should not make an active
+        // long-running tutor request look disconnected.
+        if (state.sessionHeartbeatFailures >= 2) updatePrimarySessionStatus("Connection interrupted · reconnecting");
+      }
+    } finally {
+      state.sessionHeartbeatInFlight = false;
+    }
+  };
+  clearInterval(state.sessionHeartbeatInterval);
+  void sendHeartbeat();
+  state.sessionHeartbeatInterval = window.setInterval(sendHeartbeat, 15_000);
+}
+
+function stopSessionHeartbeat() {
+  clearInterval(state.sessionHeartbeatInterval);
+  state.sessionHeartbeatInterval = 0;
+  state.sessionHeartbeatInFlight = false;
+  state.sessionHeartbeatFailures = 0;
 }
 
 async function checkSession() {
   if (!getAccessToken()) return showAuth();
   try {
     state.user = await getJson("/api/auth/me");
-    showWorkspace();
+    const welcomeMessage = showWorkspace();
+    playTutorWelcome(welcomeMessage);
   } catch (error) {
     setAccessToken("");
     showAuth();
@@ -188,31 +335,66 @@ async function checkSession() {
   }
 }
 
-window.addEventListener("sharperx:auth-expired", () => {
+window.addEventListener("sharperx:auth-expired", (event) => {
   void realtimeTutor.stop();
+  if (state.user) sessionStorage.removeItem(`${tutorWelcomeStorageKey()}_spoken`);
   state.user = null;
+  stopDeviceRemote();
+  stopPhoneCanvas({ notify: false });
   if (deviceRemoteDialog?.open) closeDeviceRemoteDialog();
   showAuth();
-  setStatus($("#loginStatus"), "Your session has expired. Sign in again.", "error");
+  setStatus($("#loginStatus"), event.detail?.message || "Your session has ended. Sign in again.", "error");
+});
+
+window.addEventListener("storage", (event) => {
+  if (event.key !== "sharperx_access_token" || event.newValue || !state.user) return;
+  void realtimeTutor.stop();
+  stopSessionHeartbeat();
+  state.user = null;
+  showAuth();
+  setStatus($("#loginStatus"), "You signed out in another tab. Sign in again to continue.", "error");
+});
+
+window.addEventListener("offline", () => {
+  if (state.user) updatePrimarySessionStatus("Connection lost · reconnecting");
+});
+window.addEventListener("online", () => {
+  if (state.user) startSessionHeartbeat();
 });
 
 $("#loginForm").addEventListener("submit", async (event) => {
   event.preventDefault();
+  realtimeTutor.prepareSpeechFromGesture();
   const loginForm = event.currentTarget;
   const button = $("button[type='submit']", loginForm);
   const form = new FormData(loginForm);
+  const credentials = {
+    email: String(form.get("email") || "").trim(),
+    password: String(form.get("password") || ""),
+  };
   button.disabled = true;
   setStatus($("#loginStatus"), "Signing in…");
   try {
-    const result = await postForm("/api/auth/login", {
-      email: String(form.get("email") || "").trim(),
-      password: String(form.get("password") || ""),
-    }, { auth: false });
+    let result;
+    try {
+      result = await postForm("/api/auth/login", credentials, { auth: false, deviceTracking: true });
+    } catch (error) {
+      const activeSession = error?.data?.detail;
+      if (error?.status !== 409 || activeSession?.code !== "active_session") throw error;
+      const device = activeSession.device_label || "another device";
+      const takeOver = window.confirm(`Your account is active on ${device}.\n\nWould you like to close that session and sign in on this device?`);
+      if (!takeOver) {
+        setStatus($("#loginStatus"), `Your session on ${device} is still active.`, "error");
+        return;
+      }
+      result = await postForm("/api/auth/login", { ...credentials, takeover: "true" }, { auth: false, deviceTracking: true });
+    }
     if (!result.access_token) throw new Error("Sign in could not be completed. Please try again.");
     setAccessToken(result.access_token);
     state.user = result.user || {};
     loginForm.reset();
-    showWorkspace();
+    const welcomeMessage = showWorkspace();
+    playTutorWelcome(welcomeMessage);
     showToast("Signed in");
   } catch (error) {
     setStatus($("#loginStatus"), error.message, "error");
@@ -222,6 +404,8 @@ $("#loginForm").addEventListener("submit", async (event) => {
 });
 
 $("#logoutButton").addEventListener("click", async () => {
+  if (state.user) sessionStorage.removeItem(`${tutorWelcomeStorageKey()}_spoken`);
+  try { await discardSessionPaperUploads(); } catch { /* Sign-out must remain available if cleanup cannot reach the server. */ }
   try { await postJson("/api/auth/logout", {}); } catch { /* local sign-out still completes */ }
   setAccessToken("");
   state.user = null;
@@ -264,17 +448,19 @@ $("#globalGrade").addEventListener("change", (event) => {
   renderSourceLinks();
 });
 
-function appendMessage(text, { mine = false, kind = "", imageUrl = "", actions = [] } = {}) {
+function appendMessage(text, { mine = false, kind = "", imageUrl = "", actions = [], structuredText = "" } = {}) {
   const article = document.createElement("article");
   article.className = `message ${mine ? "user-message" : "assistant-message"}`;
-  if (kind) {
+  const messageText = mine ? String(text || "") : sanitizeLearnerFacingText(text);
+  const displayKind = mine ? String(kind || "") : sanitizeLearnerFacingText(kind);
+  if (displayKind) {
     const label = document.createElement("span");
     label.className = "message-kind";
-    label.textContent = kind;
+    label.textContent = displayKind;
     article.append(label);
   }
   const body = document.createElement("p");
-  renderMath(body, text);
+  renderMath(body, structuredText && !mine ? sanitizeLearnerFacingText(structuredText) : messageText);
   article.append(body);
   if (imageUrl) {
     const image = document.createElement("img");
@@ -301,7 +487,35 @@ function appendMessage(text, { mine = false, kind = "", imageUrl = "", actions =
   return article;
 }
 
-function ensureInspection(context = "ask") {
+function askConversationHistory(limit = 12) {
+  return $$(".message", $("#chatMessages")).slice(-limit).map((message) => ({
+    role: message.classList.contains("user-message") ? "learner" : "tutor",
+    text: $("p", message)?.textContent?.trim().slice(0, 2400) || "",
+  })).filter((turn) => turn.text);
+}
+
+function repairFourTermSequenceOcr(value) {
+  let text = String(value || "");
+  const context = [
+    /\bfour\s+terms\b/i,
+    /\bfirst\s+three\s+terms\b/i,
+    /\blast\s+three\s+terms\b/i,
+    /\barithmetic\s+sequence\b/i,
+    /\bgeometric\s+sequence\b/i,
+  ];
+  if (!context.every((pattern) => pattern.test(text))) return text;
+
+  text = text.replace(
+    /(first\s+three\s+terms\s*,?)(.*?)(\s+form\s+an\s+arithmetic\s+sequence)/is,
+    (_match, lead, _ocrTerms, tail) => `${lead.replace(/\s+$/, "")} T_1; T_2 and T_3${tail}`,
+  );
+  return text.replace(
+    /(last\s+three\s+terms\s*,?)(.*?)(\s+form\s+a\s+geometric\s+sequence)/is,
+    (_match, lead, _ocrTerms, tail) => `${lead.replace(/\s+$/, "")} T_2; T_3 and T_4${tail}`,
+  );
+}
+
+function ensureInspection(context = "ask", options = {}) {
   const stateKey = context === "practice" ? "practiceInspectionId" : context === "exam" ? "examInspectionId" : "inspectionId";
   const storageKey = context === "practice"
     ? practiceQuestionStorageKey(PRACTICE_SESSION_KEYS.inspectionPrefix)
@@ -312,7 +526,7 @@ function ensureInspection(context = "ask") {
   form.set("client_name", state.user?.full_name || state.user?.email || "SharperTime learner");
   form.set("site_address", "SharperTime mathematics workspace");
   form.set("inspection_type", "mathematics");
-  return uploadForm("/api/inspections/create", form).then((result) => {
+  return uploadForm("/api/inspections/create", form, options).then((result) => {
     const id = result.id || result.inspection_id;
     if (!id) throw new Error("The upload could not be started. Please try again.");
     state[stateKey] = id;
@@ -331,6 +545,55 @@ function restorePaperSession() {
   }
 }
 
+function clearPaperSessionLocal() {
+  state.paperDocumentId = "";
+  state.memoDocumentId = "";
+  state.paperFileName = "";
+  state.selectedPaperQuestion = null;
+  state.paperPageImage = "";
+  sessionStorage.removeItem("sharperx_web_paper_id");
+  sessionStorage.removeItem("sharperx_web_memo_id");
+  sessionStorage.removeItem("sharperx_web_paper_name");
+  $("#paperTools").hidden = true;
+}
+
+async function deleteSessionPaperDocument(documentId, inspectionId = state.inspectionId, keepalive = false) {
+  if (!documentId || !inspectionId) return;
+  try {
+    await apiRequest(`/api/inspections/${encodeURIComponent(inspectionId)}/documents/${encodeURIComponent(documentId)}`, {
+      method: "DELETE",
+      keepalive,
+    });
+  } catch (error) {
+    if (error.status !== 404 || !/^(?:Inspection not found|Session paper was not found)$/i.test(error.message)) throw error;
+  }
+}
+
+async function discardSessionPaperUploads({ keepalive = false } = {}) {
+  const inspectionId = state.inspectionId || sessionStorage.getItem("sharperx_web_inspection_id") || "";
+  const documentIds = [...new Set([
+    state.paperDocumentId || sessionStorage.getItem("sharperx_web_paper_id") || "",
+    state.memoDocumentId || sessionStorage.getItem("sharperx_web_memo_id") || "",
+  ].filter(Boolean))];
+  const results = await Promise.allSettled(documentIds.map((id) => deleteSessionPaperDocument(id, inspectionId, keepalive)));
+  const failed = results.find((result) => result.status === "rejected");
+  if (failed) throw failed.reason;
+  clearPaperSessionLocal();
+}
+
+window.addEventListener("pagehide", (event) => {
+  if (event.persisted) return;
+  const inspectionId = state.inspectionId || sessionStorage.getItem("sharperx_web_inspection_id") || "";
+  const documentIds = [...new Set([
+    state.paperDocumentId || sessionStorage.getItem("sharperx_web_paper_id") || "",
+    state.memoDocumentId || sessionStorage.getItem("sharperx_web_memo_id") || "",
+  ].filter(Boolean))];
+  if (inspectionId && documentIds.length) {
+    void Promise.allSettled(documentIds.map((id) => deleteSessionPaperDocument(id, inspectionId, true)));
+  }
+  clearPaperSessionLocal();
+}, { once: true });
+
 async function uploadPaper(file, kind) {
   if (!file) return;
   const status = $("#paperStatus");
@@ -344,17 +607,21 @@ async function uploadPaper(file, kind) {
     const documentId = result.id || result.document_id;
     if (!documentId) throw new Error("The file could not be processed. Please try again.");
     if (kind === "memo") {
+      const previousMemo = state.memoDocumentId;
       state.memoDocumentId = documentId;
       sessionStorage.setItem("sharperx_web_memo_id", documentId);
+      if (previousMemo && previousMemo !== documentId) void deleteSessionPaperDocument(previousMemo, inspectionId).catch(() => {});
       setStatus(status, `Memo uploaded: ${file.name}. It will be used when marking a selected paper question.`, "success");
       appendMessage(`Marking memo uploaded: ${file.name}.`, { kind: "Uploaded memo" });
     } else {
+      const previousPaper = state.paperDocumentId;
       state.paperDocumentId = documentId;
       state.paperFileName = file.name;
       state.selectedPaperQuestion = null;
       state.paperPageImage = "";
       sessionStorage.setItem("sharperx_web_paper_id", documentId);
       sessionStorage.setItem("sharperx_web_paper_name", file.name);
+      if (previousPaper && previousPaper !== documentId) void deleteSessionPaperDocument(previousPaper, inspectionId).catch(() => {});
       $("#paperTools").hidden = false;
       $("#paperFileName").textContent = file.name;
       $("#paperQuestionNumber").value = "";
@@ -386,7 +653,7 @@ $("#showPaperQuestionButton").addEventListener("click", async () => {
     });
     const pageBase64 = result.image_png_base64 || result.question_png_base64 || result.full_page_png_base64 || result.page_png_base64 || "";
     if (!pageBase64) throw new Error("The full page containing that question could not be prepared.");
-    const questionText = result.question_text || result.extracted_question_text || "";
+    const questionText = repairFourTermSequenceOcr(result.question_text || result.extracted_question_text || "");
     if (!questionText.trim()) throw new Error("The selected question text could not be read. Try a clearer paper scan or a different question number.");
     state.paperPageImage = `data:image/png;base64,${pageBase64}`;
     state.selectedPaperQuestion = {
@@ -397,7 +664,7 @@ $("#showPaperQuestionButton").addEventListener("click", async () => {
     };
     $("#paperSnapshotTitle").textContent = `Question ${state.selectedPaperQuestion.number}`;
     $("#paperSnapshotImage").src = state.paperPageImage;
-    $("#paperQuestionText").textContent = questionText;
+    renderMath($("#paperQuestionText"), questionText);
     $("#paperSnapshotCard").hidden = false;
     setStatus($("#paperStatus"), "Full source page loaded. The question text is scoped to the selected question.", "success");
     appendMessage(`Question ${state.selectedPaperQuestion.number}\n\n${questionText}\n\nYou can now attempt it or ask for hints. Submit your working when you want it marked.`, {
@@ -405,6 +672,35 @@ $("#showPaperQuestionButton").addEventListener("click", async () => {
       imageUrl: state.paperPageImage,
       actions: [{ label: "View full page", onClick: () => openImageViewer(state.paperPageImage, `Question ${state.selectedPaperQuestion.number} · full page`) }],
     });
+    setStatus($("#paperStatus"), "Preparing question-specific hints from the question and its diagram…");
+    const hintResult = await postJson("/api/education/tutor/ask", {
+      subject: "Mathematics",
+      grade: state.grade,
+      topic: "Question paper",
+      question: questionText,
+      mode: "question_hints",
+      inspection_id: state.inspectionId,
+      ai_tier: "luna",
+      allow_web_search: false,
+      question_paper_document_id: state.paperDocumentId,
+      question_paper_question_number: String(state.selectedPaperQuestion.number),
+      conversation_history: askConversationHistory(),
+      app_context: {
+        page: "Ask",
+        page_title: "Ask a maths question",
+        grade: state.grade,
+        subject: "Mathematics",
+        topic: "Question paper",
+        current_question: questionText,
+        question_number: String(state.selectedPaperQuestion.number),
+      },
+    });
+    requireTutorCompletion(hintResult, "Paper hints");
+    appendMessage(readTutorText(hintResult), {
+      kind: "Question-specific hints",
+      structuredText: readTutorDisplayText(hintResult),
+    });
+    setStatus($("#paperStatus"), "Question and diagram are in the chat. Add your working and send it when you want feedback or marking.", "success");
   } catch (error) {
     setStatus($("#paperStatus"), error.message, "error");
   } finally {
@@ -415,29 +711,34 @@ $("#showPaperQuestionButton").addEventListener("click", async () => {
 $("#paperSnapshotImage").addEventListener("click", () => openImageViewer(state.paperPageImage, "Uploaded question paper · full page"));
 $("#openPaperSnapshot").addEventListener("click", () => openImageViewer(state.paperPageImage, `Question ${state.selectedPaperQuestion?.number || ""} · full page`));
 
-$("#clearPaperButton").addEventListener("click", () => {
+$("#clearPaperButton").addEventListener("click", async () => {
   realtimeTutor.stopIfContext("ask");
-  state.paperDocumentId = "";
-  state.memoDocumentId = "";
-  state.paperFileName = "";
-  state.selectedPaperQuestion = null;
-  state.paperPageImage = "";
-  sessionStorage.removeItem("sharperx_web_paper_id");
-  sessionStorage.removeItem("sharperx_web_memo_id");
-  sessionStorage.removeItem("sharperx_web_paper_name");
-  $("#paperTools").hidden = true;
+  const button = $("#clearPaperButton");
+  button.disabled = true;
+  try {
+    await discardSessionPaperUploads();
+  } catch (error) {
+    showToast(`The paper could not be removed from the server: ${error.message}`);
+  } finally {
+    button.disabled = false;
+  }
 });
 
 async function sendAsk(event) {
-  event.preventDefault();
-  realtimeTutor.stopIfContext("ask");
-  const input = $("#askInput");
-  const text = input.value.trim();
+  event?.preventDefault?.();
+  const readReplyAloud = realtimeTutor.activeContext === "ask";
+  const text = getMathEditorLatex("ask").trim();
   const selected = state.selectedPaperQuestion;
   if (!text && !selected && state.askPhotos.length === 0) {
-    input.focus();
+    mathEditorCommand("ask", { name: "focus" });
     return showToast("Type a question or select a question from your paper first.");
   }
+  if (!text && selected && state.askPhotos.length === 0) {
+    mathEditorCommand("ask", { name: "focus" });
+    return showToast("Add your attempt or a follow-up question. The paper hints are already in the chat.");
+  }
+  if (readReplyAloud) realtimeTutor.stopIfContext("ask");
+  realtimeTutor.prepareSpeechFromGesture();
   const button = $("#sendAskButton");
   button.disabled = true;
   const lastAskPhoto = state.askPhotos[state.askPhotos.length - 1];
@@ -445,8 +746,8 @@ async function sendAsk(event) {
   const shownText = selected
     ? (text ? `Attempt / request for Question ${selected.number}:\n${text}` : `Question ${selected.number}:\n${selected.text}`)
     : text || "Please look at the attached working.";
+  const conversationHistory = askConversationHistory();
   appendMessage(shownText, { mine: true, imageUrl: attachedImage });
-  input.value = "";
   try {
     const payload = {
       subject: "Mathematics",
@@ -463,62 +764,154 @@ async function sendAsk(event) {
       question_paper_document_id: selected ? state.paperDocumentId : null,
       question_paper_question_number: selected ? selected.number : null,
       marking_memo_reference: selected && selected.memoText ? selected.memoText.slice(0, 30000) : null,
+      conversation_history: conversationHistory,
+      app_context: {
+        page: "Ask",
+        page_title: "Ask a maths question",
+        grade: state.grade,
+        subject: "Mathematics",
+        topic: selected ? "Question paper" : "",
+        current_question: selected?.text || text,
+        question_number: selected ? String(selected.number || "") : "",
+      },
     };
-    setStatus($("#voiceStatus"), "Sending to SharperTime…");
+    setStatus($("#voiceStatus"), "Preparing your response…");
     const result = await postJson("/api/education/tutor/ask", payload);
-    requireLunaXhigh(result, "Ask");
+    requireTutorCompletion(result, "Ask");
     const responseText = readTutorText(result);
     appendMessage(responseText, {
       kind: "Tutor response",
-      actions: [{ label: "Save PDF report", onClick: () => saveReport("Ask feedback", shownText, responseText) }],
+      structuredText: readTutorDisplayText(result),
+      actions: [
+        { label: "Read aloud", onClick: () => realtimeTutor.speakReply(responseText, "ask") },
+        { label: "Save PDF report", onClick: () => saveReport("Ask feedback", shownText, responseText) },
+      ],
     });
+    realtimeTutor.speakReply(responseText, "ask");
+    mathEditorCommand("ask", { name: "clear" });
+    setMathKeyboardVisible(false, "ask");
     setStatus($("#voiceStatus"), "");
   } catch (error) {
-    appendMessage(error.message, { kind: "Could not send" });
-    setStatus($("#voiceStatus"), "");
+    appendMessage(error.message, {
+      kind: error.retryable ? "Tutor temporarily unavailable" : "Could not send",
+      actions: error.retryable ? [{ label: "Retry", onClick: retryLastAsk }] : [],
+    });
+    setStatus($("#voiceStatus"), error.retryable ? "Your question is still in the editor. Retry when the connection is ready." : "", error.retryable ? "error" : "");
   } finally {
     button.disabled = false;
-    input.focus({ preventScroll: true });
   }
+}
+
+function retryLastAsk() {
+  const messages = $$(".message", $("#chatMessages"));
+  const failure = messages[messages.length - 1];
+  const submittedQuestion = messages[messages.length - 2];
+  if (failure?.classList.contains("assistant-message") && submittedQuestion?.classList.contains("user-message")) {
+    failure.remove();
+    submittedQuestion.remove();
+  }
+  return sendAsk();
 }
 
 function readTutorText(result) {
   const candidates = [result.assistant_message, result.answer, result.response, result.feedback, result.message, result.tutor_response, result.text];
   const value = candidates.find((candidate) => typeof candidate === "string" && candidate.trim());
-  if (value) return value;
-  if (result.result && typeof result.result === "string") return result.result;
-  return "I couldn't prepare a response. Please try again.";
+  const response = value
+    ? sanitizeLearnerFacingText(value)
+    : result.result && typeof result.result === "string"
+      ? sanitizeLearnerFacingText(result.result)
+      : "I couldn't prepare a response. Please try again.";
+  return String(result?.ai_status || "").toLowerCase() === "completed_needs_review"
+    ? `Please check this response carefully; it could not be fully verified.\n\n${response}`
+    : response;
 }
 
-function requireLunaXhigh(result, operation) {
+function readTutorDisplayText(result) {
+  const segments = Array.isArray(result?.message_segments) ? result.message_segments : [];
+  const structured = segments.map((segment) => {
+    const content = String(segment?.content || "").trim();
+    if (!content) return "";
+    if (segment.type === "display_math") return `\\[${content}\\]`;
+    if (segment.type === "inline_math") return `\\(${content}\\)`;
+    return segment.type === "text" ? content : "";
+  }).filter(Boolean).join("\n");
+  if (structured) return structured;
+  return typeof result?.assistant_message_markup === "string"
+    ? result.assistant_message_markup.trim()
+    : "";
+}
+
+function requireTutorCompletion(result, operation) {
+  const finalCheck = result?.ai_final_check && typeof result.ai_final_check === "object" ? result.ai_final_check : {};
+  const provider = String(result?.ai_provider || finalCheck.provider || "").trim().toLowerCase();
   const model = String(result?.ai_model || result?.model || "").trim().toLowerCase();
   const effort = String(result?.ai_reasoning_effort || result?.reasoning_effort || "").trim().toLowerCase();
   const status = String(result?.ai_status || result?.status || "").trim().toLowerCase();
-  if (model !== "gpt-6-luna" || effort !== "xhigh" || status !== "completed") {
-    throw new Error(`${operation} could not be completed. Your work is still here; please retry.`);
+  const finalCheckModel = String(finalCheck.model || "").trim().toLowerCase();
+  const finalCheckEffort = String(finalCheck.reasoning_effort || "").trim().toLowerCase();
+  const retryableStatus = ["tutor_unavailable", "marking_unavailable"].includes(status);
+  const needsReview = status === "completed_needs_review";
+  if (result?.retryable === true || retryableStatus) {
+    const serverMessage = String(result?.assistant_message || result?.message || "").trim();
+    const error = new Error(serverMessage
+      ? sanitizeLearnerFacingText(serverMessage)
+      : `${operation} is temporarily unavailable. Your work is still here; please retry.`);
+    error.status = 503;
+    error.retryable = true;
+    throw error;
+  }
+  if (
+    provider !== "openai"
+    || model !== "gpt-6-luna"
+    || effort !== "xhigh"
+    || (!needsReview && status !== "completed")
+    || finalCheckModel !== "gpt-6-luna"
+    || !["high", "xhigh"].includes(finalCheckEffort)
+    || finalCheck.approved !== !needsReview
+  ) {
+    const error = new Error(`${operation} did not return a usable answer. Your work is still here; please retry.`);
+    error.retryable = true;
+    throw error;
+  }
+  if (
+    !["luna_single_pass_self_check", "independent_final_approval"].includes(finalCheck.approval_stage)
+  ) {
+    const error = new Error(`${operation} is unavailable because the response check is missing. Your work is still here; please retry.`);
+    error.retryable = true;
+    throw error;
   }
 }
 
-function practiceVoiceTranscriptMessage(role, text) {
-  const transcript = $("[data-live-transcript]", $("[data-live-panel='practice']"));
+function liveTutorTranscriptMessage(context, role, text) {
+  const transcript = $("[data-live-transcript]", $(`[data-live-panel='${context}']`));
   if (!transcript) return;
   const item = document.createElement("div");
   item.className = "live-tutor-transcript-item";
   const label = document.createElement("strong");
   label.textContent = role === "learner" ? "You said" : "Tutor";
   const body = document.createElement("p");
-  if (role === "learner") body.textContent = text;
-  else renderMath(body, text);
+  renderMath(body, role === "learner" ? text : sanitizeLearnerFacingText(text));
   item.append(label, body);
   transcript.append(item);
   while (transcript.children.length > 20) transcript.firstElementChild.remove();
   transcript.scrollTop = transcript.scrollHeight;
 }
 
+function liveTutorHistory(context) {
+  const transcript = $(`[data-live-panel='${context}'] [data-live-transcript]`);
+  return $$(".live-tutor-transcript-item", transcript).slice(-8).map((item) => ({
+    role: $("strong", item)?.textContent === "Tutor" ? "tutor" : "learner",
+    text: $("p", item)?.textContent?.trim().slice(0, 1200) || "",
+  })).filter((turn) => turn.text);
+}
+
 const realtimeTutor = installRealtimeTutor({
-  apiBaseUrl: API_BASE_URL,
-  getAccessToken,
-  ensureInspection: (context) => ensureInspection(context === "practice" ? "practice" : "ask"),
+  getLoginGreeting: () => {
+    const greeting = state.tutorLoginGreeting;
+    state.tutorLoginGreeting = "";
+    return greeting;
+  },
+  ensureInspection: (context) => ensureInspection(context === "practice" || context === "exam" ? context : "ask"),
   getContext: async (context, inspectionId) => {
     if (context === "practice") {
       const question = state.currentPracticeQuestion;
@@ -534,6 +927,23 @@ const realtimeTutor = installRealtimeTutor({
         marks: Number.parseInt(question.marks, 10) || 0,
         hints_used: state.hintIndex,
         learner_working: getPracticeEditorLatex().trim().slice(0, 12000),
+        conversation_history: liveTutorHistory("practice"),
+      };
+    }
+    if (context === "exam") {
+      const question = state.examCurrentQuestion;
+      if (!question || !state.examSessionId) throw new Error("Start an assessment before opening its live tutor.");
+      return {
+        context_type: "exam",
+        grade: formatGrade(question.grade || state.grade),
+        topic: question.topic || "Test / exam prep",
+        inspection_id: inspectionId,
+        question_text: question.question_text_latex || question.question_text || "",
+        question_id: question.bank_question_id || question.question_id || question.id || null,
+        marks: Number.parseInt(question.marks, 10) || 0,
+        learner_working: getMathEditorLatex("exam").trim().slice(0, 12000),
+        assessment_type: state.exam.assessment_type || "test",
+        conversation_history: liveTutorHistory("exam"),
       };
     }
     const selected = state.selectedPaperQuestion;
@@ -546,20 +956,75 @@ const realtimeTutor = installRealtimeTutor({
       grade: state.grade,
       topic: selected ? "Question paper" : null,
       inspection_id: inspectionId,
-      question_text: selected?.text || $("#askInput").value.trim() || null,
+      question_text: selected?.text || getMathEditorLatex("ask").trim() || null,
       question_paper_document_id: selected ? state.paperDocumentId : null,
       question_paper_question_number: selected ? String(selected.number || "") : null,
       conversation_history: history,
     };
   },
+  transcribeAudio: async (blob, language = { code: "en", value: "en-ZA" }) => {
+    if (!getAccessToken()) throw new Error("Sign in again before starting a live tutor session.");
+    const type = blob.type || "audio/webm";
+    const ext = type.includes("wav") ? "wav" : type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
+    const form = new FormData();
+    form.set("audio", new File([blob], `live-tutor.${ext}`, { type }));
+    form.set("language", language.code || "en");
+    let result;
+    if (supportedLocalAsrLanguage(language.value)) {
+      const response = await fetch(`${VOICE_SERVICE_BASE_URL}/transcribe`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${getAccessToken()}` },
+        body: form,
+      });
+      if (!response.ok) {
+        let detail = "Local speech recognition could not process this turn. Please try again.";
+        try {
+          const body = await response.json();
+          if (typeof body?.detail === "string") detail = body.detail;
+        } catch { /* Use the safe fallback message if the service returned no JSON. */ }
+        throw new Error(detail);
+      }
+      result = await response.json();
+    } else {
+      result = await uploadForm("/api/education/speech/transcribe", form);
+    }
+    const transcript = selectLiveSpeechTranscript(result);
+    if (!transcript) return "";
+    if (language.code !== "en") return String(result.raw_transcript || transcript).trim();
+    try {
+      const formatted = await postJson("/api/education/speech/format-math", { text: transcript, subject: "Mathematics" });
+      return String(formatted.mathematical_text || transcript).trim();
+    } catch {
+      return transcript;
+    }
+  },
+  askTutorTurn: async (context, latestText) => {
+    const payload = buildLiveTutorPayload(context, latestText);
+    const result = await postJson("/api/education/tutor/ask", payload);
+    requireTutorCompletion(result, "Live tutor");
+    return readTutorText(result);
+  },
   onTranscript: (context, text) => {
-    if (context === "practice") practiceVoiceTranscriptMessage("learner", text);
+    if (context === "practice" || context === "exam") liveTutorTranscriptMessage(context, "learner", text);
     else appendMessage(text, { mine: true, kind: "Voice transcript" });
   },
   onTutorReply: (context, text) => {
-    if (context === "practice") practiceVoiceTranscriptMessage("tutor", text);
+    if (context === "practice" || context === "exam") liveTutorTranscriptMessage(context, "tutor", text);
     else appendMessage(text, { kind: "Live tutor" });
   },
+  onPushToTalkChange: (context, recording) => {
+    const button = voiceButtonFor(context);
+    if (!button) return;
+    button.classList.toggle("is-recording", recording);
+    button.setAttribute("aria-pressed", String(recording));
+    button.setAttribute("aria-label", recording ? "Stop recording and send to the live tutor" : context === "ask" ? "Record a voice note" : `Record a voice note for this ${context === "practice" ? "answer" : "assessment answer"}`);
+    const label = $("span", button);
+    if (label) label.textContent = recording ? "Stop & send" : "Voice";
+  },
+});
+
+$("#playWelcomeMessage").addEventListener("click", () => {
+  playTutorWelcome($("#appWelcomeMessage").textContent.trim(), { force: true });
 });
 
 $("#askForm").addEventListener("submit", sendAsk);
@@ -589,96 +1054,149 @@ $("#photoInput").addEventListener("change", async (event) => {
   }
 });
 
-async function recordVoiceNote() {
-  const button = $("#voiceButton");
-  const status = $("#voiceStatus");
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (SpeechRecognition) {
-    if (state.recorder instanceof SpeechRecognition) {
-      state.recorder.stop();
-      state.recorder = null;
-      button.classList.remove("is-recording");
+function voiceStatusFor(context) {
+  return context === "practice" ? $("#practiceVoiceStatus") : context === "exam" ? $("#examVoiceStatus") : $("#voiceStatus");
+}
+
+function voiceButtonFor(context) {
+  return context === "practice" ? $("#practiceVoiceButton") : context === "exam" ? $("#examVoiceButton") : $("#voiceButton");
+}
+
+function openVoiceReview(context, transcript) {
+  state.voiceReviewContext = context;
+  $("#voiceReviewTitle").textContent = context === "practice"
+    ? "Review your practice voice note"
+    : context === "exam" ? "Review your assessment voice note" : "Review your voice note";
+  $("#voiceReviewTranscript").value = String(transcript || "").trim();
+  setMathEditorLatex("voiceMath", "");
+  $("#voiceReviewSend").hidden = context !== "ask";
+  $("#voiceReviewStatus").textContent = "Transcript ready. Edit it, then format the spoken maths if needed.";
+  setStatus($("#voiceReviewStatus"), $("#voiceReviewStatus").textContent, "success");
+  if (!$("#voiceReviewDialog").open) $("#voiceReviewDialog").showModal();
+  requestAnimationFrame(() => $("#voiceReviewTranscript").focus({ preventScroll: true }));
+}
+
+function closeVoiceReview() {
+  setMathKeyboardVisible(false, "voiceMath");
+  if ($("#voiceReviewDialog").open) $("#voiceReviewDialog").close();
+  state.voiceReviewContext = "";
+}
+
+function appendVoiceReviewToEditor(value, isLatex) {
+  const context = state.voiceReviewContext;
+  const editorName = context === "practice" ? "practice" : context === "exam" ? "exam" : "ask";
+  const content = String(value || "").trim();
+  if (!context || !content) return false;
+  const existing = getMathEditorLatex(editorName).trim();
+  if (existing) {
+    mathEditorCommand(editorName, { name: "moveEnd" });
+    mathEditorCommand(editorName, { name: context === "ask" ? "insertText" : "newLine", value: context === "ask" ? "\n" : "" });
+  }
+  mathEditorCommand(editorName, { name: isLatex ? "insertLatex" : "insertText", value: content });
+  closeVoiceReview();
+  mathEditorCommand(editorName, { name: "focus" });
+  setStatus(voiceStatusFor(context), context === "ask" ? "Added to your question. Review it, then press Send." : context === "practice" ? "Added to your working." : "Added to this assessment answer.", "success");
+  return true;
+}
+
+async function recordVoiceNote(context) {
+  const button = voiceButtonFor(context);
+  const status = voiceStatusFor(context);
+  if (state.recorder) {
+    if (state.voiceRecorderContext !== context) {
+      setStatus(status, "Finish the voice note already recording before starting another.", "error");
       return;
     }
-    const recognition = new SpeechRecognition();
-    recognition.lang = "en-ZA";
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.onresult = (event) => {
-      let finalText = "";
-      for (let index = event.resultIndex; index < event.results.length; index++) {
-        if (event.results[index].isFinal) finalText += event.results[index][0].transcript;
-      }
-      if (finalText.trim()) appendToComposer(finalText.trim());
-    };
-    recognition.onerror = (event) => setStatus(status, event.error === "not-allowed" ? "Allow microphone access in your browser settings." : `Voice input: ${event.error}`, "error");
-    recognition.onend = () => {
-      if (state.recorder === recognition) state.recorder = null;
+    if (state.recorder.state === "recording") {
       button.classList.remove("is-recording");
-      if (!status.classList.contains("is-error")) setStatus(status, "Voice note added to your question.", "success");
-    };
-    try {
-      state.recorder = recognition;
-      recognition.start();
-      button.classList.add("is-recording");
-      setStatus(status, "Listening… tap Voice again to finish.");
-    } catch (error) {
-      state.recorder = null;
-      setStatus(status, error.message, "error");
+      setStatus(status, "Transcribing voice note…");
+      state.recorder.stop();
     }
-    return;
-  }
-  await toggleMediaRecorder(button, status);
-}
-
-function appendToComposer(text) {
-  const input = $("#askInput");
-  input.value = [input.value.trim(), text].filter(Boolean).join(input.value.trim() ? " " : "");
-  input.focus({ preventScroll: true });
-}
-
-async function toggleMediaRecorder(button, status) {
-  if (state.recorder?.state === "recording") {
-    state.recorder.stop();
-    button.classList.remove("is-recording");
-    setStatus(status, "Transcribing voice note…");
     return;
   }
   if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-    return setStatus(status, "Voice recording is not supported by this browser. You can type or attach a photo instead.", "error");
+    setStatus(status, "Voice recording is not supported by this browser. Use the editor or attach a photo instead.", "error");
+    return;
   }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"].find((type) => MediaRecorder.isTypeSupported(type));
     const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-    state.audioChunks = [];
-    recorder.ondataavailable = (event) => { if (event.data.size) state.audioChunks.push(event.data); };
+    const chunks = [];
+    recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
     recorder.onstop = async () => {
       stream.getTracks().forEach((track) => track.stop());
+      if (state.recorder === recorder) state.recorder = null;
+      state.voiceRecorderContext = "";
+      button.classList.remove("is-recording");
       try {
         const type = recorder.mimeType || "audio/webm";
-        const blob = new Blob(state.audioChunks, { type });
+        const blob = new Blob(chunks, { type });
+        if (!blob.size) throw new Error("No audio was captured. Record a short note and try again.");
         const ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
-        const file = new File([blob], `voice-note.${ext}`, { type });
         const form = new FormData();
-        form.set("audio", file);
+        form.set("audio", new File([blob], `${context}-voice-note.${ext}`, { type }));
+        form.set("language", "en");
         const result = await uploadForm("/api/education/speech/transcribe", form);
-        const transcript = result.transcript || result.text || result.transcription || "";
-        if (!transcript.trim()) throw new Error("No words were recognized in that voice note.");
-        appendToComposer(transcript.trim());
-        setStatus(status, "Voice note transcribed. Review it, then press Send.", "success");
-      } catch (error) { setStatus(status, error.message, "error"); }
+        const transcript = result.raw_transcript || result.transcript || result.text || result.transcription || "";
+        if (!String(transcript).trim()) throw new Error("No words were recognized in that voice note.");
+        setStatus(status, "Transcript ready for correction.", "success");
+        openVoiceReview(context, transcript);
+      } catch (error) {
+        setStatus(status, error.message || "Voice note transcription failed.", "error");
+      }
     };
     state.recorder = recorder;
+    state.voiceRecorderContext = context;
     recorder.start();
     button.classList.add("is-recording");
-    setStatus(status, "Recording… tap Voice again to finish.");
+    setStatus(status, "Recording… select Voice again when you are finished.");
   } catch (error) {
+    state.recorder = null;
+    state.voiceRecorderContext = "";
     setStatus(status, error.name === "NotAllowedError" ? "Allow microphone access in your browser settings." : error.message, "error");
   }
 }
 
-$("#voiceButton").addEventListener("click", recordVoiceNote);
+async function handleVoiceButton(context) {
+  if (realtimeTutor.isActive(context)) {
+    await realtimeTutor.togglePushToTalk(context);
+    return;
+  }
+  await recordVoiceNote(context);
+}
+
+$("#voiceButton").addEventListener("click", () => handleVoiceButton("ask"));
+$("#practiceVoiceButton").addEventListener("click", () => handleVoiceButton("practice"));
+$("#examVoiceButton").addEventListener("click", () => handleVoiceButton("exam"));
+$("#voiceReviewTranscript").addEventListener("input", () => setStatus($("#voiceReviewStatus"), "Transcript edited. Format as math if it contains spoken mathematics."));
+$("#voiceReviewFormatMath").addEventListener("click", async (event) => {
+  const transcript = $("#voiceReviewTranscript").value.trim();
+  if (!transcript) return setStatus($("#voiceReviewStatus"), "Record a voice note or enter the transcript first.", "error");
+  const button = event.currentTarget;
+  button.disabled = true;
+  setStatus($("#voiceReviewStatus"), "Formatting the spoken maths…");
+  try {
+    const result = await postJson("/api/education/speech/format-math", { text: transcript, subject: "Mathematics" });
+    const formatted = String(result.mathematical_text || result.text || "").trim();
+    if (!formatted) throw new Error("The mathematical form could not be prepared. Edit the transcript or use it as written.");
+    setMathEditorLatex("voiceMath", formatted);
+    setStatus($("#voiceReviewStatus"), "Math format ready. Check and edit it before using it.", "success");
+  } catch (error) {
+    setStatus($("#voiceReviewStatus"), error.message || "Math formatting failed. You can still use the edited transcript.", "error");
+  } finally { button.disabled = false; }
+});
+$("#voiceReviewUseTranscript").addEventListener("click", () => appendVoiceReviewToEditor($("#voiceReviewTranscript").value, false));
+$("#voiceReviewUseMath").addEventListener("click", () => appendVoiceReviewToEditor(getMathEditorLatex("voiceMath"), true));
+$("#voiceReviewSend").addEventListener("click", () => {
+  const text = getMathEditorLatex("voiceMath").trim() || $("#voiceReviewTranscript").value.trim();
+  if (!text) return setStatus($("#voiceReviewStatus"), "Add or format a voice transcript before sending it.", "error");
+  if (!appendVoiceReviewToEditor(text, text === getMathEditorLatex("voiceMath").trim())) return;
+  $("#askForm").requestSubmit();
+});
+$("#voiceReviewClose").addEventListener("click", closeVoiceReview);
+$("#voiceReviewDialog").addEventListener("cancel", () => { setMathKeyboardVisible(false, "voiceMath"); state.voiceReviewContext = ""; });
+$("#voiceReviewDialog").addEventListener("close", () => { setMathKeyboardVisible(false, "voiceMath"); state.voiceReviewContext = ""; });
 
 async function openImageViewer(source, title = "Question image") {
   if (!source) return;
@@ -829,7 +1347,7 @@ async function loadAllQuestions(grade, topicId, subtopicId) {
   const pageSize = 5000;
   const questions = [];
   for (let offset = 0; ; offset += pageSize) {
-    const params = new URLSearchParams({ grade: String(grade), topic_id: topicId, subtopic_id: subtopicId, limit: String(pageSize), offset: String(offset) });
+    const params = new URLSearchParams({ grade: String(grade), topic_id: topicId, subtopic_id: subtopicId, limit: String(pageSize), offset: String(offset), include_authored_support: "false" });
     const page = await getJson(`/api/education/math-question-bank/questions?${params}`);
     if (!Array.isArray(page)) throw new Error("The question list could not be loaded. Please try again.");
     questions.push(...page);
@@ -867,7 +1385,7 @@ async function loadPracticeQuestionList({ restore = false } = {}) {
 $("#loadPracticeQuestions").addEventListener("click", () => loadPracticeQuestionList());
 
 function questionLabel(question) {
-  return question.accessible_text || question.question_text || question.text || "Question";
+  return question.question_text_latex || question.accessible_text || question.question_text || question.text || "Question";
 }
 
 function displayStructuredContent(value) {
@@ -892,7 +1410,7 @@ function renderPracticeQuestionList() {
     const title = document.createElement("strong");
     title.textContent = `Question ${index + 1} · ${question.marks || 0} marks`;
     const text = document.createElement("span");
-    text.textContent = questionLabel(question);
+    renderMath(text, questionLabel(question));
     button.append(title, text);
     button.addEventListener("click", () => selectPracticeQuestion(question));
     list.append(button);
@@ -1276,6 +1794,7 @@ async function selectPracticeQuestion(question) {
   if (questionId) sessionStorage.setItem(PRACTICE_SESSION_KEYS.question, questionId);
   else sessionStorage.removeItem(PRACTICE_SESSION_KEYS.question);
   state.hintIndex = 0;
+  state.practiceHintsUsed = 0;
   state.practiceVisuals = collectVisuals(question);
   $("#practiceQuestionCard").hidden = false;
   $("#practiceQuestionMeta").textContent = `Grade ${question.grade || $("#practiceGrade").value} · ${question.topic || "Mathematics"} · ${question.subtopic || $("#practiceSubtopic").selectedOptions[0]?.textContent || ""} · ${question.marks || 0} marks`;
@@ -1290,9 +1809,7 @@ async function selectPracticeQuestion(question) {
   $("#practiceVisuals").replaceChildren();
   $$(".question-list-button").forEach((button) => button.classList.toggle("is-active", button.dataset.questionId === questionId));
   $("#practiceMarkStatus").textContent = "";
-  $("#practiceVoiceReview").hidden = true;
-  $("#practiceVoiceTranscript").value = "";
-  $("#practiceVoiceMath").value = "";
+  if (state.voiceReviewContext === "practice") closeVoiceReview();
 
   if (question.question_id || question.bank_question_id || question.id || collectVisuals(question).length) {
     const locallyCachedVisuals = readCachedQuestionVisuals(question);
@@ -1332,7 +1849,7 @@ function renderQuestionVisuals(container, visuals, title, questionText = "", rev
       if (description) {
         const paragraph = document.createElement("p");
         paragraph.className = "visual-description";
-        paragraph.textContent = description;
+        renderMath(paragraph, description);
         container.append(paragraph);
       }
     }
@@ -1344,280 +1861,404 @@ $("#practiceFullScreen").addEventListener("click", () => {
   if (image) openImageViewer(image.src, image.alt || "Question diagram");
 });
 
-$("#practiceHintButton").addEventListener("click", () => {
+async function requestPracticeSupport(hintLevel, { formulaOnly = false } = {}) {
   const question = state.currentPracticeQuestion;
   if (!question) return;
-  const hints = Array.isArray(question.subquestion_hints) ? question.subquestion_hints.filter((hint) => hint && typeof hint === "object") : [];
-  const progressive = Array.isArray(question.progressive_hints) ? question.progressive_hints : [];
-  const total = hints.length || progressive.length;
-  if (!total) {
-    $("#practiceHints").hidden = false;
-    renderMath($("#practiceHints"), "No hints are available for this question.");
-    return;
+  const hintButton = $("#practiceHintButton");
+  const formulaButton = $("#practiceFormulaButton");
+  const panel = $("#practiceHints");
+  hintButton.disabled = true;
+  formulaButton.disabled = true;
+  panel.hidden = false;
+  panel.textContent = formulaOnly
+    ? "Checking the formula against curriculum references…"
+    : `Preparing hint ${hintLevel} with curriculum references…`;
+  try {
+    const questionText = questionLabel(question);
+    const visual = state.practiceVisuals.find((item) => item && (item.diagram || item.kind || item.accessibility_text)) || null;
+    const result = await postJson("/api/education/tutor/ask", {
+      subject: "Mathematics",
+      grade: question.grade || state.grade,
+      topic: question.topic || "Mathematics",
+      question: questionText,
+      mode: "question_hints",
+      ai_tier: "luna",
+      allow_web_search: false,
+      requested_hint_level: formulaOnly ? 0 : hintLevel,
+      question_visual_reference: visual?.diagram || visual,
+      app_context: {
+        page: "Practice",
+        page_title: "Mathematics Practice",
+        grade: question.grade || state.grade,
+        subject: "Mathematics",
+        topic: question.topic || "",
+        current_question: questionText,
+        practice_hint_level: formulaOnly ? "formula" : hintLevel,
+      },
+    });
+    requireTutorCompletion(result, formulaOnly ? "Practice formula help" : "Practice hint");
+    state.practiceHintsUsed += 1;
+    if (!formulaOnly) state.hintIndex = hintLevel;
+    renderMath(panel, `${formulaOnly ? "Formula help" : `Hint ${hintLevel} of 3`}\n\n${readTutorDisplayText(result) || readTutorText(result)}`);
+    $("#practiceHintButton").textContent = state.hintIndex >= 3 ? "Show first hint again" : "Show next hint";
+  } catch (error) {
+    panel.textContent = error.message || "The checked practice support is unavailable. Please retry.";
+  } finally {
+    hintButton.disabled = false;
+    formulaButton.disabled = false;
   }
-  const index = state.hintIndex % total;
-  let content = "";
-  if (hints.length) {
-    const hint = hints[index];
-    const partId = String(hint.subquestion_id || hint.part_id || "").trim();
-    const formula = displayStructuredContent(hint.related_formula || hint.formula || question.relevant_formulas?.[0] || "Use the rule or formula named for this part of the question.");
-    const steps = Array.isArray(hint.steps) ? hint.steps.map(displayStructuredContent).filter(Boolean) : [];
-    content = `Hint ${index + 1} of ${total}${partId ? ` · Part (${partId})` : ""}\n${displayStructuredContent(hint.text || hint.hint || hint.guidance)}\n\nFormula: ${formula}`;
-    if (steps.length) content += `\n\nSteps to try:\n${steps.map((step, stepIndex) => `${stepIndex + 1}. ${step}`).join("\n")}`;
-    else content += "\n\nSteps to try:\n1. Write the values given in this part and identify the quantity requested.\n2. Choose the displayed rule, substitute the values, and show one step per line.";
-  } else {
-    content = `Hint ${index + 1} of ${total}: ${displayStructuredContent(progressive[index])}`;
-  }
-  $("#practiceHints").hidden = false;
-  renderMath($("#practiceHints"), content);
-  state.hintIndex = (index + 1) % total;
-  $("#practiceHintButton").textContent = state.hintIndex === 0 ? "Show a hint" : "Show next hint";
+}
+
+$("#practiceHintButton").addEventListener("click", () => {
+  if (!state.currentPracticeQuestion) return;
+  const level = state.hintIndex >= 3 ? 1 : state.hintIndex + 1;
+  void requestPracticeSupport(level);
 });
 
 $("#practiceFormulaButton").addEventListener("click", () => {
-  const question = state.currentPracticeQuestion;
-  const formulas = Array.isArray(question?.relevant_formulas) ? question.relevant_formulas : [];
-  const partFormulas = Array.isArray(question?.subquestion_hints)
-    ? question.subquestion_hints.map((hint) => hint?.related_formula).filter(Boolean)
-    : [];
-  const allFormulas = [...new Set([...partFormulas, ...formulas].map(displayStructuredContent).filter(Boolean))];
-  const content = allFormulas.length ? allFormulas.map((formula, index) => `${allFormulas.length > 1 ? `Option ${index + 1}: ` : "Formula: "}${formula}`).join("\n\n") : "No specific formula is listed for this question. Use the relevant definition or theorem named in the question.";
-  $("#practiceHints").hidden = false;
-  renderMath($("#practiceHints"), content);
+  void requestPracticeSupport(0, { formulaOnly: true });
 });
 
 $("#practiceCanvasButton").addEventListener("click", () => openCanvas("practice", state.currentPracticeQuestion));
 $("#practiceGraphCanvasButton").addEventListener("click", () => openCanvas("practice-graph", state.currentPracticeQuestion));
 
-const practiceMathEditorFrame = $("#practiceMathEditor");
-function practiceEditorCommand(command) {
-  const editor = practiceMathEditorFrame?.contentWindow?.SharperMathEditor;
+const mathEditorFrames = {
+  ask: $("#askMathEditor"),
+  practice: $("#practiceMathEditor"),
+  exam: $("#examAnswer"),
+  voiceMath: $("#voiceReviewMath"),
+  canvasMath: $("#canvasTranscriptionText"),
+};
+const mathKeyboardMounts = {
+  ask: $("#askMathKeyboardMount"),
+  practice: $("#practiceMathKeyboardMount"),
+  exam: $("#examMathKeyboardMount"),
+  voiceMath: $("#voiceReviewMathKeyboardMount"),
+  canvasMath: $("#canvasMathKeyboardMount"),
+};
+const mathEditorSettings = {
+  ask: { placeholder: "Type a question or instruction. Add your working if you want it marked.", fontSize: "18", lineLabels: false },
+  practice: { placeholder: "Enter each step on a new line. Keep your final answer last.", fontSize: "23", lineLabels: true },
+  exam: { placeholder: "Enter your working for this question.", fontSize: "21", lineLabels: true },
+  voiceMath: { placeholder: "Review the mathematical form here.", fontSize: "18", lineLabels: false },
+  canvasMath: { placeholder: "Recognized maths will appear here.", fontSize: "19", lineLabels: false },
+};
+const mathEditorStates = new Map();
+let activeMathEditorName = "practice";
+const sharedMathKeyboard = $("#practiceMathKeyboard");
+
+function getMathEditor(name = activeMathEditorName) {
+  try { return mathEditorFrames[name]?.contentWindow?.SharperMathEditor || null; }
+  catch { return null; }
+}
+
+function mathEditorCommand(name, command) {
+  const editor = getMathEditor(name);
   if (!editor?.execute) return false;
   editor.execute(command);
   return true;
 }
 
-function initializePracticeMathEditor() {
-  const editorWindow = practiceMathEditorFrame?.contentWindow;
-  if (!editorWindow?.SharperMathEditor?.execute) return false;
-  state.practiceEditorReady = true;
-  try { editorWindow.document.querySelector(".editor-surface")?.setAttribute("inputmode", "none"); } catch { /* Same-origin editor attributes are optional. */ }
-  editorWindow.SharperMathEditor.execute({ name: "loadLatex", value: "" });
-  editorWindow.SharperMathEditor.execute({ name: "setLineLabels", value: "true" });
-  editorWindow.SharperMathEditor.execute({ name: "setPlaceholder", value: "Enter each step on a new line. Keep your final answer last." });
-  editorWindow.SharperMathEditor.execute({ name: "setFontSize", value: "23" });
-  editorWindow.SharperMathEditor.execute({ name: "setPhysicalKeyboardEnabled", value: "true" });
+function practiceEditorCommand(command) {
+  return mathEditorCommand("practice", command);
+}
+
+function getMathEditorLatex(name = activeMathEditorName) {
+  try { return getMathEditor(name)?.getLatex?.() || mathEditorStates.get(name)?.latex || ""; }
+  catch { return mathEditorStates.get(name)?.latex || ""; }
+}
+
+function setMathEditorLatex(name, latex) {
+  const value = String(latex || "");
+  if (!mathEditorCommand(name, { name: "loadLatex", value })) {
+    const settings = mathEditorSettings[name];
+    if (settings) settings.pendingLatex = value;
+  }
+}
+
+function initializeMathEditor(name) {
+  const frame = mathEditorFrames[name];
+  const api = getMathEditor(name);
+  if (!api?.execute || frame.dataset.initialized === "true") return Boolean(api?.execute);
+  frame.dataset.initialized = "true";
+  const settings = mathEditorSettings[name];
+  try { frame.contentWindow.document.querySelector(".editor-surface")?.setAttribute("inputmode", "none"); } catch { /* Same-origin editor attributes are optional. */ }
+  api.execute({ name: "setLineLabels", value: String(settings.lineLabels) });
+  api.execute({ name: "setPlaceholder", value: settings.placeholder });
+  api.execute({ name: "setFontSize", value: settings.fontSize });
+  api.execute({ name: "setPhysicalKeyboardEnabled", value: "true" });
+  if (settings.pendingLatex != null) {
+    api.execute({ name: "loadLatex", value: settings.pendingLatex });
+    delete settings.pendingLatex;
+  }
+  if (name === "practice") state.practiceEditorReady = true;
   return true;
 }
 
-practiceMathEditorFrame.addEventListener("load", initializePracticeMathEditor);
+for (const [name, frame] of Object.entries(mathEditorFrames)) {
+  frame.addEventListener("load", () => initializeMathEditor(name));
+  if (frame.contentDocument?.readyState === "complete" && getMathEditor(name)?.execute) initializeMathEditor(name);
+}
+
+function getMathEditorNameForWindow(source) {
+  return Object.entries(mathEditorFrames).find(([, frame]) => frame?.contentWindow === source)?.[0] || "";
+}
+
 window.addEventListener("message", (event) => {
-  if (event.source !== practiceMathEditorFrame.contentWindow || event.data?.type !== "sharper-math-editor-state") return;
-  state.practiceEditorState = event.data.state || null;
-  if (!state.practiceEditorReady && event.data.state?.event === "ready") initializePracticeMathEditor();
+  if (event.data?.type !== "sharper-math-editor-state") return;
+  const name = getMathEditorNameForWindow(event.source);
+  if (!name) return;
+  mathEditorStates.set(name, event.data.state || null);
+  if (name === "practice") state.practiceEditorState = event.data.state || null;
+  if (name === activeMathEditorName) updateMathKeyboardPreview(event.data.state?.latex || "");
+  if (event.data.state?.event === "ready") initializeMathEditor(name);
   if (event.data.state?.event === "activate") {
-    setPracticeKeyboardVisible(true);
-    deviceRemoteNotifyFocus(practiceMathEditorFrame);
-  } else if (deviceRemoteSession && deviceRemoteTargetFrame === practiceMathEditorFrame) deviceRemoteNotifyFocus(practiceMathEditorFrame);
+    activeMathEditorName = name;
+    setMathKeyboardVisible(true, name);
+    deviceRemoteNotifyFocus(mathEditorFrames[name]);
+  } else if (deviceRemoteSession && deviceRemoteTargetFrame === mathEditorFrames[name]) {
+    deviceRemoteNotifyFocus(mathEditorFrames[name]);
+  }
 });
 
 function getPracticeEditorLatex() {
-  try { return practiceMathEditorFrame.contentWindow.SharperMathEditor.getLatex() || ""; }
-  catch { return state.practiceEditorState?.latex || ""; }
+  return getMathEditorLatex("practice");
 }
 
-const keyText = (label, value = label) => ({ label, command: "insertText", value });
-const keyCommand = (label, command, value = "") => ({ label, command, value });
-const PRACTICE_MATH_KEYSETS = {
-  Alphabet: [
-    ..."qwertyuiopasdfghjklzxcvbnm".split("").map((letter) => keyText(letter)),
-    keyText("Space", " "), keyText(","), keyText("."), keyText("−", "−"), keyText("="), keyText("(") , keyText(")"),
-  ],
-  Basic: [
-    ...["7", "8", "9", "4", "5", "6", "1", "2", "3", "0"].map((value) => keyText(value)),
-    ...["+", "−", "×", "÷", "=", "≠", "<", "≤", ">", "≥", "±", "≈", "(", ")", ",", ";", "π", "∞"].map((value) => keyText(value)),
-    keyCommand("a⁄b", "insertFraction"), keyCommand("√□", "insertRoot"), keyCommand("ⁿ√□", "insertNthRoot"),
-    keyCommand("xʸ", "insertPower"), keyCommand("□²", "insertFixedPower", "2"), keyCommand("□³", "insertFixedPower", "3"),
-    keyCommand("aₙ", "insertSubscript"), keyCommand("|x|", "insertAbsolute"), keyCommand("log₍□₎", "insertLogarithm"), keyCommand("n!", "insertFactorial"),
-  ],
-  Advanced: [
-    ...["sin", "cos", "tan", "csc", "sec", "cot", "arcsin", "arccos", "arctan"].map((name) => keyCommand(name, "insertFunction", name)),
-    ...["θ", "π", "°", "x", "y", "=", "±", "∠", "⊥", "∥"].map((value) => keyText(value)),
-    keyCommand("√□", "insertRoot"), keyCommand("xʸ", "insertPower"), keyCommand("a⁄b", "insertFraction"),
-  ],
-  Calculus: [
-    keyCommand("d/dx", "insertDerivative", "1"), keyCommand("d²/dx²", "insertDerivative", "2"),
-    keyCommand("lim", "insertLimit"), keyCommand("lim→+", "insertLimit", "right"), keyCommand("lim→−", "insertLimit", "left"),
-    keyCommand("∫", "insertIntegral"), keyCommand("∫ᵃ_b", "insertIntegral", "definite"), keyCommand("∫dx", "insertIntegral", "dx"),
-    keyCommand("Σ", "insertLargeOperator", "sum"), keyCommand("Π", "insertLargeOperator", "product"),
-    ...["∞", "π", "x", "y", "e", "+", "−", "="].map((value) => keyText(value)),
-  ],
-  Greek: [..."αβγδεζηθικλμνξοπρστυφχψω".split("").map((value) => keyText(value)), ..."ΓΔΘΛΞΠΣΦΨΩ".split("").map((value) => keyText(value))],
-  Shorthand: [...["∠", "⊥", "∥", "∴", "∵", "⇒", "⇔", "→", "↔", "≡", "≅", "≈", "∝", "∈", "∉", "⊂", "⊆", "∪", "∩", "∅", "ℝ", "ℕ", "ℤ", "ℚ", "∀", "∃", "△", "≤", "≥", "≠", "±"].map((value) => keyText(value))],
+function updateMathKeyboardPreview(latex) {
+  const host = $("#mathKeyboardPreview");
+  const lines = String(latex || "").split(/\r?\n/).filter((line) => line.trim());
+  if (!lines.length) {
+    host.replaceChildren();
+    return;
+  }
+  renderMath(host, lines.map((line) => `\\(${line}\\)`).join("\n"));
+}
+
+const MATH_ALPHABET_ROWS = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
+const MATH_ALPHABET_PUNCTUATION = [",", ".", "'", "!", "?", "_", "-", ":"];
+const MATH_KEYSETS = {
+  Basic: ["fraction", "√□", "nthRoot", "power", "subscript", "square", "cube", "□°", "|x|", "logBase", "ln", "n!", "∞", "[", "]", "{", "}", "i", "<", ">", "≤", "≥", "≠", "≈", "∴", "π", "x", "y", "e"],
+  Advanced: ["sin", "cos", "tan", "csc", "sec", "cot", "arcsin", "arccos", "arctan", "log", "ln", "□°", "π", "θ", "x", "y", "fraction", "√□", "power", "subscript"],
+  Calculus: ["d/dx", "secondDerivative", "lim", "lim→", "lim→+", "lim→−", "Σ", "Π", "∫", "definiteIntegral", "∫dx", "∞", "nthRoot", "logBase", "C(n,k)", "P(n,k)", "n!", "x", "y", "e", "fraction", "power", "subscript"],
+  Greek: ["α", "β", "γ", "δ", "ε", "ζ", "η", "θ", "ι", "κ", "λ", "μ", "ν", "ξ", "ο", "π", "ρ", "σ", "τ", "υ", "φ", "χ", "ψ", "ω", "Γ", "Δ", "Θ", "Λ", "Ξ", "Π", "Σ", "Φ", "Ψ", "Ω", "ϑ", "ϕ"],
+  Shorthand: ["∠", "⊥", "∥", "∴", "∵", "⇒", "⇔", "→", "↔", "≡", "≅", "≈", "∝", "∈", "∉", "⊂", "⊆", "∪", "∩", "∅", "ℝ", "ℕ", "ℤ", "ℚ", "∀", "∃", "△", "≤", "≥", "≠", "±"],
 };
+const MATH_NUMERIC_KEYS = ["(", ")", "%", "AC", "7", "8", "9", "÷", "4", "5", "6", "×", "1", "2", "3", "−", "0", ".", "=", "+", "±", "≈"];
+const MATH_KEY_PRESENTATIONS = {
+  fraction: { text: "a/b", accessibleName: "Insert a fraction", parts: ["a/b"] },
+  nthRoot: { text: "n√□", accessibleName: "Insert an nth root", parts: [{ tag: "sup", text: "n" }, "√□"] },
+  power: { text: "xy", accessibleName: "Insert a power", parts: ["x", { tag: "sup", text: "y" }] },
+  subscript: { text: "an", accessibleName: "Insert a subscript", parts: ["a", { tag: "sub", text: "n" }] },
+  square: { text: "□2", accessibleName: "Insert a square", parts: ["□", { tag: "sup", text: "2" }] },
+  cube: { text: "□3", accessibleName: "Insert a cube", parts: ["□", { tag: "sup", text: "3" }] },
+  logBase: { text: "log□", accessibleName: "Insert a logarithm with a base", parts: ["log", { tag: "sub", text: "□" }] },
+  secondDerivative: { text: "d2/dx2", accessibleName: "Insert the second derivative", parts: ["d", { tag: "sup", text: "2" }, "/dx", { tag: "sup", text: "2" }] },
+  definiteIntegral: { text: "∫ab", accessibleName: "Insert a definite integral", parts: ["∫", { tag: "sup", text: "a" }, { tag: "sub", text: "b" }] },
+};
+const MATH_KEY_COMMANDS = {
+  fraction: ["insertFraction"], "√□": ["insertRoot"], nthRoot: ["insertNthRoot"], power: ["insertPower"], subscript: ["insertSubscript"],
+  square: ["insertFixedPower", "2"], cube: ["insertFixedPower", "3"], "□°": ["insertFixedPower", "°"], "°": ["insertFixedPower", "°"],
+  "|x|": ["insertAbsolute"], logBase: ["insertLogarithm"], "n!": ["insertFactorial"], "∞": ["insertInfinity"],
+  "d/dx": ["insertDerivative", "1"], secondDerivative: ["insertDerivative", "2"], "lim": ["insertLimit", "plain"], "lim→": ["insertLimit", "to"],
+  "lim→+": ["insertLimit", "right"], "lim→−": ["insertLimit", "left"], "∫": ["insertIntegral", "plain"], definiteIntegral: ["insertIntegral", "definite"],
+  "∫dx": ["insertIntegral", "dx"], "Σ": ["insertLargeOperator", "sum"], "Π": ["insertLargeOperator", "product"],
+  "C(n,k)": ["insertCombination", "C"], "P(n,k)": ["insertCombination", "P"], "×10ⁿ": ["insertScientificPower"],
+  "(": ["insertLiteralBracket", "("], "[": ["insertLiteralBracket", "["], "{": ["insertLiteralBracket", "{"],
+  "f(x)": ["insertText", "f(x) = "], "y=": ["insertText", "y = "], "AC": ["clear"],
+};
+let mathAlphabetShifted = false;
 
-function renderPracticeMathKeys(mode = state.practiceKeyboardMode) {
-  state.practiceKeyboardMode = mode in PRACTICE_MATH_KEYSETS ? mode : "Alphabet";
-  $$("[data-keyboard-mode]").forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.keyboardMode === state.practiceKeyboardMode)));
-  const host = $("#practiceMathKeys");
+function mathKeyCommand(label) {
+  const entry = MATH_KEY_COMMANDS[label];
+  if (entry) return { name: entry[0], value: entry[1] || "" };
+  if (["sin", "cos", "tan", "csc", "sec", "cot", "arcsin", "arccos", "arctan", "log", "ln"].includes(label)) return { name: "insertFunction", value: label };
+  return { name: "insertText", value: label };
+}
+
+function createMathKey(label, ariaLabel = `Insert ${label}`) {
+  const button = document.createElement("button");
+  button.type = "button";
+  const presentation = MATH_KEY_PRESENTATIONS[label];
+  const visibleLabel = document.createElement("span");
+  visibleLabel.className = "math-key-label";
+  for (const part of presentation?.parts || [label]) {
+    if (typeof part === "string") visibleLabel.append(document.createTextNode(part));
+    else {
+      const script = document.createElement(part.tag);
+      script.textContent = part.text;
+      visibleLabel.append(script);
+    }
+  }
+  button.append(visibleLabel);
+  button.setAttribute("aria-label", ariaLabel === `Insert ${label}` ? (presentation?.accessibleName || ariaLabel) : ariaLabel);
+  const visibleLength = presentation?.text.length || label.length;
+  if (visibleLength >= 5) button.classList.add("is-long-label");
+  if (visibleLength >= 7) button.classList.add("is-extra-long-label");
+  button.addEventListener("pointerdown", (event) => event.preventDefault());
+  button.addEventListener("click", () => mathEditorCommand(activeMathEditorName, mathKeyCommand(label)));
+  return button;
+}
+
+function renderMathKeyboardKeys(mode = state.practiceKeyboardMode) {
+  state.practiceKeyboardMode = mode in MATH_KEYSETS || mode === "Alphabet" ? mode : "Basic";
+  $$('[data-keyboard-mode]').forEach((tab) => tab.setAttribute("aria-selected", String(tab.dataset.keyboardMode === state.practiceKeyboardMode)));
+  const host = $("#mathKeyboardKeys");
+  const numeric = $("#mathKeyboardNumericKeys");
+  const keyboardBody = $(".math-keyboard-body", sharedMathKeyboard);
   host.replaceChildren();
-  for (const key of PRACTICE_MATH_KEYSETS[state.practiceKeyboardMode]) {
-    const button = document.createElement("button");
-    button.type = "button";
-    const label = document.createElement("span");
-    label.textContent = key.label;
-    button.append(label);
-    button.setAttribute("aria-label", key.label === "Space" ? "Insert a space" : `Insert ${key.label}`);
-    if (key.label === "Space") button.classList.add("is-space");
-    if (key.label.length >= 5) button.classList.add("is-long-label");
-    if (key.label.length >= 7) button.classList.add("is-extra-long-label");
-    button.addEventListener("pointerdown", (event) => event.preventDefault());
-    button.addEventListener("click", () => practiceEditorCommand({ name: key.command, value: key.value }));
-    host.append(button);
+  host.classList.toggle("is-alphabet", state.practiceKeyboardMode === "Alphabet");
+  numeric.hidden = state.practiceKeyboardMode !== "Basic";
+  keyboardBody.classList.toggle("has-numeric", state.practiceKeyboardMode === "Basic");
+  if (state.practiceKeyboardMode === "Alphabet") {
+    MATH_ALPHABET_ROWS.forEach((letters, index) => {
+      const row = document.createElement("div");
+      row.className = `math-alphabet-row math-alphabet-row-${index + 1}`;
+      if (index === 2) {
+        const shift = document.createElement("button");
+        shift.type = "button";
+        shift.className = "math-key-shift";
+        shift.textContent = "⇧";
+        shift.setAttribute("aria-label", mathAlphabetShifted ? "Return to lowercase letters" : "Shift to uppercase letters");
+        shift.setAttribute("aria-pressed", String(mathAlphabetShifted));
+        shift.addEventListener("pointerdown", (event) => event.preventDefault());
+        shift.addEventListener("click", () => { mathAlphabetShifted = !mathAlphabetShifted; renderMathKeyboardKeys("Alphabet"); });
+        row.append(shift);
+      }
+      for (const letter of letters) {
+        const value = mathAlphabetShifted ? letter.toUpperCase() : letter;
+        row.append(createMathKey(value, `Insert letter ${value}`));
+      }
+      if (index === 2) row.append(createMathKey("?", "Insert question mark"));
+      host.append(row);
+    });
+    const punctuation = document.createElement("div");
+    punctuation.className = "math-alphabet-row math-alphabet-punctuation";
+    for (const label of MATH_ALPHABET_PUNCTUATION) punctuation.append(createMathKey(label, `Insert ${label}`));
+    host.append(punctuation);
+  } else {
+    for (const label of MATH_KEYSETS[state.practiceKeyboardMode]) host.append(createMathKey(label));
   }
 }
 
-renderPracticeMathKeys();
+for (const label of MATH_NUMERIC_KEYS) {
+  const button = createMathKey(label, label === "AC" ? "Clear maths" : `Insert ${label}`);
+  if (["÷", "×", "−", "=", "+", "±", "≈", "AC"].includes(label)) button.classList.add("is-operator");
+  $("#mathKeyboardNumericKeys").append(button);
+}
+
+renderMathKeyboardKeys();
+
+function setMathKeyboardVisible(visible, editorName = activeMathEditorName) {
+  activeMathEditorName = editorName;
+  const mount = mathKeyboardMounts[editorName];
+  if (mount && sharedMathKeyboard.parentElement !== mount) mount.append(sharedMathKeyboard);
+  sharedMathKeyboard.hidden = !visible;
+  for (const toggle of $$(".math-editor-keyboard-toggle")) toggle.setAttribute("aria-expanded", String(visible && toggle.dataset.editorTarget === editorName));
+  if (visible) {
+    updateMathKeyboardPreview(getMathEditorLatex(editorName));
+    requestAnimationFrame(() => sharedMathKeyboard.scrollIntoView({ block: "nearest", behavior: "smooth" }));
+  }
+}
+
+function toggleMathKeyboard(editorName) {
+  const visible = !(activeMathEditorName === editorName && !sharedMathKeyboard.hidden);
+  setMathKeyboardVisible(visible, editorName);
+}
+
 function setPracticeKeyboardVisible(visible) {
-  const keyboard = $("#practiceMathKeyboard");
-  const toggle = $("#practiceKeyboardToggle");
-  keyboard.hidden = !visible;
-  toggle.setAttribute("aria-expanded", String(visible));
+  setMathKeyboardVisible(visible, "practice");
 }
 
-$("#practiceKeyboardToggle").addEventListener("click", () => {
-  setPracticeKeyboardVisible($("#practiceMathKeyboard").hidden);
-});
-$(".math-keyboard-tabs").addEventListener("click", (event) => {
+for (const toggle of $$(".math-editor-keyboard-toggle")) {
+  toggle.addEventListener("click", () => toggleMathKeyboard(toggle.dataset.editorTarget));
+}
+sharedMathKeyboard.querySelector(".math-keyboard-tabs").addEventListener("click", (event) => {
   const tab = event.target.closest("[data-keyboard-mode]");
-  if (tab) renderPracticeMathKeys(tab.dataset.keyboardMode);
+  if (tab) renderMathKeyboardKeys(tab.dataset.keyboardMode);
 });
-$(".math-keyboard-actions").addEventListener("pointerdown", (event) => event.preventDefault());
-$(".math-keyboard-actions").addEventListener("click", (event) => {
+let mathActionRepeatDelay = 0;
+let mathActionRepeatInterval = 0;
+let mathActionHandledOnPointer = false;
+let mathActionClickReset = 0;
+const repeatingMathActions = new Set(["backspace", "moveLeft", "moveRight", "moveUp", "moveDown"]);
+const mathActionButtons = sharedMathKeyboard.querySelector(".math-keyboard-actions");
+mathActionButtons.addEventListener("pointerdown", (event) => {
+  event.preventDefault();
+  const action = event.target.closest("[data-editor-action]")?.dataset.editorAction;
+  if (!action || !repeatingMathActions.has(action)) return;
+  clearTimeout(mathActionClickReset);
+  mathActionHandledOnPointer = true;
+  mathEditorCommand(activeMathEditorName, { name: action });
+  mathActionRepeatDelay = setTimeout(() => {
+    mathActionRepeatInterval = setInterval(() => mathEditorCommand(activeMathEditorName, { name: action }), 70);
+  }, 380);
+});
+window.addEventListener("pointerup", () => {
+  if (!mathActionRepeatDelay && !mathActionRepeatInterval) return;
+  clearTimeout(mathActionRepeatDelay);
+  clearInterval(mathActionRepeatInterval);
+  mathActionRepeatDelay = 0;
+  mathActionRepeatInterval = 0;
+  mathActionClickReset = setTimeout(() => { mathActionHandledOnPointer = false; }, 0);
+});
+window.addEventListener("pointercancel", () => {
+  clearTimeout(mathActionRepeatDelay);
+  clearInterval(mathActionRepeatInterval);
+  mathActionRepeatDelay = 0;
+  mathActionRepeatInterval = 0;
+  mathActionHandledOnPointer = false;
+});
+mathActionButtons.addEventListener("click", (event) => {
   const button = event.target.closest("[data-editor-action]");
-  if (button) practiceEditorCommand({ name: button.dataset.editorAction });
+  if (!button) return;
+  if (mathActionHandledOnPointer) {
+    mathActionHandledOnPointer = false;
+    return;
+  }
+  void applyMathKeyboardAction(button.dataset.editorAction);
+});
+sharedMathKeyboard.querySelector(".math-keyboard-footer").addEventListener("click", (event) => {
+  if (event.target.closest("[data-editor-insert='space']")) mathEditorCommand(activeMathEditorName, { name: "insertText", value: " " });
+  if (event.target.closest("[data-keyboard-hide]")) setMathKeyboardVisible(false);
+  const button = event.target.closest("[data-editor-action]");
+  if (button) mathEditorCommand(activeMathEditorName, { name: button.dataset.editorAction });
 });
 
-function setPracticeVoiceTranscript(transcript) {
-  state.practiceVoiceTranscript = String(transcript || "").trim();
-  $("#practiceVoiceTranscript").value = state.practiceVoiceTranscript;
-  $("#practiceVoiceReview").hidden = false;
-  $("#practiceVoiceTranscript").focus({ preventScroll: true });
-  setStatus($("#practiceVoiceStatus"), state.practiceVoiceTranscript ? "Review and edit the transcript, then use it in your working." : "No words were recognized. Try recording again.", state.practiceVoiceTranscript ? "success" : "error");
-}
-
-async function recordPracticeVoiceNote() {
-  const button = $("#practiceVoiceButton");
-  const status = $("#practiceVoiceStatus");
-  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-  if (SpeechRecognition) {
-    if (state.practiceVoiceRecorder instanceof SpeechRecognition) {
-      state.practiceVoiceRecorder.stop();
-      button.classList.remove("is-recording");
-      setStatus(status, "Voice note ready. Review the transcript below.");
-      return;
-    }
-    const recognition = new SpeechRecognition();
-    recognition.lang = "en-ZA";
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.onresult = (event) => {
-      let transcript = "";
-      for (let index = 0; index < event.results.length; index++) transcript += event.results[index][0]?.transcript || "";
-      state.practiceVoiceTranscript = transcript.trim();
-      $("#practiceVoiceTranscript").value = state.practiceVoiceTranscript;
-      $("#practiceVoiceReview").hidden = false;
-    };
-    recognition.onerror = (event) => setStatus(status, event.error === "not-allowed" ? "Allow microphone access in your browser settings." : `Voice input: ${event.error}`, "error");
-    recognition.onend = () => {
-      if (state.practiceVoiceRecorder === recognition) state.practiceVoiceRecorder = null;
-      button.classList.remove("is-recording");
-      if (state.practiceVoiceTranscript) setStatus(status, "Voice note ready. Review the transcript below.", "success");
-    };
+async function applyMathKeyboardAction(action) {
+  const editor = getMathEditor(activeMathEditorName);
+  if (!editor) return;
+  if (action === "copy") {
+    const text = editor.getClipboardText?.("selection") || "";
+    if (!text) return showToast("Select maths in the editor before copying it.");
     try {
-      state.practiceVoiceTranscript = "";
-      $("#practiceVoiceTranscript").value = "";
-      $("#practiceVoiceReview").hidden = false;
-      state.practiceVoiceRecorder = recognition;
-      recognition.start();
-      button.classList.add("is-recording");
-      setStatus(status, "Listening… select Voice again when you are finished.");
-    } catch (error) {
-      state.practiceVoiceRecorder = null;
-      setStatus(status, error.message, "error");
+      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
+      else throw new Error("Clipboard API unavailable");
+      showToast("Selected maths copied.");
+    } catch {
+      const helper = document.createElement("textarea");
+      helper.value = text;
+      helper.style.cssText = "position:fixed;left:-9999px;top:0";
+      document.body.append(helper);
+      helper.select();
+      const copied = document.execCommand("copy");
+      helper.remove();
+      if (!copied) showToast("Copy is unavailable in this browser.");
     }
     return;
   }
-
-  if (state.practiceVoiceRecorder?.state === "recording") {
-    state.practiceVoiceRecorder.stop();
-    button.classList.remove("is-recording");
-    setStatus(status, "Transcribing voice note…");
+  if (action === "paste") {
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) mathEditorCommand(activeMathEditorName, { name: "insertLatex", value: text });
+      else showToast("The clipboard is empty.");
+    } catch {
+      showToast("Allow clipboard access or use Ctrl+V while the editor is focused.");
+    }
     return;
   }
-  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
-    setStatus(status, "Voice recording is not supported by this browser. Use the editor or upload a photo of your work.", "error");
-    return;
-  }
-  try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    const mimeType = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg;codecs=opus"].find((type) => MediaRecorder.isTypeSupported(type));
-    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-    const chunks = [];
-    recorder.ondataavailable = (event) => { if (event.data.size) chunks.push(event.data); };
-    recorder.onstop = async () => {
-      stream.getTracks().forEach((track) => track.stop());
-      state.practiceVoiceRecorder = null;
-      try {
-        const type = recorder.mimeType || "audio/webm";
-        const ext = type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
-        const file = new File([new Blob(chunks, { type })], `practice-voice-note.${ext}`, { type });
-        const form = new FormData();
-        form.set("audio", file);
-        const result = await uploadForm("/api/education/speech/transcribe", form);
-        setPracticeVoiceTranscript(result.transcript || result.text || result.transcription || "");
-      } catch (error) { setStatus(status, error.message, "error"); }
-    };
-    state.practiceVoiceRecorder = recorder;
-    recorder.start();
-    button.classList.add("is-recording");
-    setStatus(status, "Recording… select Voice again when you are finished.");
-  } catch (error) {
-    setStatus(status, error.name === "NotAllowedError" ? "Allow microphone access in your browser settings." : error.message, "error");
-  }
+  mathEditorCommand(activeMathEditorName, { name: action });
 }
-
-$("#practiceVoiceButton").addEventListener("click", recordPracticeVoiceNote);
-$("#practiceVoiceTranscript").addEventListener("input", (event) => { state.practiceVoiceTranscript = event.currentTarget.value; });
-$("#practiceVoiceMath").addEventListener("input", (event) => { state.practiceVoiceMath = event.currentTarget.value; });
-$("#practiceFormatVoiceMath").addEventListener("click", async () => {
-  const transcript = $("#practiceVoiceTranscript").value.trim();
-  if (!transcript) return setStatus($("#practiceVoiceStatus"), "Record a voice note or enter the transcript first.", "error");
-  const button = $("#practiceFormatVoiceMath");
-  button.disabled = true;
-  setStatus($("#practiceVoiceStatus"), "Formatting the spoken maths…");
-  try {
-    const result = await postJson("/api/education/speech/format-math", { text: transcript, subject: "Mathematics" });
-    const formatted = String(result.mathematical_text || "").trim();
-    if (!formatted) throw new Error("The mathematical form could not be prepared. Edit it below or use the transcript.");
-    state.practiceVoiceMath = formatted;
-    $("#practiceVoiceMath").value = formatted;
-    setStatus($("#practiceVoiceStatus"), "Mathematical form ready. Review it before using it.", "success");
-  } catch (error) { setStatus($("#practiceVoiceStatus"), error.message, "error"); }
-  finally { button.disabled = false; }
-});
-function insertPracticeVoiceValue(value, command = "insertText") {
-  const content = String(value || "").trim();
-  if (!content) return setStatus($("#practiceVoiceStatus"), "Enter or format a voice response first.", "error");
-  if (getPracticeEditorLatex().trim()) practiceEditorCommand({ name: "newLine" });
-  practiceEditorCommand({ name: command, value: content });
-  $("#practiceVoiceReview").hidden = true;
-  setStatus($("#practiceVoiceStatus"), "Added to your working.", "success");
-}
-$("#practiceUseVoiceTranscript").addEventListener("click", () => insertPracticeVoiceValue($("#practiceVoiceTranscript").value));
-$("#practiceUseVoiceMath").addEventListener("click", () => insertPracticeVoiceValue($("#practiceVoiceMath").value, "insertLatex"));
-$("#practiceDismissVoice").addEventListener("click", () => { $("#practiceVoiceReview").hidden = true; setStatus($("#practiceVoiceStatus"), ""); });
-
 function renderPracticeAnswerAttachments() {
   const host = $("#practiceAnswerAttachments");
   if (!host) return;
@@ -1701,8 +2342,8 @@ $("#markPracticeAnswer").addEventListener("click", async () => {
       marks: question.marks || 0,
       learner_working: working,
       learner_final_answer: lastNonEmptyLine(working) || working,
-      assistance_mode: state.hintIndex ? "Hints" : "SolveItMyself",
-      hints_used: state.hintIndex,
+      assistance_mode: state.practiceHintsUsed ? "Hints" : "SolveItMyself",
+      hints_used: state.practiceHintsUsed,
       photo_ids: [...state.practiceAnswerPhotoIds],
     };
     let result;
@@ -1718,7 +2359,7 @@ $("#markPracticeAnswer").addEventListener("click", async () => {
     } else {
       result = await postJson("/api/education/math-practice/mark", markingContext);
     }
-    requireLunaXhigh(result, "Practice marking");
+    requireTutorCompletion(result, "Practice marking");
     const reportText = readMarkingText(result);
     const panel = $("#practiceFeedback");
     panel.hidden = false;
@@ -1757,8 +2398,8 @@ function readMarkingText(result) {
     if (typeof value === "string" && value.trim()) parts.push(value.trim());
     else if (Array.isArray(value)) parts.push(value.map((item) => typeof item === "string" ? item : item.text || item.step || JSON.stringify(item)).join("\n"));
   }
-  if (parts.length) return [...new Set(parts)].join("\n\n");
-  return JSON.stringify(result, null, 2);
+  if (parts.length) return sanitizeLearnerFacingText([...new Set(parts)].join("\n\n"));
+  return sanitizeLearnerFacingText(JSON.stringify(result, null, 2));
 }
 
 function openReportsDatabase() {
@@ -1799,12 +2440,65 @@ function downloadBlob(blob, filename) {
   setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
+async function mathSvgToPng(latex) {
+  const mathJax = await ensureMathJax();
+  if (!mathJax?.tex2svgPromise) throw new Error("Math typesetting is not ready.");
+  const rendered = await mathJax.tex2svgPromise(latex, { display: true });
+  const svg = rendered.querySelector("svg");
+  const viewBox = (svg?.getAttribute("viewBox") || "").split(/[ ,]+/).map(Number);
+  if (!svg || viewBox.length !== 4 || !viewBox.every(Number.isFinite)) throw new Error("A formula could not be rendered for the report.");
+  const maxWidthPt = 540;
+  const pointsPerEm = Math.min(12, maxWidthPt * 1000 / Math.max(viewBox[2], 1));
+  const widthPt = Math.max(12, viewBox[2] / 1000 * pointsPerEm);
+  const heightPt = Math.max(10, viewBox[3] / 1000 * pointsPerEm);
+  const pixelScale = 3;
+  svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  svg.setAttribute("width", `${Math.round(widthPt * pixelScale)}px`);
+  svg.setAttribute("height", `${Math.round(heightPt * pixelScale)}px`);
+  svg.style.color = "#10243b";
+  svg.querySelectorAll('[fill="currentColor"]').forEach((path) => path.setAttribute("fill", "#10243b"));
+  const svgUrl = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: "image/svg+xml;charset=utf-8" }));
+  try {
+    const image = new Image();
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = () => reject(new Error("A formula image could not be prepared."));
+      image.src = svgUrl;
+    });
+    const canvas = document.createElement("canvas");
+    canvas.width = image.naturalWidth || Math.round(widthPt * pixelScale);
+    canvas.height = image.naturalHeight || Math.round(heightPt * pixelScale);
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("A formula image could not be prepared.");
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0);
+    return canvas.toDataURL("image/png").split(",", 2)[1];
+  } finally {
+    URL.revokeObjectURL(svgUrl);
+  }
+}
+
+async function reportMathSegments(body) {
+  const segments = splitTextbookMath(body);
+  if (!segments.some((segment) => segment.type === "math")) return null;
+  if (segments.length > 250) throw new Error("This report contains too many separate maths lines to typeset. Shorten it and save again.");
+  const printable = [];
+  for (const segment of segments) {
+    if (segment.type === "break") printable.push({ type: "break" });
+    else if (segment.type === "text") printable.push({ type: "text", text: segment.text });
+    else printable.push({ type: "math_image", png_base64: await mathSvgToPng(segment.text) });
+  }
+  return printable;
+}
+
 async function saveReport(title, question, response) {
   const body = (question || "") + "\n\nFeedback and worked solution\n\n" + (response || "");
   try {
+    const segments = await reportMathSegments(body);
     const pdf = await apiRequest("/api/study-exports/pdf", {
       method: "POST",
-      body: JSON.stringify({ title, subtitle: "Saved " + new Date().toLocaleString(), body: body.trim() }),
+      body: JSON.stringify({ title, subtitle: "Saved " + new Date().toLocaleString(), body: body.trim(), ...(segments ? { segments } : {}) }),
       responseType: "blob",
     });
     const id = window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : Date.now() + "-" + Math.random().toString(36).slice(2);
@@ -1872,14 +2566,117 @@ async function loadSavedReports() {
   }
 }
 
-const stanmoreLinks = {
-  8: "https://stanmorephysics.com/z-grade-8/maths-grade-8/",
-  9: "https://stanmorephysics.com/z-grade-99/maths-grade-9/",
-  10: "https://stanmorephysics.com/maths-grade-10-exam-papers/",
-  11: "https://stanmorephysics.com/maths-grade-11/",
-  12: "https://stanmorephysics.com/maths-exam-papers-grade-12/",
-};
-const dbePastPapers = "https://www.education.gov.za/Curriculum/NationalSeniorCertificate(NSC)Examinations/NSCPastExaminationpapers.aspx";
+function loadPaperCatalog() {
+  if (!paperCatalogPromise) {
+    paperCatalogPromise = fetch("./paper-catalog.json")
+      .then((response) => {
+        if (!response.ok) throw new Error("Paper links could not be loaded. Please reload the app.");
+        return response.json();
+      })
+      .then((catalog) => Array.isArray(catalog.entries) ? catalog.entries : []);
+  }
+  return paperCatalogPromise;
+}
+
+function paperDate(name) {
+  const value = String(name || "");
+  const years = [];
+  const yearPattern = /(?:^|[^0-9])((?:19|20)\d{2})(?!\d)/g;
+  let match;
+  while ((match = yearPattern.exec(value))) years.push(Number(match[1]));
+  if (!years.length) return null;
+
+  const monthNumbers = {
+    jan: 1, january: 1,
+    feb: 2, february: 2,
+    mar: 3, march: 3,
+    apr: 4, april: 4,
+    may: 5,
+    jun: 6, june: 6,
+    jul: 7, july: 7,
+    aug: 8, august: 8,
+    sep: 9, sept: 9, september: 9,
+    oct: 10, october: 10,
+    nov: 11, november: 11,
+    dec: 12, december: 12,
+  };
+  const monthPattern = /(?:^|[^a-z])(january|jan|february|feb|march|mar|april|apr|may|june|jun|july|jul|august|aug|september|sept|sep|october|oct|november|nov|december|dec)(?![a-z])/gi;
+  let month = 0;
+  while ((match = monthPattern.exec(value))) month = Math.max(month, monthNumbers[match[1].toLocaleLowerCase()] || 0);
+  return { year: Math.max(...years), month };
+}
+
+function renderPaperCatalogItems() {
+  const host = $("#paperCatalogItems");
+  const query = $("#paperCatalogSearch").value.trim().toLocaleLowerCase();
+  const entries = activePaperCatalog.entries
+    .filter((entry) => !query || entry.name.toLocaleLowerCase().includes(query))
+    .sort((a, b) => {
+      const dateA = paperDate(a.name);
+      const dateB = paperDate(b.name);
+      if (dateA && !dateB) return -1;
+      if (!dateA && dateB) return 1;
+      if (dateA && dateB) {
+        const dateOrder = (dateB.year - dateA.year) || (dateB.month - dateA.month);
+        if (dateOrder) return activePaperCatalog.newestFirst ? dateOrder : -dateOrder;
+      }
+      return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" });
+    });
+  host.replaceChildren();
+  for (const entry of entries) {
+    const row = document.createElement("a");
+    row.className = "paper-catalog-link";
+    row.textContent = entry.name.replace(/\.pdf$/i, "");
+    row.href = `https://www.google.com/search?${new URLSearchParams({ q: `"${entry.name}" filetype:pdf` })}`;
+    row.target = "_blank";
+    row.rel = "noopener noreferrer";
+    host.append(row);
+  }
+  $("#paperCatalogCount").textContent = `Showing ${entries.length} of ${activePaperCatalog.entries.length} filenames`;
+  $("#paperCatalogEmpty").hidden = entries.length > 0;
+}
+
+async function openPaperCatalog(grade, source) {
+  const dialog = $("#paperCatalogDialog");
+  const normalizedGrade = formatGrade(grade);
+  const title = source === "dbe"
+    ? "Links to DBE Grade 12 papers and memos"
+    : `Links to Stanmore Grade ${normalizedGrade} papers and memos`;
+  $("#paperCatalogTitle").textContent = title;
+  $("#paperCatalogSearch").value = "";
+  $("#paperCatalogCount").textContent = "Loading filenames…";
+  $("#paperCatalogItems").replaceChildren();
+  $("#paperCatalogEmpty").hidden = true;
+  activePaperCatalog = { grade: normalizedGrade, source, entries: [], newestFirst: true };
+  $("#paperCatalogSort").textContent = "Newest first";
+  $("#paperCatalogSort").title = "Switch to oldest-first order";
+  $("#paperCatalogSort").setAttribute("aria-pressed", "true");
+  if (!dialog.open) dialog.showModal();
+  try {
+    const catalog = await loadPaperCatalog();
+    activePaperCatalog.entries = catalog
+      .filter((entry) => Number(entry.grade) === Number(normalizedGrade) && entry.source === source)
+      .sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: "base" }));
+    if (!activePaperCatalog.entries.length) throw new Error("No paper links are available for this grade yet.");
+    renderPaperCatalogItems();
+    $("#paperCatalogSearch").focus();
+  } catch (error) {
+    $("#paperCatalogItems").replaceChildren();
+    $("#paperCatalogCount").textContent = error.message;
+    $("#paperCatalogEmpty").hidden = true;
+  }
+}
+
+$("#paperCatalogClose").addEventListener("click", () => $("#paperCatalogDialog").close());
+$("#paperCatalogSearch").addEventListener("input", renderPaperCatalogItems);
+$("#paperCatalogSort").addEventListener("click", (event) => {
+  activePaperCatalog.newestFirst = !activePaperCatalog.newestFirst;
+  const button = event.currentTarget;
+  button.textContent = activePaperCatalog.newestFirst ? "Newest first" : "Oldest first";
+  button.title = activePaperCatalog.newestFirst ? "Switch to oldest-first order" : "Switch to newest-first order";
+  button.setAttribute("aria-pressed", String(activePaperCatalog.newestFirst));
+  renderPaperCatalogItems();
+});
 
 function renderSourceLinks() {
   const host = $("#sourceLinks");
@@ -1888,20 +2685,19 @@ function renderSourceLinks() {
   host.replaceChildren();
   const intro = document.createElement("p");
   intro.className = "source-note";
-  intro.textContent = "Open a source site, choose and download a paper yourself, then upload your copy here.";
+  intro.textContent = "Choose a paper filename to search for a downloadable copy. Download it, then upload your PDF here.";
   const links = document.createElement("div");
   links.className = "source-link-list";
-  function addLink(label, href) {
-    const anchor = document.createElement("a");
-    anchor.className = "button subtle";
-    anchor.href = href;
-    anchor.target = "_blank";
-    anchor.rel = "noopener noreferrer";
-    anchor.textContent = label;
-    links.append(anchor);
+  function addLink(label, source) {
+    const button = document.createElement("button");
+    button.className = "button subtle";
+    button.type = "button";
+    button.textContent = label;
+    button.addEventListener("click", () => openPaperCatalog(grade, source));
+    links.append(button);
   }
-  addLink("Stanmore Grade " + grade, stanmoreLinks[grade]);
-  if (grade === 12) addLink("DBE Grade 12 papers and memos", dbePastPapers);
+  addLink(`Links to Stanmore Grade ${grade} papers and memos`, "stanmore");
+  if (grade === 12) addLink("Links to DBE Grade 12 papers and memos", "dbe");
   host.append(intro, links);
 }
 
@@ -1999,7 +2795,7 @@ $("#generateExam").addEventListener("click", async () => {
   button.disabled = true;
   setStatus($("#examStatus"), "Building and checking your assessment…");
   try {
-    const result = await postJson("/api/education/test-exam-preparation/generate", {
+    const result = await postJson("/api/education/test-exam-preparation/generate?include_authored_support=false", {
       grade: formatGrade($("#examGrade").value),
       assessment_type: $("#examType").value,
       topic_scopes: scopes.filter((scope) => scope.subtopic_ids.length),
@@ -2070,7 +2866,8 @@ async function renderExamSession(session) {
   $("#examProgress").textContent = (session.paper_title || "Assessment") + " · Question " + (state.examQuestionIndex + 1) + " of " + session.question_count;
   $("#examQuestionTitle").textContent = question.display_label || "Question " + (state.examQuestionIndex + 1);
   renderMath($("#examQuestionText"), question.question_text_latex || question.question_text || "");
-  $("#examAnswer").value = question.answer && question.answer.answer_text || "";
+  setMathEditorLatex("exam", question.answer && question.answer.answer_text || "");
+  setMathKeyboardVisible(false, "exam");
   $("#examGuidanceText").hidden = true;
   $("#examGuidanceText").replaceChildren();
   $("#examQuestionVisuals").replaceChildren();
@@ -2102,7 +2899,7 @@ async function saveExamAnswer() {
   const attachments = state.examAnswerAttachments && state.examAnswerAttachments.get(question.id) || [];
   return postJson("/api/education/exam-sessions/" + encodeURIComponent(state.examSessionId) + "/answers", {
     question_id: question.id,
-    answer_text: $("#examAnswer").value,
+    answer_text: getMathEditorLatex("exam"),
     attachment_ids: attachments,
     is_flagged_for_review: false,
   });
@@ -2124,18 +2921,14 @@ $("#nextExamQuestion").addEventListener("click", () => navigateExam(1));
 $("#examGuidanceButton").addEventListener("click", async () => {
   try {
     const result = await postJson("/api/education/exam-sessions/" + encodeURIComponent(state.examSessionId) + "/guidance", { action: "explain" });
-    requireLunaXhigh(result, "Assessment guidance");
+    requireTutorCompletion(result, "Assessment guidance");
     const panel = $("#examGuidanceText");
     panel.hidden = false;
     renderMath(panel, result.guidance_latex || result.guidance || result.message || "Identify the information given and what the question asks you to find.");
-    if (result.formula_latex || result.formula) {
-      const formula = document.createElement("p");
-      renderMath(formula, "Formula: " + (result.formula_latex || result.formula));
-      panel.append(formula);
-    }
   } catch (error) { showToast(error.message); }
 });
 $("#examCanvasButton").addEventListener("click", () => openCanvas("exam", state.examCurrentQuestion));
+$("#examGraphCanvasButton").addEventListener("click", () => openCanvas("exam-graph", state.examCurrentQuestion));
 $("#examFullScreen").addEventListener("click", () => {
   const image = $("#examQuestionVisuals img");
   if (image) openImageViewer(image.src, image.alt || "Assessment diagram");
@@ -2147,7 +2940,7 @@ $("#submitExam").addEventListener("click", async () => {
   try {
     await saveExamAnswer();
     const result = await postJson("/api/education/exam-sessions/" + encodeURIComponent(state.examSessionId) + "/submit", {});
-    requireLunaXhigh(result, "Assessment marking");
+    requireTutorCompletion(result, "Assessment marking");
     const panel = $("#examResult");
     panel.hidden = false;
     panel.replaceChildren();
@@ -2186,7 +2979,7 @@ async function loadLessons() {
       const section = document.createElement("section");
       section.className = "lesson-topic";
       const heading = document.createElement("h2");
-      heading.textContent = topic.topic || "Mathematics";
+      renderMath(heading, topic.topic || "Mathematics");
       section.append(heading);
       const grid = document.createElement("div");
       grid.className = "lesson-grid";
@@ -2201,7 +2994,7 @@ async function loadLessons() {
           card.append(image);
         }
         const title = document.createElement("h3");
-        title.textContent = lesson.title;
+        renderMath(title, lesson.title);
         const play = document.createElement("button");
         play.type = "button";
         play.className = "button primary";
@@ -2232,9 +3025,10 @@ async function playLessonVideo(grade, topic, lesson, button) {
     const player = $("#lessonPlayer");
     player.replaceChildren();
     const heading = document.createElement("h2");
-    heading.textContent = video.title || lesson.title;
+    const videoTitle = video.title || lesson.title;
+    renderMath(heading, videoTitle);
     const frame = document.createElement("iframe");
-    frame.title = heading.textContent;
+    frame.title = videoTitle;
     frame.src = video.playback_url;
     frame.allow = "autoplay; fullscreen; picture-in-picture";
     frame.allowFullscreen = true;
@@ -2346,10 +3140,11 @@ function deviceRemoteCreateCursor() {
 
 function deviceRemoteNotifyFocus(target = document.activeElement) {
   if (!deviceRemoteSession) return;
-  const frame = target === practiceMathEditorFrame || target?.tagName === "IFRAME" && target === practiceMathEditorFrame;
+  const editorName = Object.entries(mathEditorFrames).find(([, candidate]) => candidate === target)?.[0] || "";
+  const frame = Boolean(editorName);
   let editable = null;
   if (frame) {
-    deviceRemoteTargetFrame = practiceMathEditorFrame;
+    deviceRemoteTargetFrame = mathEditorFrames[editorName];
   } else {
     deviceRemoteTargetFrame = null;
     editable = target instanceof HTMLElement ? target : null;
@@ -2358,8 +3153,8 @@ function deviceRemoteNotifyFocus(target = document.activeElement) {
   const password = type === "password";
   const isTextField = editable && ((editable.matches("input, textarea") && !["checkbox", "radio", "button", "submit", "reset", "file", "color", "range", "hidden"].includes(type)) || editable.isContentEditable);
   const keyboard = Boolean(frame || (isTextField && !password));
-  const value = password ? "" : frame ? (state.practiceEditorState?.latex || "") : isTextField && "value" in editable ? String(editable.value || "").slice(0, 4000) : "";
-  const label = frame ? "maths editor" : editable?.getAttribute("aria-label") || editable?.getAttribute("placeholder") || editable?.name || editable?.id || (editable?.tagName === "TEXTAREA" ? "answer box" : "selected control");
+  const value = password ? "" : frame ? getMathEditorLatex(editorName).slice(0, 4000) : isTextField && "value" in editable ? String(editable.value || "").slice(0, 4000) : "";
+  const label = frame ? `${editorName === "voiceMath" ? "voice maths" : editorName === "canvasMath" ? "recognized maths" : editorName} editor` : editable?.getAttribute("aria-label") || editable?.getAttribute("placeholder") || editable?.name || editable?.id || (editable?.tagName === "TEXTAREA" ? "answer box" : "selected control");
   deviceRemoteSend({ type: "focus", keyboard, label: String(label).slice(0, 120), value });
 }
 
@@ -2470,9 +3265,8 @@ function stopDeviceRemote() {
 }
 
 function deviceRemoteActiveEditor() {
-  if (deviceRemoteTargetFrame === practiceMathEditorFrame || document.activeElement === practiceMathEditorFrame) {
-    return practiceMathEditorFrame.contentWindow?.SharperMathEditor || null;
-  }
+  const targetName = Object.entries(mathEditorFrames).find(([, frame]) => frame === deviceRemoteTargetFrame || frame === document.activeElement)?.[0];
+  if (targetName) return getMathEditor(targetName);
   const active = document.activeElement;
   if (active instanceof HTMLElement && active.isContentEditable) return active;
   if (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement) return active;
@@ -2646,10 +3440,12 @@ function deviceRemoteFindScrollTarget(x, y, axis = "both") {
 
 function deviceRemoteResolvePointerTarget(x, y) {
   const outer = document.elementFromPoint(x, y);
-  if (outer === practiceMathEditorFrame) {
+  const editorName = Object.entries(mathEditorFrames).find(([, frame]) => frame === outer)?.[0];
+  if (editorName) {
     try {
-      const rect = practiceMathEditorFrame.getBoundingClientRect();
-      const doc = practiceMathEditorFrame.contentDocument;
+      const frame = mathEditorFrames[editorName];
+      const rect = frame.getBoundingClientRect();
+      const doc = frame.contentDocument;
       const element = doc?.elementFromPoint(x - rect.left, y - rect.top);
       if (element) return { element, clientX: x - rect.left, clientY: y - rect.top };
     } catch { /* The frame is same-origin in this app; ignore an unavailable editor. */ }
@@ -2698,12 +3494,43 @@ document.addEventListener("input", (event) => {
 const workingCanvas = $("#workingCanvas");
 let phoneCanvasSocket = null;
 let phoneCanvasSession = null;
+let phoneCanvasRemoteOrigin = "";
+let phoneCanvasConnected = false;
 let phoneCanvasSubmissionSentUntil = 0;
 let phoneCanvasHeartbeat = 0;
 let phoneCanvasCloseTimer = 0;
 
+function canvasSupportsDirectInput() {
+  const touchPoints = Number(navigator.maxTouchPoints || navigator.msMaxTouchPoints || 0);
+  return touchPoints > 0 || (window.matchMedia?.("(pointer: coarse)").matches && "ontouchstart" in window);
+}
+
+function canvasCanSelectWithMouse(event) {
+  return event?.pointerType === "mouse" && phoneCanvasConnected && state.canvas?.stage === "regions";
+}
+
+function syncCanvasInputMode() {
+  const phoneOnly = !canvasSupportsDirectInput() && !phoneCanvasConnected;
+  const pairingPanelOpen = !$("#phoneCanvasPairPanel").hidden;
+  $("#canvasDialog").classList.toggle("phone-pairing-required", phoneOnly);
+  // The pairing panel already tells the learner how to connect. Keep the
+  // canvas-only notice from covering the drawing area while that panel is open.
+  $("#canvasPhoneOnlyNotice").hidden = !phoneOnly || pairingPanelOpen;
+}
+
 function phoneCanvasSetStatus(message, kind = "") {
   setStatus($("#phoneCanvasPairStatus"), message, kind);
+}
+
+async function copyPhoneCanvasPairServer() {
+  const address = $("#phoneCanvasPairServerAddress").textContent.trim();
+  if (!address) return;
+  try {
+    await navigator.clipboard.writeText(address);
+    phoneCanvasSetStatus("Computer address copied. Paste it into the companion app.", "success");
+  } catch {
+    phoneCanvasSetStatus(`Computer address: ${address}`);
+  }
 }
 
 function phoneCanvasSend(message) {
@@ -2713,12 +3540,23 @@ function phoneCanvasSend(message) {
 }
 
 function phoneCanvasRemoteUrl(sessionId, code) {
-  const localDevelopment = ["localhost", "127.0.0.1", "::1"].includes(location.hostname);
-  const remoteUrl = localDevelopment
-    ? new URL("https://sharperx.co.za/app/canvas-remote.html")
+  const remoteUrl = phoneCanvasRemoteOrigin
+    ? new URL("/app/canvas-remote.html", phoneCanvasRemoteOrigin)
     : new URL("./canvas-remote.html", location.href);
   remoteUrl.hash = new URLSearchParams({ session_id: sessionId, code }).toString();
   return remoteUrl;
+}
+
+async function resolvePhoneCanvasRemoteOrigin() {
+  if (!isLocalIntranetPage()) return "";
+  const hostname = location.hostname.toLowerCase();
+  if (!["localhost", "127.0.0.1", "::1"].includes(hostname)) return location.origin;
+  const response = await fetch(new URL("/api/local-network-info", location.origin), { cache: "no-store" });
+  if (!response.ok) throw new Error("Could not find this computer’s Wi-Fi address for phone pairing.");
+  const network = await response.json().catch(() => ({}));
+  const address = Array.isArray(network.ipv4_addresses) ? network.ipv4_addresses[0] : "";
+  if (!address) throw new Error("Connect this computer and phone to the same Wi-Fi, then try phone pairing again.");
+  return `${location.protocol}//${address}${location.port ? `:${location.port}` : ""}`;
 }
 
 function deviceRemoteShareCanvasLink() {
@@ -2742,6 +3580,7 @@ function deviceRemoteOpenCanvas() {
   }
   const panel = $("#phoneCanvasPairPanel");
   panel.hidden = false;
+  syncCanvasInputMode();
   $("#usePhoneCanvas").setAttribute("aria-expanded", "true");
   if (phoneCanvasSession) {
     deviceRemoteShareCanvasLink();
@@ -2776,6 +3615,19 @@ function phoneCanvasMapPoint(point, frame) {
   };
 }
 
+function phoneCanvasPoint(point) {
+  return {
+    x: Number.isFinite(Number(point?.x)) ? Number(point.x) : 0,
+    y: Number.isFinite(Number(point?.y)) ? Number(point.y) : 0,
+  };
+}
+
+function setPhoneCanvasConnected(connected) {
+  phoneCanvasConnected = connected;
+  $("#phoneCanvasPairPanel").classList.toggle("is-connected", connected);
+  syncCanvasInputMode();
+}
+
 function phoneCanvasSnapshot() {
   const source = state.canvas.strokes.filter((stroke) => stroke.source === "phone").reverse();
   let remaining = 4000;
@@ -2803,11 +3655,23 @@ function phoneCanvasSnapshot() {
 
 function invalidateCanvasTranscription() {
   if (!state.canvas) return;
+  if (state.canvas.stage === "writing" && state.canvas.regions?.length) {
+    state.canvas.regions.forEach(releaseCanvasRegionSnapshot);
+    state.canvas.regions = [];
+    renderCanvasRegionSnapshots();
+  }
   state.canvas.revision = (state.canvas.revision || 0) + 1;
   state.canvas.transcribedPhoto = null;
   state.canvas.photoPromise = null;
+  state.canvas.readingConfirmed = false;
+  state.canvas.readingApplied = false;
+  state.canvas.confirmedReading = null;
   const panel = $("#canvasTranscriptionPanel");
   if (panel) panel.hidden = true;
+  const readingPanel = $("#canvasReadingReview");
+  if (readingPanel && state.canvas.stage !== "regions") readingPanel.hidden = true;
+  const readingResults = $("#canvasReadingResults");
+  if (readingResults) readingResults.hidden = true;
   const status = $("#canvasTranscriptionStatus");
   if (status) {
     status.textContent = "";
@@ -2820,6 +3684,7 @@ function applyPhoneCanvasMessage(message) {
   if (message.type === "authenticated") {
     phoneCanvasSetStatus("Scan the code with your phone. Enter the pairing code if you cannot scan it.");
   } else if (message.type === "phone_connected") {
+    setPhoneCanvasConnected(true);
     phoneCanvasSetStatus("Phone connected. Draw on it and your work will appear here.", "success");
     const question = state.canvasQuestion;
     const questionText = question?.accessible_text || question?.question_text || question?.text || questionLabel(question || {});
@@ -2827,13 +3692,44 @@ function applyPhoneCanvasMessage(message) {
       type: "setup",
       title: $("#canvasTitle").textContent,
       question: String(questionText || "").slice(0, 12_000),
+      mode: state.canvas.mode,
       strokes: phoneCanvasSnapshot(),
+      stage: state.canvas.stage,
+      region_kind: state.canvas.regionKind,
+      regions: (state.canvas.regions || []).map((region) => canvasRegionSetupPayload(region)),
     });
   } else if (message.type === "phone_disconnected") {
+    setPhoneCanvasConnected(false);
     phoneCanvasSetStatus("Phone disconnected. Scan the code again to reconnect.", "error");
   } else if (message.type === "stroke_start") {
+    if (message.tool === "region-kind") {
+      if (state.canvas.stage === "regions" && ["words", "maths", "drawings"].includes(message.region_kind)) {
+        state.canvas.regionKind = message.region_kind;
+        updateCanvasStage();
+      }
+      return;
+    }
+    if (message.tool === "region") {
+      if (state.canvas.stage !== "regions") return;
+      invalidateCanvasTranscription();
+      const first = phoneCanvasMapPoint(message.point, message.frame);
+      const world = canvasRegionScreenToWorld(first);
+      const sourcePoint = phoneCanvasPoint(message.point);
+      state.canvas.draftRegion = {
+        id: String(message.id || ""),
+        kind: ["words", "maths", "drawings"].includes(message.region_kind) ? message.region_kind : state.canvas.regionKind,
+        start: world,
+        end: world,
+        source: "phone",
+        remoteBounds: { frame: message.frame, start: sourcePoint, end: sourcePoint },
+      };
+      drawCanvasRegionOverlay();
+      return;
+    }
+    if (state.canvas.stage !== "writing") return;
     invalidateCanvasTranscription();
-    const first = phoneCanvasMapPoint(message.point, message.frame);
+    const firstScreen = phoneCanvasMapPoint(message.point, message.frame);
+    const first = canvasRegionScreenToWorld(firstScreen);
     state.canvas.strokes.push({
       id: String(message.id || ""),
       source: "phone",
@@ -2843,22 +3739,51 @@ function applyPhoneCanvasMessage(message) {
       points: [{ x: first.x, y: first.y }],
       color: message.tool === "eraser" ? "#fff" : "#162a29",
       tool: message.tool === "eraser" ? "eraser" : "pen",
-      width: (Number(message.width) || 2.2) * first.scale,
+      width: (Number(message.width) || 2.2) * firstScreen.scale,
     });
     drawCanvas();
   } else if (message.type === "stroke_points") {
+    if (state.canvas.draftRegion?.id === String(message.id || "")) {
+      if (state.canvas.stage !== "regions") return;
+      if (Array.isArray(message.points) && message.points.length) {
+        const point = phoneCanvasMapPoint(message.points[message.points.length - 1], message.frame);
+        state.canvas.draftRegion.end = canvasRegionScreenToWorld(point);
+        state.canvas.draftRegion.remoteBounds.end = phoneCanvasPoint(message.points[message.points.length - 1]);
+        drawCanvasRegionOverlay();
+      }
+      return;
+    }
+    if (state.canvas.stage !== "writing") return;
     const stroke = [...state.canvas.strokes].reverse().find((item) => item.source === "phone" && item.id === String(message.id || ""));
     if (!stroke || !Array.isArray(message.points)) return;
     message.points.forEach((point) => {
       const mapped = phoneCanvasMapPoint(point, message.frame);
       stroke.remotePoints.push(point);
-      stroke.points.push({ x: mapped.x, y: mapped.y });
+      stroke.points.push(canvasRegionScreenToWorld(mapped));
     });
     drawCanvas();
   } else if (message.type === "stroke_end") {
-    state.canvas.active = null;
+    if (state.canvas.draftRegion?.id === String(message.id || "")) {
+      const draft = state.canvas.draftRegion;
+      state.canvas.draftRegion = null;
+      addCanvasRegion(draft.start, draft.end, draft.kind, draft.id, draft.remoteBounds);
+      drawCanvasRegionOverlay();
+      syncPhoneCanvasSetup();
+    } else state.canvas.active = null;
   } else if (message.type === "undo") {
     const targetId = String(message.id || "");
+    if (state.canvas.stage === "regions") {
+      const index = state.canvas.regions.findIndex((region) => region.id === targetId);
+      if (index >= 0) {
+        releaseCanvasRegionSnapshot(state.canvas.regions[index]);
+        state.canvas.regions.splice(index, 1);
+        invalidateCanvasTranscription();
+        renderCanvasRegionSnapshots();
+      }
+      drawCanvasRegionOverlay();
+      syncPhoneCanvasSetup();
+      return;
+    }
     let index = -1;
     for (let i = state.canvas.strokes.length - 1; i >= 0; i -= 1) {
       const stroke = state.canvas.strokes[i];
@@ -2870,12 +3795,54 @@ function applyPhoneCanvasMessage(message) {
     }
     drawCanvas();
   } else if (message.type === "clear") {
+    if (state.canvas.stage === "regions") {
+      invalidateCanvasTranscription();
+      state.canvas.regions.forEach(releaseCanvasRegionSnapshot);
+      state.canvas.regions = [];
+      state.canvas.draftRegion = null;
+      renderCanvasRegionSnapshots();
+      drawCanvasRegionOverlay();
+      syncPhoneCanvasSetup();
+      return;
+    }
     invalidateCanvasTranscription();
     state.canvas.strokes = state.canvas.strokes.filter((stroke) => stroke.source !== "phone");
     drawCanvas();
   } else if (message.type === "submit") {
-    phoneCanvasSetStatus("Submitting the phone canvas…");
-    $("#finishCanvas").click();
+    if (state.canvas.stage === "writing" && state.canvas.mode === "graph") {
+      if (!state.canvas.strokes.length) {
+        const messageText = "Draw the graph before asking for a review.";
+        setCanvasReadingStatus(messageText, "error");
+        phoneCanvasSetStatus(messageText, "error");
+        phoneCanvasSend({ type: "submission_error", message: messageText });
+        return;
+      }
+      $("#canvasReadWritingButton").click();
+      return;
+    }
+    if (state.canvas.stage === "writing" && state.canvas.mode !== "graph") {
+      $("#canvasReadWritingButton").click();
+      if (state.canvas.stage === "regions") {
+        const messageText = "Choose Words, Maths, or Drawings, mark each area, then tap Transcribe.";
+        phoneCanvasSetStatus(messageText);
+        phoneCanvasSend({ type: "selection_ready", message: messageText });
+      }
+      return;
+    }
+    if (state.canvas.stage === "regions") {
+      if (!state.canvas.regions.length) {
+        const messageText = "Mark at least one area before transcribing.";
+        phoneCanvasSetStatus(messageText, "error");
+        phoneCanvasSend({ type: "submission_error", message: messageText });
+        return;
+      }
+      const messageText = "Preparing your selected work for transcription…";
+      phoneCanvasSetStatus(messageText);
+      phoneCanvasSend({ type: "processing", message: messageText });
+      $("#canvasReadWritingButton").click();
+      return;
+    }
+    phoneCanvasSend({ type: "submission_error", message: "The canvas is not ready to transcribe. Return to the canvas and try again." });
   }
 }
 
@@ -2891,24 +3858,36 @@ function stopPhoneCanvas({ notify = true } = {}) {
   }
   phoneCanvasSocket = null;
   phoneCanvasSession = null;
+  setPhoneCanvasConnected(false);
   phoneCanvasSubmissionSentUntil = 0;
   $("#phoneCanvasPairCode").textContent = "------";
   $("#phoneCanvasPairQr").replaceChildren();
   $("#usePhoneCanvas").setAttribute("aria-expanded", "false");
   $("#phoneCanvasPairPanel").hidden = true;
+  syncCanvasInputMode();
   $("#usePhoneCanvas").disabled = false;
   phoneCanvasSetStatus("Phone connection closed.");
 }
 
 async function startPhoneCanvas() {
+  if (state.canvas?.mode === "graph" && (!Number.isSafeInteger(state.canvas.graphFunctionCount) || state.canvas.graphFunctionCount < 1)) {
+    setStatus($("#canvasGraphCountStatus"), "Enter a whole number greater than 0 before opening the phone canvas.", "error");
+    $("#canvasGraphFunctionCount").focus({ preventScroll: true });
+    return;
+  }
   if (phoneCanvasSession) return;
   const button = $("#usePhoneCanvas");
   button.disabled = true;
   phoneCanvasSetStatus("Connecting…");
   try {
+    phoneCanvasRemoteOrigin = await resolvePhoneCanvasRemoteOrigin();
     const session = await postPairingJson("canvas-pairing", "sessions");
     phoneCanvasSession = session;
+    setPhoneCanvasConnected(false);
     $("#phoneCanvasPairCode").textContent = session.pairing_code;
+    const pairingAddress = isLocalIntranetPage() ? (phoneCanvasRemoteOrigin || window.location.origin) : API_BASE_URL;
+    $("#phoneCanvasPairServerAddress").textContent = pairingAddress;
+    $("#phoneCanvasPairServerRow").hidden = !isLocalIntranetPage();
     const remoteUrl = phoneCanvasRemoteUrl(session.session_id, session.pairing_code);
     const remotePage = new URL(remoteUrl.href);
     remotePage.hash = "";
@@ -2937,6 +3916,7 @@ async function startPhoneCanvas() {
         phoneCanvasSetStatus("Connection ended before the phone joined. Your code is still available; tap Use phone to try again.", "error");
       }
       phoneCanvasSession = null;
+      setPhoneCanvasConnected(false);
       phoneCanvasSocket = null;
       button.disabled = false;
     });
@@ -2944,18 +3924,22 @@ async function startPhoneCanvas() {
   } catch (error) {
     phoneCanvasSetStatus(error.message || "Could not start a phone connection.", "error");
     phoneCanvasSession = null;
+    setPhoneCanvasConnected(false);
     button.disabled = false;
   }
 }
 
 function openCanvas(mode, question) {
   if (phoneCanvasSession) stopPhoneCanvas();
+  setPhoneCanvasConnected(false);
   $("#phoneCanvasPairPanel").hidden = true;
   $("#usePhoneCanvas").setAttribute("aria-expanded", "false");
+  syncCanvasInputMode();
   state.canvasContext = mode;
   state.canvasQuestion = question || null;
   state.canvasReturnFocus = document.activeElement;
-  state.canvas = { mode: mode.endsWith("graph") ? "graph" : "write", strokes: [], scale: 1, offsetX: 0, offsetY: 0, pan: false, zoom: false, eraser: false, revision: 0, transcribedPhoto: null, photoPromise: null, active: null, drag: null, pointers: new Map(), pinch: null, size: { width: 0, height: 0 } };
+  const graphMode = mode.endsWith("graph");
+  state.canvas = { mode: graphMode ? "graph" : "write", stage: graphMode ? "graph-setup" : "writing", graphFunctionCount: 0, regions: [], regionKind: "words", draftRegion: null, strokes: [], scale: 1, offsetX: 0, offsetY: 0, pan: false, zoom: false, eraser: false, revision: 0, transcribedPhoto: null, photoPromise: null, active: null, drag: null, pointers: new Map(), pinch: null, size: { width: 0, height: 0 }, writingViewport: null, readingConfirmed: false, readingApplied: false, confirmedReading: null, readingAlternatives: [], graphWorkflow: null, questionAwareGraph: Boolean(question) || mode.startsWith("practice") || mode.startsWith("exam") || (mode === "ask-graph" && Boolean(state.selectedPaperQuestion)) };
   $("#canvasTitle").textContent = mode.endsWith("graph") ? "Draw a graph" : mode === "ask-write" ? "Write words / maths" : "Write or draw your answer";
   $("#canvasPanButton").setAttribute("aria-pressed", "false");
   $("#canvasPanButton").setAttribute("aria-label", "Enable pan mode");
@@ -2966,12 +3950,50 @@ function openCanvas(mode, question) {
   $("#canvasEraserButton").setAttribute("aria-pressed", "false");
   $("#canvasEraserButton").setAttribute("aria-label", "Enable eraser");
   $("#canvasEraserButton").textContent = "Eraser";
-  $("#canvasReadMathButton").hidden = mode.endsWith("graph");
+  $("#canvasReadWritingButton").textContent = graphMode ? "Review graph" : "Next";
+  $("#canvasGraphCountPanel").hidden = !graphMode;
+  $("#canvasGraphFunctionCount").value = "";
+  setStatus($("#canvasGraphCountStatus"), "");
+  $(".canvas-layout").hidden = graphMode;
+  $("#canvasHelpText").hidden = graphMode;
+  $("#canvasGraphStartButton").disabled = false;
+  $$(".canvas-region-tool").forEach((item) => { item.hidden = true; item.setAttribute("aria-pressed", "false"); });
+  $("#canvasBackWritingButton").hidden = true;
+  $("#canvasReadWritingButton").hidden = graphMode;
   $("#canvasTranscriptionPanel").hidden = true;
-  $("#canvasTranscriptionText").value = "";
+  $("#canvasReadingReview").hidden = true;
+  $("#canvasReadingResults").hidden = true;
+  $("#canvasReadingWords").value = "";
+  $("#canvasReadingAlternatives").replaceChildren();
+  $("#canvasReadingAlternatives").hidden = true;
+  $("#canvasReadingDrawing").value = "";
+  $("#canvasReadingComment").value = "";
+  $("#canvasReviewProgress").hidden = true;
+  $("#canvasReadingStatus").dataset.loading = "false";
+  $("#canvasReadingConfirm").disabled = true;
+  $("#canvasReadingConfirm").textContent = "Confirm and use";
+  $("#canvasReadingImageOnly").disabled = false;
+  $("#canvasReadingImageOnly").hidden = false;
+  $("#canvasGraphType").value = "";
+  $("#canvasGraphType").disabled = false;
+  $("#canvasGraphDetails").value = "";
+  $("#canvasGraphDetails").disabled = false;
+  $("#canvasGraphDetails").hidden = false;
+  $("#canvasGraphEquationLabel").hidden = false;
+  $("#canvasGraphReviewFields").hidden = !mode.endsWith("graph");
+  $("#canvasGraphGuidedPanel").hidden = true;
+  $("#canvasGraphPreviewPanel").hidden = true;
+  $("#canvasGraphPreview").replaceChildren();
+  $("#canvasGraphPreviewStatus").textContent = "";
+  $("#canvasGraphPointHistory").replaceChildren();
+  $("#canvasGraphPointInput").value = "";
+  placeCanvasGraphConfirmButton(state.canvas);
+  $("#finishCanvas").textContent = "Review and use";
+  mathEditorCommand("canvasMath", { name: "clear" });
+  setMathKeyboardVisible(false, "canvasMath");
   setStatus($("#canvasTranscriptionStatus"), "");
   const askPaperQuestion = (mode === "ask-write" || mode === "ask-graph") && state.selectedPaperQuestion;
-  const hasQuestionSidebar = mode.startsWith("practice") || mode === "exam" || Boolean(askPaperQuestion);
+  const hasQuestionSidebar = mode.startsWith("practice") || mode.startsWith("exam") || Boolean(askPaperQuestion);
   const sidebar = $("#canvasQuestionSidebar");
   sidebar.hidden = !hasQuestionSidebar;
   $(".canvas-layout").classList.toggle("has-question", hasQuestionSidebar);
@@ -2983,17 +4005,290 @@ function openCanvas(mode, question) {
   const contextQuestion = question || (askPaperQuestion ? state.selectedPaperQuestion : null);
   if (hasQuestionSidebar && contextQuestion) {
     renderMath($("#canvasQuestionText"), contextQuestion.question_text_latex || contextQuestion.accessible_text || contextQuestion.question_text || contextQuestion.text || questionLabel(contextQuestion));
-    const visuals = mode.startsWith("practice") ? state.practiceVisuals : mode === "exam" ? state.examVisuals : [];
+    const visuals = mode.startsWith("practice") ? state.practiceVisuals : mode.startsWith("exam") ? state.examVisuals : [];
     const questionText = contextQuestion && (contextQuestion.question_text_latex || contextQuestion.accessible_text || contextQuestion.question_text || contextQuestion.text || questionLabel(contextQuestion));
     const source = askPaperQuestion ? state.paperPageImage : visuals && visuals.length ? diagramImageSource(visuals[0], questionText) : "";
     if (source) { image.src = source; image.hidden = false; }
   }
-  if (!$("#canvasDialog").open) $("#canvasDialog").showModal();
+  if (!$("#canvasDialog").open) {
+    document.documentElement.classList.add("canvas-dialog-open");
+    document.body.classList.add("canvas-dialog-open");
+    $("#canvasDialog").showModal();
+  }
+  syncCanvasInputMode();
   requestAnimationFrame(() => {
     resizeCanvas();
     drawCanvas();
     $("#workingCanvas").focus({ preventScroll: true });
   });
+}
+
+function updateCanvasStage() {
+  const canvas = state.canvas;
+  const selecting = canvas.stage === "regions";
+  const graphSetup = canvas.stage === "graph-setup";
+  const reviewPending = ["transcribing", "review"].includes(canvas.stage);
+  $("#canvasDialog").classList.toggle("canvas-selecting-regions", selecting);
+  $("#canvasGraphCountPanel").hidden = !graphSetup;
+  $(".canvas-layout").hidden = graphSetup;
+  $("#canvasHelpText").hidden = graphSetup || selecting || reviewPending;
+  $$(".canvas-region-tool").forEach((button) => {
+    button.hidden = !selecting;
+    button.setAttribute("aria-pressed", String(button.dataset.canvasRegionKind === canvas.regionKind));
+  });
+  $("#canvasBackWritingButton").hidden = !selecting;
+  $("#canvasReadWritingButton").hidden = selecting || ["graph-setup", "transcribing", "review"].includes(canvas.stage);
+  $("#canvasReadWritingButton").textContent = canvas.mode === "graph" ? "Review graph" : "Next";
+  if (selecting) $("#canvasHelpText").textContent = "Choose Words, Maths, or Drawings, then mark each area on the canvas. Select all the work you want reviewed.";
+  else if (canvas.mode === "graph") $("#canvasHelpText").textContent = `Draw the graph with your phone or touch screen. The graph should contain ${canvas.graphFunctionCount} function${canvas.graphFunctionCount === 1 ? "" : "s"}.`;
+  else $("#canvasHelpText").textContent = "Write or draw, select Next, then mark Words, Maths, or Drawings on this canvas before transcribing. On other devices, pair your phone.";
+  const finishButton = $("#finishCanvas");
+  finishButton.textContent = canvas.stage === "regions" ? "Transcribe"
+    : canvas.stage === "transcribing" ? "Processing…"
+      : canvas.stage === "review" && canvas.readingConfirmed ? "Add to answer"
+        : canvas.stage === "review" && canvas.mode === "graph" && canvas.graphWorkflow ? "Continue graph review"
+        : "Review and use";
+  finishButton.disabled = canvas.stage === "transcribing" || canvas.graphWorkflow?.stage === "reconstructing";
+  drawCanvas();
+  syncPhoneCanvasSetup();
+  requestAnimationFrame(resizeCanvas);
+}
+
+function enterCanvasRegionSelection() {
+  const canvas = state.canvas;
+  if (!canvas || canvas.mode === "graph") return;
+  canvas.writingViewport = { scale: canvas.scale, offsetX: canvas.offsetX, offsetY: canvas.offsetY };
+  canvas.stage = "regions";
+  canvas.regionKind = "words";
+  fitCanvasToWriting();
+  $("#canvasReadingReview").hidden = false;
+  $("#canvasReadingResults").hidden = true;
+  renderCanvasRegionSnapshots();
+  setCanvasReadingStatus("Choose Words, Maths, or Drawings, then mark each area on the computer canvas. Select all of the work you want transcribed.");
+  updateCanvasStage();
+}
+
+function syncPhoneCanvasSetup() {
+  if (!phoneCanvasConnected) return;
+  const regions = (state.canvas.regions || []).map((region) => canvasRegionSetupPayload(region));
+  phoneCanvasSend({ type: "setup", stage: state.canvas.stage, mode: state.canvas.mode, region_kind: state.canvas.regionKind, strokes: phoneCanvasSnapshot(), regions });
+}
+
+function canvasRegionSetupPayload(region) {
+  const frame = region.remoteBounds?.frame;
+  const start = region.remoteBounds?.start;
+  const end = region.remoteBounds?.end;
+  if (frame && start && end) {
+    return {
+      id: region.id,
+      kind: region.kind,
+      coordinate_space: "frame",
+      frame,
+      x: Math.min(start.x, end.x),
+      y: Math.min(start.y, end.y),
+      width: Math.abs(end.x - start.x),
+      height: Math.abs(end.y - start.y),
+    };
+  }
+  const rect = workingCanvas.getBoundingClientRect();
+  const screen = canvasRegionScreenRect(region);
+  return {
+    id: region.id,
+    kind: region.kind,
+    coordinate_space: "screen",
+    x: screen.x / Math.max(1, rect.width),
+    y: screen.y / Math.max(1, rect.height),
+    width: screen.width / Math.max(1, rect.width),
+    height: screen.height / Math.max(1, rect.height),
+  };
+}
+
+function canvasRegionScreenRect(region) {
+  const rect = workingCanvas.getBoundingClientRect();
+  const saved = region.captureRect;
+  const view = region.captureViewport;
+  if (saved && view
+    && Math.abs(view.scale - state.canvas.scale) < 1e-8
+    && Math.abs(view.offsetX - state.canvas.offsetX) < 1e-6
+    && Math.abs(view.offsetY - state.canvas.offsetY) < 1e-6
+    && Math.abs(view.width - rect.width) < 1e-4
+    && Math.abs(view.height - rect.height) < 1e-4) return saved;
+  return canvasWorldRectToScreenRect(region, rect);
+}
+
+function canvasWorldRectToScreenRect(bounds, rect = workingCanvas.getBoundingClientRect()) {
+  const x1 = (bounds.x - rect.width / 2) * state.canvas.scale + rect.width / 2 + state.canvas.offsetX;
+  const y1 = (bounds.y - rect.height / 2) * state.canvas.scale + rect.height / 2 + state.canvas.offsetY;
+  const x2 = (bounds.x + bounds.width - rect.width / 2) * state.canvas.scale + rect.width / 2 + state.canvas.offsetX;
+  const y2 = (bounds.y + bounds.height - rect.height / 2) * state.canvas.scale + rect.height / 2 + state.canvas.offsetY;
+  return { x: Math.min(x1, x2), y: Math.min(y1, y2), width: Math.abs(x2 - x1), height: Math.abs(y2 - y1) };
+}
+
+function drawCanvasRegionOverlay() {
+  const overlay = $("#canvasRegionOverlay");
+  const rect = workingCanvas.getBoundingClientRect();
+  if (!overlay || !rect.width || !rect.height) return;
+  const ratio = Math.min(window.devicePixelRatio || 1, 3);
+  overlay.width = Math.round(rect.width * ratio);
+  overlay.height = Math.round(rect.height * ratio);
+  const context = overlay.getContext("2d");
+  context.setTransform(ratio, 0, 0, ratio, 0, 0);
+  context.clearRect(0, 0, rect.width, rect.height);
+  const colors = { words: "#0e5fae", maths: "#a04a0a", drawings: "#147a5a" };
+  const draw = (region, draft = false) => {
+    const bounds = draft
+      ? { x: Math.min(region.start.x, region.end.x), y: Math.min(region.start.y, region.end.y), width: Math.abs(region.end.x - region.start.x), height: Math.abs(region.end.y - region.start.y) }
+      : region;
+    const screen = draft && region.screenStart && region.screenEnd
+      ? canvasLocalRect(region.screenStart, region.screenEnd)
+      : canvasRegionScreenRect(region);
+    const { x, y, width, height } = screen;
+    const color = colors[region.kind] || colors.words;
+    context.save();
+    context.fillStyle = `${color}18`;
+    context.strokeStyle = color;
+    context.lineWidth = 2;
+    context.setLineDash(draft ? [6, 4] : []);
+    context.fillRect(x, y, width, height);
+    context.strokeRect(x, y, width, height);
+    context.setLineDash([]);
+    context.font = "700 12px sans-serif";
+    context.fillStyle = color;
+    context.fillText(region.kind === "maths" ? "Maths" : region.kind === "drawings" ? "Drawing" : "Words", x + 5, Math.max(14, y - 5));
+    context.restore();
+  };
+  (state.canvas.regions || []).forEach((region) => draw(region));
+  if (state.canvas.draftRegion) draw(state.canvas.draftRegion, true);
+}
+
+function canvasLocalRect(start, end) {
+  return { x: Math.min(start.x, end.x), y: Math.min(start.y, end.y), width: Math.abs(end.x - start.x), height: Math.abs(end.y - start.y) };
+}
+
+function addCanvasRegion(start, end, kind = state.canvas.regionKind, id = "", remoteBounds = null, captureRect = null) {
+  const x = Math.min(start.x, end.x);
+  const y = Math.min(start.y, end.y);
+  const width = Math.abs(end.x - start.x);
+  const height = Math.abs(end.y - start.y);
+  if (width * state.canvas.scale < 12 || height * state.canvas.scale < 12) {
+    syncPhoneCanvasSetup();
+    return false;
+  }
+  const rect = workingCanvas.getBoundingClientRect();
+  const proposed = {
+    id: id || (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`),
+    kind, x, y, width, height, remoteBounds, captureRect,
+    captureViewport: captureRect ? { scale: state.canvas.scale, offsetX: state.canvas.offsetX, offsetY: state.canvas.offsetY, width: rect.width, height: rect.height } : null,
+  };
+  const overlapsOtherKind = state.canvas.regions.some((region) => {
+    if (region.kind === kind) return false;
+    return Math.max(region.x, x) < Math.min(region.x + region.width, x + width)
+      && Math.max(region.y, y) < Math.min(region.y + region.height, y + height);
+  });
+  if (overlapsOtherKind) {
+    setStatus($("#canvasReadingStatus"), "Areas for different types of work cannot overlap. Move this box and try again.", "warning");
+    syncPhoneCanvasSetup();
+    return false;
+  }
+  state.canvas.regions.push(proposed);
+  invalidateCanvasTranscription();
+  drawCanvasRegionOverlay();
+  renderCanvasRegionSnapshots();
+  void captureCanvasRegionSnapshot(proposed).catch((error) => {
+    if ((state.canvas?.regions || []).includes(proposed)) {
+      setCanvasReadingStatus(error instanceof Error ? error.message : "The selected area could not be prepared.", "error");
+      renderCanvasRegionSnapshots();
+    }
+  });
+  syncPhoneCanvasSetup();
+  return true;
+}
+
+function releaseCanvasRegionSnapshot(region) {
+  if (region?.snapshotUrl) URL.revokeObjectURL(region.snapshotUrl);
+  if (region) {
+    region.snapshotUrl = "";
+    region.snapshotBlob = null;
+    region.snapshotPromise = null;
+  }
+}
+
+function renderCanvasRegionSnapshots() {
+  const list = $("#canvasRegionSnapshots");
+  if (!list) return;
+  const cards = list.querySelector(".canvas-region-snapshot-list");
+  if (!cards) return;
+  const regions = state.canvas?.regions || [];
+  cards.replaceChildren();
+  list.hidden = !regions.length;
+  regions.forEach((region, index) => {
+    const card = document.createElement("div");
+    card.className = "canvas-region-snapshot";
+    const label = document.createElement("div");
+    label.className = "canvas-region-snapshot-label";
+    const type = region.kind === "maths" ? "Maths" : region.kind === "drawings" ? "Drawing" : "Words";
+    label.textContent = `${type} area ${index + 1}`;
+    card.append(label);
+    if (region.snapshotUrl) {
+      const image = document.createElement("img");
+      image.src = region.snapshotUrl;
+      image.alt = `Captured ${type.toLowerCase()} area ${index + 1}`;
+      card.append(image);
+    } else {
+      const placeholder = document.createElement("div");
+      placeholder.className = "canvas-region-snapshot-placeholder";
+      placeholder.textContent = "Preparing selected area…";
+      card.append(placeholder);
+    }
+    cards.append(card);
+  });
+}
+
+async function captureCanvasRegionSnapshot(region) {
+  if (!region) return null;
+  if (region.snapshotBlob) return region.snapshotBlob;
+  if (region.snapshotPromise) return region.snapshotPromise;
+  const rect = workingCanvas.getBoundingClientRect();
+  // Resolve the saved world-space box against the current canvas transform.
+  // A cached screen rectangle becomes stale after browser zoom or resize.
+  const screen = canvasRegionScreenRect(region);
+  const scaleX = workingCanvas.width / Math.max(1, rect.width);
+  const scaleY = workingCanvas.height / Math.max(1, rect.height);
+  const left = Math.max(0, Math.min(workingCanvas.width, Math.floor(screen.x * scaleX)));
+  const top = Math.max(0, Math.min(workingCanvas.height, Math.floor(screen.y * scaleY)));
+  const right = Math.max(left, Math.min(workingCanvas.width, Math.ceil((screen.x + screen.width) * scaleX)));
+  const bottom = Math.max(top, Math.min(workingCanvas.height, Math.ceil((screen.y + screen.height) * scaleY)));
+  const width = right - left;
+  const height = bottom - top;
+  if (width < 2 || height < 2) throw new Error("The selected area is too small. Draw a larger box around the work.");
+  const crop = document.createElement("canvas");
+  crop.width = width;
+  crop.height = height;
+  const context = crop.getContext("2d", { alpha: false });
+  if (!context) throw new Error("The selected area could not be prepared.");
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, width, height);
+  context.drawImage(workingCanvas, left, top, width, height, 0, 0, width, height);
+  const snapshotPromise = new Promise((resolve, reject) => crop.toBlob(
+    (blob) => blob ? resolve(blob) : reject(new Error("The selected area could not be prepared.")),
+    "image/png",
+  ));
+  region.snapshotPromise = snapshotPromise;
+  try {
+    const blob = await snapshotPromise;
+    if (!(state.canvas?.regions || []).includes(region)) return null;
+    region.snapshotBlob = blob;
+    region.snapshotUrl = URL.createObjectURL(blob);
+    renderCanvasRegionSnapshots();
+    return blob;
+  } finally {
+    if (region.snapshotPromise === snapshotPromise) region.snapshotPromise = null;
+  }
+}
+
+function canvasRegionScreenToWorld(point) {
+  const rect = workingCanvas.getBoundingClientRect();
+  return { x: (point.x - rect.width / 2 - state.canvas.offsetX) / state.canvas.scale + rect.width / 2, y: (point.y - rect.height / 2 - state.canvas.offsetY) / state.canvas.scale + rect.height / 2 };
 }
 
 $("#canvasQuestionImage").addEventListener("click", () => {
@@ -3015,10 +4310,14 @@ function resizeCanvas() {
   if (!rect.width || !rect.height) return;
   const old = state.canvas.size || { width: 0, height: 0 };
   if (old.width && old.height && (old.width !== rect.width || old.height !== rect.height)) {
-    if (state.canvas.strokes.length) invalidateCanvasTranscription();
-    const xRatio = rect.width / old.width;
-    const yRatio = rect.height / old.height;
-    state.canvas.strokes.forEach((stroke) => stroke.points.forEach((point) => { point.x *= xRatio; point.y *= yRatio; }));
+    // Keep all ink and selection boxes in one stable world coordinate system.
+    // Re-project the view uniformly instead of rewriting every saved point;
+    // rewriting points on each resize causes cumulative drift under browser zoom.
+    const uniformScale = Math.min(rect.width / old.width, rect.height / old.height);
+    const nextScale = state.canvas.scale * uniformScale;
+    state.canvas.offsetX = uniformScale * state.canvas.offsetX + nextScale * (rect.width - old.width) / 2;
+    state.canvas.offsetY = uniformScale * state.canvas.offsetY + nextScale * (rect.height - old.height) / 2;
+    state.canvas.scale = nextScale;
   }
   state.canvas.size = { width: rect.width, height: rect.height };
   const ratio = Math.min(window.devicePixelRatio || 1, 3);
@@ -3056,6 +4355,7 @@ function drawCanvas() {
     context.stroke();
   });
   context.setTransform(1, 0, 0, 1, 0, 0);
+  drawCanvasRegionOverlay();
 }
 
 function fitCanvasToWriting() {
@@ -3099,29 +4399,55 @@ function assertCanvasSnapshotCurrent(canvas, revision) {
   }
 }
 
-async function ensureCanvasPhoto(canvas, revision) {
+async function ensureCanvasPhoto(canvas, revision, onProgress = null) {
   if (canvas.transcribedPhoto) return canvas.transcribedPhoto;
   if (canvas.photoPromise) return canvas.photoPromise;
   const photoPromise = (async () => {
-    fitCanvasToWriting();
-    const blob = await new Promise((resolve, reject) => workingCanvas.toBlob(
+    // Region selection already fits the writing before the learner marks an
+    // area. Keep that viewport fixed so the captured preview and canvas remain
+    // aligned while the selected image is being uploaded and read.
+    if (canvas.mode === "graph") fitCanvasToWriting();
+    onProgress?.("Preparing the canvas image…");
+    // Canvas pixels are transparent outside the ink. Export on white so the
+    // recognition service receives the same clear paper-like image a learner
+    // would upload as a handwriting photo.
+    const exportCanvas = document.createElement("canvas");
+    exportCanvas.width = workingCanvas.width;
+    exportCanvas.height = workingCanvas.height;
+    const exportContext = exportCanvas.getContext("2d", { alpha: false });
+    if (!exportContext) throw new Error("The canvas image could not be created.");
+    exportContext.fillStyle = "#ffffff";
+    exportContext.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
+    exportContext.drawImage(workingCanvas, 0, 0);
+    const blob = await new Promise((resolve, reject) => exportCanvas.toBlob(
       (value) => value ? resolve(value) : reject(new Error("The canvas image could not be created.")),
       "image/png",
     ));
     assertCanvasSnapshotCurrent(canvas, revision);
     const file = new File([blob], "sharpertime-canvas-" + Date.now() + ".png", { type: "image/png" });
-    const uploadContext = canvas.mode.startsWith("practice") ? "practice" : canvas.mode === "exam" ? "exam" : "ask";
-    const inspectionId = await ensureInspection(uploadContext);
-    assertCanvasSnapshotCurrent(canvas, revision);
-    const form = new FormData();
-    form.set("photo_type", "school_answer_working");
-    form.set("photo", file, file.name);
-    const uploaded = await uploadForm("/api/inspections/" + encodeURIComponent(inspectionId) + "/upload-photo", form);
-    assertCanvasSnapshotCurrent(canvas, revision);
-    const photoId = uploaded.id || uploaded.photo_id;
-    if (!photoId) throw new Error("The canvas image could not be saved.");
-    canvas.transcribedPhoto = { inspectionId, photoId, file, blob };
-    return canvas.transcribedPhoto;
+    const uploadContext = canvas.mode.startsWith("practice") ? "practice" : canvas.mode.startsWith("exam") ? "exam" : "ask";
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45_000);
+    try {
+      onProgress?.("Saving the canvas image…");
+      const inspectionId = await ensureInspection(uploadContext, { signal: controller.signal });
+      assertCanvasSnapshotCurrent(canvas, revision);
+      const form = new FormData();
+      form.set("photo_type", "school_answer_working");
+      form.set("photo", file, file.name);
+      onProgress?.("Uploading the canvas image…");
+      const uploaded = await uploadForm("/api/inspections/" + encodeURIComponent(inspectionId) + "/upload-photo", form, { signal: controller.signal });
+      assertCanvasSnapshotCurrent(canvas, revision);
+      const photoId = uploaded.id || uploaded.photo_id;
+      if (!photoId) throw new Error("The canvas image could not be saved.");
+      canvas.transcribedPhoto = { inspectionId, photoId, file, blob };
+      return canvas.transcribedPhoto;
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error("Saving the canvas image took too long. Check your connection and try again.");
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
   })();
   canvas.photoPromise = photoPromise;
   try {
@@ -3137,85 +4463,1080 @@ function setCanvasTranscriptionLoading(loading, message = "") {
   status.dataset.loading = String(loading);
 }
 
-$("#canvasReadMathButton").addEventListener("click", async (event) => {
-  const button = event.currentTarget;
+function setCanvasReadingStatus(message, kind = "", loading = false) {
+  const status = $("#canvasReadingStatus");
+  setStatus(status, message, kind);
+  status.dataset.kind = kind;
+  status.dataset.loading = String(loading);
+  const progress = $("#canvasReviewProgress");
+  if (progress) {
+    progress.hidden = !loading;
+    progress.setAttribute("aria-valuetext", message || "Processing canvas");
+  }
+  if (loading && phoneCanvasConnected) {
+    phoneCanvasSetStatus(message || "Transcribing your selected work…");
+    phoneCanvasSend({ type: "processing", message: message || "Transcribing your selected work…" });
+  }
+}
+
+function currentCanvasQuestionText() {
+  const question = state.canvasQuestion || ((state.canvasContext || "").startsWith("ask-") ? state.selectedPaperQuestion : null);
+  return question?.question_text_latex || question?.accessible_text || question?.question_text || question?.text || "";
+}
+
+function canvasRegionNormalizedBounds(region) {
+  const rect = workingCanvas.getBoundingClientRect();
+  const screen = canvasRegionScreenRect(region);
+  const clamp = (value) => Math.max(0, Math.min(1, value));
+  const left = clamp(screen.x / Math.max(1, rect.width));
+  const top = clamp(screen.y / Math.max(1, rect.height));
+  const right = clamp((screen.x + screen.width) / Math.max(1, rect.width));
+  const bottom = clamp((screen.y + screen.height) / Math.max(1, rect.height));
+  return { x: left, y: top, width: Math.max(0, right - left), height: Math.max(0, bottom - top) };
+}
+
+async function uploadCanvasRegionCrop(photo, region, signal, revision) {
+  assertCanvasSnapshotCurrent(state.canvas, revision);
+  const blob = region.snapshotBlob || await captureCanvasRegionSnapshot(region);
+  if (!blob) throw new Error("The selected image area is no longer available. Please select it again.");
+  const file = new File([blob], `sharpertime-${region.kind}-${Date.now()}.png`, { type: "image/png" });
+  const form = new FormData();
+  form.set("photo_type", "school_answer_working");
+  form.set("photo", file, file.name);
+  const uploaded = await uploadForm(`/api/inspections/${encodeURIComponent(photo.inspectionId)}/upload-photo`, form, { signal });
+  assertCanvasSnapshotCurrent(state.canvas, revision);
+  const photoId = uploaded.id || uploaded.photo_id;
+  if (!photoId) throw new Error("The selected area could not be saved.");
+  return photoId;
+}
+
+function canvasRegionContext(kind, questionText, functionCount) {
+  const instruction = kind === "words"
+    ? "Read only the handwritten words in this selected area. Do not transcribe equations, solve, correct, or add content. For a genuinely uncertain handwritten word, include the best whole-word reading in the uncertainty's observed field and 2 to 5 plausible whole-word replacements in alternatives. Do not invent alternatives for clear words."
+    : kind === "maths"
+      ? "Recognize only the handwritten mathematical expressions in this selected area as editable LaTeX. Do not solve, correct, or add steps."
+      : "Describe only the visible drawing, graph, shape or diagram in this selected area, including its labels and relationships. Do not solve the question or invent missing labels or coordinates.";
+  return [
+    `Handwriting canvas. ${instruction}`,
+    "This step reads or describes the learner's work only. Do not provide an answer or mark the work.",
+    functionCount ? `The learner expects ${functionCount} function${functionCount === 1 ? "" : "s"} in the graph.` : "",
+    questionText ? `Current question (context only): ${questionText}` : "",
+  ].filter(Boolean).join("\n");
+}
+
+async function reviewCanvasReading() {
   const canvas = state.canvas;
   const revision = canvas.revision;
+  const button = canvas.mode !== "graph" && canvas.regions.length
+    ? $("#finishCanvas")
+    : $("#canvasReadWritingButton");
+  const toolbarButtons = $$(".canvas-toolbar button:not([data-close-dialog])");
+  const priorButtonStates = toolbarButtons.map((item) => [item, item.disabled]);
   if (!canvas.strokes.length) {
-    showToast("Write some maths on the canvas first.");
+    setCanvasReadingStatus("Write or draw something on the canvas first.", "error");
     return;
   }
-  button.disabled = true;
+  const graphMode = canvas.mode === "graph";
+  const regions = graphMode
+    ? [{ id: "graph-sketch", kind: "drawings", x: 0, y: 0, width: workingCanvas.clientWidth, height: workingCanvas.clientHeight }]
+    : canvas.regions.slice();
+  if (!graphMode && !regions.length) {
+    setCanvasReadingStatus("Mark at least one area first. Choose Words, Maths, or Drawings.", "error");
+    return;
+  }
+  canvas.readingConfirmed = false;
+  canvas.confirmedReading = null;
+  toolbarButtons.forEach((item) => { item.disabled = true; });
   button.setAttribute("aria-busy", "true");
-  button.textContent = "Reading…";
-  $("#canvasTranscriptionPanel").hidden = false;
-  $("#canvasTranscriptionText").value = "";
-  setCanvasTranscriptionLoading(true, "Reading your maths, please wait…");
+  const oldLabel = button.textContent;
+  if (button.id !== "finishCanvas") button.textContent = "Reading…";
+  $("#canvasReadingReview").hidden = false;
+  $("#canvasReadingResults").hidden = true;
+  $("#canvasTranscriptionPanel").hidden = true;
+  $("#canvasReadingWords").value = "";
+  $("#canvasReadingAlternatives").replaceChildren();
+  $("#canvasReadingAlternatives").hidden = true;
+  $("#canvasReadingDrawing").value = "";
+  $("#canvasGraphType").value = "";
+  $("#canvasGraphDetails").value = "";
+  $("#canvasReadingComment").value = "";
+  canvas.readingResult = null;
+  canvas.readingPhoto = null;
+  canvas.readingAlternatives = [];
+  ["#canvasReadingWords", "#canvasReadingDrawing", "#canvasReadingComment", "#canvasGraphType", "#canvasGraphDetails"].forEach((selector) => {
+    $(selector).disabled = true;
+  });
+  $("#canvasReadingConfirm").disabled = true;
+  $("#canvasReadingImageOnly").disabled = true;
+  $("#canvasReadingImageOnly").hidden = graphMode;
+  setCanvasReadingStatus("Preparing your canvas…", "", true);
   try {
-    const photo = await ensureCanvasPhoto(canvas, revision);
+    const photo = await ensureCanvasPhoto(canvas, revision, (message) => setCanvasReadingStatus(message, "", true));
+    canvas.readingPhoto = photo;
     assertCanvasSnapshotCurrent(canvas, revision);
-    const result = await postJson("/api/education/photo/transcribe-math", {
-      inspection_id: photo.inspectionId,
-      photo_id: photo.photoId,
-      subject: "Mathematics",
-      grade: Math.max(8, Math.min(12, Number(state.grade) || 12)),
-      context: [
-        "Handwriting canvas. Recognize only the learner's handwritten mathematical expressions as editable LaTeX. Do not solve, correct, or add steps.",
-        state.canvasQuestion?.question_text_latex || state.canvasQuestion?.accessible_text || state.canvasQuestion?.question_text || state.canvasQuestion?.text || "",
-      ].filter(Boolean).join("\n"),
-      ai_tier: "unimernet",
-    });
+    const questionText = currentCanvasQuestionText();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 180_000);
+    const collected = { words: [], formulas: [], drawings: [], uncertainties: [], wordAlternatives: [], hasUncertainty: false };
+    try {
+      for (let index = 0; index < regions.length; index += 1) {
+        const region = regions[index];
+        const label = region.kind === "maths" ? "maths" : region.kind === "drawings" ? "drawing" : "words";
+        setCanvasReadingStatus(`Reading ${label} area ${index + 1} of ${regions.length}…`, "", true);
+        const bounds = graphMode
+          ? { x: 0, y: 0, width: 1, height: 1 }
+          : canvasRegionNormalizedBounds(region);
+        if (!graphMode && (bounds.width < 0.002 || bounds.height < 0.002)) {
+          throw new Error("A selected box is outside the visible canvas. Redraw it around the writing you want transcribed.");
+        }
+        const photoId = graphMode
+          ? photo.photoId
+          : await uploadCanvasRegionCrop(photo, region, controller.signal, revision);
+        const requestBounds = { x: 0, y: 0, width: 1, height: 1 };
+        assertCanvasSnapshotCurrent(canvas, revision);
+        const result = await postJson("/api/education/photo/transcribe-math", {
+          inspection_id: photo.inspectionId,
+          photo_id: photoId,
+          subject: "Mathematics",
+          grade: Math.max(8, Math.min(12, Number(state.grade) || 12)),
+          context: canvasRegionContext(region.kind, questionText, canvas.graphFunctionCount),
+          // Read the selected snapshot with the vision transcriber in one pass.
+          // Canvas transcription does not use the slower local formula service.
+          ai_tier: "luna",
+          math_regions: region.kind === "maths" ? [requestBounds] : [],
+          drawing_regions: region.kind === "drawings" ? [requestBounds] : [],
+        }, { signal: controller.signal });
+        assertCanvasSnapshotCurrent(canvas, revision);
+        const segments = Array.isArray(result.segments)
+          ? result.segments.filter((segment) => segment && String(segment.type || "").toLowerCase() === "text").map((segment) => String(segment.content || "").trim()).filter(Boolean)
+          : [];
+        if (region.kind === "words") {
+          const words = sanitizeLearnerFacingText(String(result.transcription || result.recognized_text || segments.join("\n")).trim());
+          if (words) collected.words.push(words);
+          if (Array.isArray(result.uncertainties)) {
+            for (const item of result.uncertainties) {
+              const observed = typeof item?.observed === "string" ? item.observed.trim() : "";
+              const alternatives = Array.isArray(item?.alternatives) ? item.alternatives : [];
+              for (const alternative of alternatives) {
+                const candidate = typeof alternative === "string" ? sanitizeLearnerFacingText(alternative.trim()) : "";
+                if (candidate && candidate !== observed) collected.wordAlternatives.push({ observed, alternative: candidate, regionText: words });
+              }
+            }
+          }
+          if (Array.isArray(result.transcription_alternatives || result.word_alternatives)) {
+            const alternatives = result.transcription_alternatives || result.word_alternatives;
+            for (const item of alternatives) {
+              const candidate = typeof item === "string" ? item.trim() : String(item?.text || item?.content || "").trim();
+              if (candidate && candidate !== words) collected.wordAlternatives.push({ observed: words, alternative: sanitizeLearnerFacingText(candidate), regionText: words });
+            }
+          }
+        } else if (region.kind === "maths") {
+          const formula = String(result.editable_latex || "").trim();
+          if (formula) collected.formulas.push(formula);
+        } else {
+          const drawing = sanitizeLearnerFacingText(String(result.drawing_description || result.transcription || "").trim());
+          if (drawing) collected.drawings.push(drawing);
+        }
+        if (Array.isArray(result.uncertainties)) collected.uncertainties.push(...result.uncertainties.map(formatCanvasUncertainty).filter(Boolean));
+        collected.hasUncertainty ||= Boolean(result.has_uncertainty);
+      }
+    } catch (error) {
+      if (controller.signal.aborted) throw new Error("The review took too long. Your canvas is still here; please try again.");
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
     assertCanvasSnapshotCurrent(canvas, revision);
-    const latex = String(result.editable_latex || "").trim();
-    $("#canvasTranscriptionText").value = latex;
-    setCanvasTranscriptionLoading(false, latex
-      ? "Review and edit the recognized maths before using it."
-      : "No maths was recognized. You can enter it here or submit the handwriting as-is.");
-    $("#canvasTranscriptionText").focus({ preventScroll: true });
-  } catch {
-    if (state.canvas === canvas && canvas.revision === revision) {
-      setCanvasTranscriptionLoading(false, "Could not read the maths this time. You can still submit your handwriting.");
+    const recognizedText = collected.words.join("\n");
+    $("#canvasReadingWords").value = recognizedText;
+    canvas.readingAlternatives = collected.wordAlternatives.filter((choice, index, list) =>
+      choice.alternative && list.findIndex((item) => item.observed === choice.observed && item.alternative === choice.alternative) === index,
+    ).slice(0, 20);
+    renderCanvasReadingAlternatives(canvas);
+    const drawingDescription = collected.drawings.join("\n");
+    $("#canvasReadingDrawing").value = drawingDescription;
+    const graphType = drawingDescription.match(/\bGraph type\s*:\s*([^\n;,.]+)/i)?.[1]?.trim() || "";
+    $("#canvasGraphType").value = graphMode ? graphType : "";
+    $("#canvasGraphDetails").value = "";
+    $("#canvasReadingComment").value = "";
+    const recognizedFormula = collected.formulas.join("\\\\");
+    setMathEditorLatex("canvasMath", recognizedFormula);
+    const uncertainty = collected.uncertainties.slice(0, 5);
+    const warning = collected.hasUncertainty || uncertainty.length
+      ? uncertainty.length
+        ? `Check the uncertain parts carefully: ${uncertainty.join(" · ")}`
+        : "Some parts could not be read confidently. Check the reading before using it."
+      : "Check the transcription and drawing description. Edit them, then confirm before use.";
+    setCanvasReadingStatus(warning, collected.hasUncertainty || uncertainty.length ? "warning" : "success");
+    if (recognizedFormula) {
+      $("#canvasTranscriptionPanel").hidden = false;
+      setCanvasTranscriptionLoading(false, "Check and edit the recognized maths before confirming.");
+    }
+    canvas.readingResult = collected;
+    if (graphMode) {
+      canvas.graphWorkflow = {
+        stage: "confirm-type",
+        functionCount: canvas.graphFunctionCount,
+        functionIndex: 1,
+        currentType: "",
+        points: [],
+        promptQueue: [],
+        activePrompt: null,
+        extraPointCount: 0,
+        currentResult: null,
+        functions: [],
+      };
+      $("#canvasGraphFunctionHeading").textContent = `Function 1 of ${canvas.graphFunctionCount}: confirm its type`;
+      $("#canvasGraphGuidedStatus").textContent = "Confirm or correct the type for this function. You will then enter exact key values.";
+      $("#canvasGraphPointPrompt").textContent = "Confirm the graph type above to begin collecting key points.";
+      $("#canvasGraphPointHistory").replaceChildren();
+      $("#canvasGraphPointInput").value = "";
+      $("#canvasGraphGuidedPanel").hidden = false;
+      $("#canvasGraphPreviewPanel").hidden = true;
+      $("#canvasReadingConfirm").textContent = "Confirm type";
+      $("#canvasGraphType").disabled = false;
+      $("#canvasGraphDetails").disabled = canvas.questionAwareGraph;
+      const equationLabel = $("#canvasGraphEquationLabel");
+      if (equationLabel) equationLabel.hidden = canvas.questionAwareGraph;
+      $("#canvasGraphDetails").hidden = canvas.questionAwareGraph;
+    } else {
+      $("#canvasGraphGuidedPanel").hidden = true;
+      $("#canvasGraphPreviewPanel").hidden = true;
+      $("#canvasReadingConfirm").textContent = "Confirm and use";
+    }
+    placeCanvasGraphConfirmButton(canvas);
+    canvas.stage = "review";
+    updateCanvasStage();
+    if (phoneCanvasConnected) {
+      const readyMessage = "Transcription is ready. Review and edit it on the computer, then confirm before attaching it.";
+      phoneCanvasSetStatus(readyMessage, "success");
+      phoneCanvasSend({ type: "review_ready", message: readyMessage });
+    }
+    $("#canvasReadingResults").hidden = false;
+    $("#canvasReadingConfirm").disabled = false;
+    $("#canvasReadingImageOnly").disabled = graphMode;
+    mathEditorCommand("canvasMath", { name: "focus" });
+    requestAnimationFrame(() => $("#canvasReadingReview").scrollIntoView({ behavior: "smooth", block: "start" }));
+  } catch (error) {
+    if (state.canvas === canvas) {
+      $("#canvasReadingWords").value = "";
+      $("#canvasReadingDrawing").value = "";
+      const message = canvas.revision !== revision
+        ? "The canvas changed while it was being reviewed. Press Transcribe again to process the latest writing."
+        : error?.message?.startsWith("A selected box is outside")
+          ? error.message
+          : graphMode
+            ? "We could not review the graph this time. Your drawing is still here; check your connection and try again."
+            : "The selected areas could not be transcribed. Your writing and boxes are still here; check your connection and tap Transcribe to retry.";
+      setCanvasReadingStatus(message, "error");
+      canvas.readingResult = null;
+      // A failed recognition request must return both the browser and paired
+      // phone to an editable stage so the learner can retry without redrawing.
+      canvas.stage = graphMode ? "writing" : "regions";
+      updateCanvasStage();
+      if (phoneCanvasConnected) {
+        phoneCanvasSetStatus(message, "error");
+        phoneCanvasSend({ type: "submission_error", message });
+      }
     }
   } finally {
-    button.disabled = false;
+    if (state.canvas === canvas) {
+      ["#canvasReadingWords", "#canvasReadingDrawing", "#canvasReadingComment", "#canvasGraphType", "#canvasGraphDetails"].forEach((selector) => {
+        $(selector).disabled = false;
+      });
+      $("#canvasReadingConfirm").disabled = !canvas.readingResult;
+      $("#canvasReadingImageOnly").disabled = canvas.mode === "graph";
+    }
+    priorButtonStates.forEach(([item, wasDisabled]) => { item.disabled = wasDisabled; });
+    // The toolbar snapshot may have captured a disabled finish button from
+    // the transcribing stage. Reapply the current stage after restoring it so
+    // the completed review can be opened or attached.
+    if (state.canvas === canvas) updateCanvasStage();
     button.removeAttribute("aria-busy");
-    button.textContent = "Read maths";
+    if (button.id !== "finishCanvas") button.textContent = oldLabel;
   }
-});
+}
 
-$("#canvasTranscriptionClose").addEventListener("click", () => {
-  $("#canvasTranscriptionPanel").hidden = true;
-  setCanvasTranscriptionLoading(false);
-});
+function formatCanvasUncertainty(item) {
+  if (typeof item === "string") return sanitizeLearnerFacingText(item);
+  if (!item || typeof item !== "object") return "";
+  if (Array.isArray(item)) return item.map(formatCanvasUncertainty).filter(Boolean).join("; ");
 
-$("#canvasTranscriptionUse").addEventListener("click", () => {
-  const value = $("#canvasTranscriptionText").value.trim();
-  if (!value) {
-    setCanvasTranscriptionLoading(false, "Enter or recognize some maths first.");
+  const line = Number.isFinite(Number(item.line)) && Number(item.line) > 0 ? `Line ${Number(item.line)}: ` : "";
+  const observed = typeof item.observed === "string" ? sanitizeLearnerFacingText(item.observed) : "";
+  const note = [item.note, item.message, item.text, item.description, item.detail, item.reason]
+    .find((value) => typeof value === "string" && value.trim());
+  const safeNote = typeof note === "string" ? sanitizeLearnerFacingText(note) : "";
+  const alternatives = Array.isArray(item.alternatives)
+    ? item.alternatives.filter((value) => typeof value === "string" && value.trim()).map(sanitizeLearnerFacingText)
+    : [];
+  const details = [];
+  if (safeNote) details.push(safeNote);
+  if (observed && !safeNote.includes(observed)) details.push(`read as “${observed}”`);
+  if (alternatives.length) details.push(`possible readings: ${alternatives.join(" / ")}`);
+  if (!details.length) {
+    const fallback = Object.entries(item)
+      .filter(([, value]) => typeof value === "string" || typeof value === "number")
+      .map(([key, value]) => `${key}: ${sanitizeLearnerFacingText(value)}`)
+      .filter((value) => !/^line:\s*\d+$/i.test(value));
+    details.push(...fallback);
+  }
+  return sanitizeLearnerFacingText(`${line}${details.join("; ")}`).slice(0, 300);
+}
+
+function renderCanvasReadingAlternatives(canvas) {
+  const container = $("#canvasReadingAlternatives");
+  container.replaceChildren();
+  const choices = canvas.readingAlternatives || [];
+  if (!choices.length) {
+    container.hidden = true;
     return;
   }
-  if (state.canvasContext.startsWith("practice")) {
-    if (getPracticeEditorLatex().trim()) practiceEditorCommand({ name: "newLine" });
-    if (!practiceEditorCommand({ name: "insertLatex", value })) {
-      showToast("The maths editor is not ready yet. Please try again.");
+  const label = document.createElement("span");
+  label.className = "canvas-reading-alternatives-label";
+  label.textContent = "Possible readings · select one to replace the uncertain word";
+  container.append(label);
+  choices.forEach((choice, index) => {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "canvas-reading-alternative";
+    button.dataset.readingAlternative = String(index);
+    button.textContent = `Use “${choice.alternative}”`;
+    button.setAttribute("aria-label", `Use alternative reading ${choice.alternative}`);
+    container.append(button);
+  });
+  container.hidden = false;
+}
+
+$("#canvasReadingAlternatives").addEventListener("click", (event) => {
+  const button = event.target.closest("[data-reading-alternative]");
+  if (!button) return;
+  const choice = state.canvas?.readingAlternatives?.[Number(button.dataset.readingAlternative)];
+  if (!choice) return;
+  const field = $("#canvasReadingWords");
+  const current = field.value;
+  const observed = String(choice.observed || "").trim();
+  if (observed && current.includes(observed)) {
+    field.value = current.replace(observed, choice.alternative);
+  } else if (choice.regionText && current.includes(choice.regionText)) {
+    field.value = current.replace(choice.regionText, choice.alternative);
+  } else if (current.trim() && state.canvas?.readingAlternatives?.length === 1) {
+    field.value = choice.alternative;
+  } else {
+    setCanvasReadingStatus("That word has changed in the editor. You can select and replace it manually.", "warning");
+    return;
+  }
+  setCanvasReadingStatus(`Possible reading selected: ${choice.alternative}. Check the full sentence before confirming.`);
+});
+
+function parseCanvasGraphExpression(equation) {
+  let source = String(equation || "").trim().replace(/^\s*(?:y|f\s*\(\s*x\s*\))\s*=\s*/i, "");
+  if (!source) return null;
+  const tokens = [];
+  const tokenPattern = /\s*(?:((?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)|([a-z][a-z0-9_]*)|([()+\-*/^]))/iy;
+  let offset = 0;
+  while (offset < source.length) {
+    if (!source.slice(offset).trim()) break;
+    tokenPattern.lastIndex = offset;
+    const match = tokenPattern.exec(source);
+    if (!match) return null;
+    offset = tokenPattern.lastIndex;
+    if (match[1]) tokens.push({ type: "number", value: Number(match[1]) });
+    else if (match[2]) tokens.push({ type: "name", value: match[2].toLowerCase() });
+    else tokens.push({ type: match[3], value: match[3] });
+  }
+  let cursor = 0;
+  const peek = () => tokens[cursor];
+  const consume = (type) => {
+    if (peek()?.type !== type) return false;
+    cursor += 1;
+    return true;
+  };
+  const functions = {
+    sin: Math.sin, cos: Math.cos, tan: Math.tan, sqrt: Math.sqrt, abs: Math.abs,
+    exp: Math.exp, ln: Math.log, log: Math.log10, sinh: Math.sinh, cosh: Math.cosh, tanh: Math.tanh,
+  };
+  const expression = () => {
+    let left = term();
+    while (peek()?.type === "+" || peek()?.type === "-") {
+      const operator = tokens[cursor++].type;
+      const right = term();
+      const prior = left;
+      left = (x) => operator === "+" ? prior(x) + right(x) : prior(x) - right(x);
+    }
+    return left;
+  };
+  const term = () => {
+    let left = unary();
+    while (peek()?.type === "*" || peek()?.type === "/") {
+      const operator = tokens[cursor++].type;
+      const right = unary();
+      const prior = left;
+      left = (x) => operator === "*" ? prior(x) * right(x) : prior(x) / right(x);
+    }
+    return left;
+  };
+  const unary = () => {
+    if (consume("+")) return unary();
+    if (consume("-")) { const value = unary(); return (x) => -value(x); }
+    return power();
+  };
+  const power = () => {
+    let left = primary();
+    if (consume("^")) {
+      const right = unary();
+      const prior = left;
+      left = (x) => Math.pow(prior(x), right(x));
+    }
+    return left;
+  };
+  const primary = () => {
+    const token = peek();
+    if (!token) throw new Error("Missing graph expression value");
+    if (token.type === "number") { cursor += 1; return () => token.value; }
+    if (token.type === "name") {
+      cursor += 1;
+      if (token.value === "x") return (x) => x;
+      if (token.value === "pi") return () => Math.PI;
+      if (token.value === "e") return () => Math.E;
+      const fn = functions[token.value];
+      if (!fn || !consume("(")) throw new Error("Unsupported graph expression");
+      const argument = expression();
+      if (!consume(")")) throw new Error("Unclosed graph expression");
+      return (x) => fn(argument(x));
+    }
+    if (consume("(")) {
+      const value = expression();
+      if (!consume(")")) throw new Error("Unclosed graph expression");
+      return value;
+    }
+    throw new Error("Unsupported graph expression");
+  };
+  try {
+    const evaluate = expression();
+    return cursor === tokens.length ? (x) => {
+      const value = evaluate(x);
+      return Number.isFinite(value) ? value : null;
+    } : null;
+  } catch { return null; }
+}
+
+function canvasGraphTickLabels(min, max, count = 6) {
+  return Array.from({ length: count }, (_, index) => min + (max - min) * index / (count - 1));
+}
+
+function renderCanvasGraphPreview(functions) {
+  const evaluators = functions.map((item) => item.result.circle ? null : parseCanvasGraphExpression(item.result.equation));
+  if (!evaluators.length || evaluators.some((evaluate, index) => !evaluate && !functions[index].result.circle)) return "";
+  const results = functions.map((item) => item.result);
+  let xMin = Math.min(...results.map((item) => Number(item.x_min)));
+  let xMax = Math.max(...results.map((item) => Number(item.x_max)));
+  let yMin = Math.min(...results.map((item) => Number(item.y_min)));
+  let yMax = Math.max(...results.map((item) => Number(item.y_max)));
+  if (![xMin, xMax, yMin, yMax].every(Number.isFinite) || xMax <= xMin || yMax <= yMin) return "";
+  const width = 720; const height = 390;
+  const plot = { left: 60, right: 690, top: 24, bottom: 340 };
+  const mapX = (x) => plot.left + (x - xMin) / (xMax - xMin) * (plot.right - plot.left);
+  const mapY = (y) => plot.bottom - (y - yMin) / (yMax - yMin) * (plot.bottom - plot.top);
+  const xTicks = canvasGraphTickLabels(xMin, xMax);
+  const yTicks = canvasGraphTickLabels(yMin, yMax);
+  const colors = ["#0e5fae", "#168363", "#7c3aed", "#c2410c", "#be185d", "#475569", "#0891b2", "#4d7c0f"];
+  const parts = [
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Reconstructed graph preview">`,
+    `<rect width="${width}" height="${height}" fill="#fff"/>`,
+    `<defs><clipPath id="canvas-graph-plot-clip"><rect x="${plot.left}" y="${plot.top}" width="${plot.right - plot.left}" height="${plot.bottom - plot.top}"/></clipPath></defs>`,
+  ];
+  xTicks.forEach((x) => {
+    const px = mapX(x);
+    parts.push(`<line x1="${px}" y1="${plot.top}" x2="${px}" y2="${plot.bottom}" stroke="#e5edf5"/>`);
+    parts.push(`<text x="${px}" y="${plot.bottom + 20}" text-anchor="middle" font-size="11" fill="#52657a">${escapeHtml(Number(x.toPrecision(3)).toString())}</text>`);
+  });
+  yTicks.forEach((y) => {
+    const py = mapY(y);
+    parts.push(`<line x1="${plot.left}" y1="${py}" x2="${plot.right}" y2="${py}" stroke="#e5edf5"/>`);
+    parts.push(`<text x="${plot.left - 8}" y="${py + 4}" text-anchor="end" font-size="11" fill="#52657a">${escapeHtml(Number(y.toPrecision(3)).toString())}</text>`);
+  });
+  const xAxisY = yMin <= 0 && yMax >= 0 ? mapY(0) : plot.bottom;
+  const yAxisX = xMin <= 0 && xMax >= 0 ? mapX(0) : plot.left;
+  parts.push(`<line x1="${plot.left}" y1="${xAxisY}" x2="${plot.right}" y2="${xAxisY}" stroke="#142d48" stroke-width="2"/>`);
+  parts.push(`<line x1="${yAxisX}" y1="${plot.top}" x2="${yAxisX}" y2="${plot.bottom}" stroke="#142d48" stroke-width="2"/>`);
+  parts.push(`<text x="${plot.right - 2}" y="${Math.min(height - 4, xAxisY + 17)}" text-anchor="end" font-size="13" fill="#142d48">x</text>`);
+  parts.push(`<text x="${yAxisX + 7}" y="${plot.top + 13}" font-size="13" fill="#142d48">y</text>`);
+  functions.forEach((item, functionIndex) => {
+    const evaluate = evaluators[functionIndex];
+    if (item.result.circle) {
+      const { x: centerX, y: centerY, radius, semicircle } = item.result.circle;
+      let path = "";
+      const steps = semicircle ? 320 : 640;
+      for (let sample = 0; sample <= steps; sample += 1) {
+        const angle = (semicircle ? Math.PI : Math.PI * 2) * sample / steps;
+        const x = centerX + radius * Math.cos(angle);
+        const y = centerY + radius * Math.sin(angle);
+        path += `${sample ? "L" : "M"}${mapX(x).toFixed(2)},${mapY(y).toFixed(2)} `;
+      }
+      if (path) parts.push(`<path d="${path.trim()}" fill="none" stroke="${colors[functionIndex % colors.length]}" stroke-width="3" stroke-linecap="round" clip-path="url(#canvas-graph-plot-clip)"/>`);
+    } else if (evaluate) {
+      let path = ""; let drawing = false; let previousY = null;
+      const allowedY = (yMax - yMin) * 3;
+      for (let sample = 0; sample <= 640; sample += 1) {
+        const x = xMin + (xMax - xMin) * sample / 640;
+        const y = evaluate(x);
+        const visible = y !== null && y >= yMin - allowedY && y <= yMax + allowedY &&
+          (previousY === null || Math.abs(y - previousY) < (yMax - yMin) * 0.7);
+        if (visible) {
+          path += `${drawing ? "L" : "M"}${mapX(x).toFixed(2)},${mapY(y).toFixed(2)} `;
+          drawing = true;
+          previousY = y;
+        } else {
+          drawing = false;
+          previousY = null;
+        }
+      }
+      if (path) parts.push(`<path d="${path.trim()}" fill="none" stroke="${colors[functionIndex % colors.length]}" stroke-width="3" stroke-linecap="round" clip-path="url(#canvas-graph-plot-clip)"/>`);
+    }
+    const points = Array.isArray(item.result.critical_points) ? item.result.critical_points : [];
+    points.forEach((point) => {
+      const x = Number(point.x); const y = Number(point.y);
+      if (!Number.isFinite(x) || !Number.isFinite(y) || x < xMin || x > xMax || y < yMin || y > yMax) return;
+      const px = mapX(x); const py = mapY(y); const label = sanitizeLearnerFacingText(String(point.label || "")).slice(0, 64);
+      parts.push(`<circle cx="${px}" cy="${py}" r="4.5" fill="#fff" stroke="${colors[functionIndex % colors.length]}" stroke-width="2.5"/>`);
+      if (label) parts.push(`<text x="${px + 8}" y="${py - 8}" font-size="12" fill="#142d48">${escapeHtml(label)}</text>`);
+    });
+  });
+  parts.push("</svg>");
+  return parts.join("");
+}
+
+function canvasGraphInitialPrompts(graphType) {
+  const type = String(graphType || "").toLowerCase();
+  if (type.includes("circle")) return [
+    { label: "Centre", prompt: "Enter the circle centre coordinates (x, y).", kind: "coordinate" },
+    { label: "Radius", prompt: "Enter the positive circle radius.", kind: "scalar" },
+  ];
+  if (type.includes("parabola") || type.includes("quadratic")) return [
+    { label: "Vertex", prompt: "Enter the vertex coordinates (x, y). Use exact values from the question or your working; do not estimate from an unscaled sketch.", kind: "coordinate" },
+    { label: "Point on curve", prompt: "Enter one other known point on the curve (x, y).", kind: "coordinate" },
+  ];
+  if (type.includes("line") || type.includes("linear")) return [
+    { label: "Point 1", prompt: "Enter the first known point on the line (x, y).", kind: "coordinate" },
+    { label: "Point 2", prompt: "Enter a different known point on the line (x, y).", kind: "coordinate" },
+  ];
+  if (type.includes("cubic")) return [
+    { label: "Inflection point", prompt: "Enter the cubic's point of inflection (x, y).", kind: "coordinate" },
+    { label: "Point on curve 1", prompt: "Enter a known point on the curve, preferably a turning point (x, y).", kind: "coordinate" },
+    { label: "Point on curve 2", prompt: "Enter a second distinct point on the curve (x, y).", kind: "coordinate" },
+  ];
+  if (type.includes("exponential")) return [
+    { label: "Horizontal asymptote", prompt: "Enter the horizontal asymptote as y = c.", kind: "scalar" },
+    { label: "Y-intercept", prompt: "Enter the y-intercept coordinates (x, y).", kind: "coordinate" },
+    { label: "Point on curve", prompt: "Enter another known point on the curve (x, y).", kind: "coordinate" },
+  ];
+  if (type.includes("hyperbola") || type.includes("hyperbolic") || type.includes("reciprocal")) return [
+    { label: "Vertical asymptote", prompt: "Enter the vertical asymptote as x = a.", kind: "scalar" },
+    { label: "Horizontal asymptote", prompt: "Enter the horizontal asymptote as y = b.", kind: "scalar" },
+    { label: "Point on curve", prompt: "Enter a known point on one branch (x, y).", kind: "coordinate" },
+  ];
+  if (type.includes("tangent")) return [
+    { label: "Asymptote 1", prompt: "Enter the x-coordinate of the first vertical asymptote.", kind: "scalar" },
+    { label: "Asymptote 2", prompt: "Enter the x-coordinate of the next vertical asymptote.", kind: "scalar" },
+    { label: "Centre crossing", prompt: "Enter the point where the curve crosses its midline (x, y).", kind: "coordinate" },
+  ];
+  if (type.includes("sine") || type.includes("cosine") || type.includes("trigonometric")) return [
+    { label: "Midline point", prompt: "Enter a point on the sinusoid's midline (x, y).", kind: "coordinate" },
+    { label: "Maximum or minimum", prompt: "Enter a neighbouring maximum or minimum (x, y).", kind: "coordinate" },
+    { label: "Period", prompt: "Enter the period of one full cycle.", kind: "scalar" },
+  ];
+  if (type.includes("absolute")) return [
+    { label: "Vertex", prompt: "Enter the absolute-value graph's vertex (x, y).", kind: "coordinate" },
+    { label: "Point on graph", prompt: "Enter one other point on the graph (x, y).", kind: "coordinate" },
+  ];
+  if (type.includes("square-root") || type.includes("square root")) return [
+    { label: "Endpoint", prompt: "Enter the square-root graph's endpoint (x, y).", kind: "coordinate" },
+    { label: "Point on graph", prompt: "Enter one other point on the graph (x, y).", kind: "coordinate" },
+  ];
+  return [1, 2, 3].map((index) => ({ label: `Key point ${index}`, prompt: `Enter key point ${index} as coordinates (x, y).`, kind: "coordinate" }));
+}
+
+function parseCanvasGraphNumber(raw) {
+  const text = String(raw || "").replace(/[−–]/g, "-").trim();
+  const fraction = text.match(/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*\/\s*((?:\d+(?:\.\d*)?|\.\d+))$/);
+  const value = fraction ? Number(fraction[1]) / Number(fraction[2]) : Number(text);
+  return Number.isFinite(value) ? value : null;
+}
+
+function parseCanvasGraphCoordinate(value) {
+  let text = String(value || "").trim();
+  const startsWrapped = text.startsWith("(");
+  const endsWrapped = text.endsWith(")");
+  if (startsWrapped !== endsWrapped) return null;
+  if (startsWrapped) text = text.slice(1, -1).trim();
+  const parts = text.split(/[,;]/);
+  if (parts.length !== 2) return null;
+  const x = parseCanvasGraphNumber(parts[0]);
+  const y = parseCanvasGraphNumber(parts[1]);
+  return x === null || y === null ? null : { x, y };
+}
+
+function placeCanvasGraphConfirmButton(canvas = state.canvas) {
+  const button = $("#canvasReadingConfirm");
+  const home = $("#canvasReadingConfirmHome");
+  const workflow = canvas?.mode === "graph" ? canvas.graphWorkflow : null;
+  let target = home;
+  if (workflow?.stage === "confirm-type") target = $("#canvasGraphTypeAction");
+  else if (["collecting", "retry"].includes(workflow?.stage)) target = $("#canvasGraphPointAction");
+  else if (["reconstructing", "preview", "all-ready"].includes(workflow?.stage)) target = $("#canvasGraphPreviewAction");
+  if (target && button.parentElement !== target) target.append(button);
+}
+
+function canvasGraphEquationMatchesPoints(equation, points) {
+  const evaluate = parseCanvasGraphExpression(equation);
+  if (!evaluate) return false;
+  for (const point of points) {
+    const coordinate = parseCanvasGraphCoordinate(point.value);
+    if (!coordinate) continue;
+    const actual = evaluate(coordinate.x);
+    const tolerance = Math.max(1e-4, Math.abs(coordinate.y) * 1e-3);
+    if (actual === null || Math.abs(actual - coordinate.y) > tolerance) return false;
+  }
+  return true;
+}
+
+function validateCanvasGraphEntry(prompt, rawValue) {
+  const value = String(rawValue || "").trim();
+  if (prompt.kind === "coordinate") {
+    if (!parseCanvasGraphCoordinate(value)) return "Enter one finite coordinate pair, for example (2, -4).";
+  } else if (parseCanvasGraphNumber(value.replace(/^[xy]\s*=\s*/i, "")) === null) {
+    return "Enter one finite number, such as 2 or -3/4.";
+  }
+  if (prompt.label.toLowerCase() === "radius" && parseCanvasGraphNumber(value) <= 0) return "A radius must be greater than zero.";
+  return "";
+}
+
+function setCanvasGraphPrompt(canvas, prompt) {
+  const workflow = canvas.graphWorkflow;
+  workflow.stage = "collecting";
+  workflow.activePrompt = prompt;
+  $("#canvasGraphPointPrompt").textContent = prompt.prompt;
+  $("#canvasGraphPointInputLabel").textContent = prompt.kind === "coordinate" ? `${prompt.label} (x, y)` : prompt.label;
+  $("#canvasGraphPointInput").placeholder = prompt.kind === "coordinate" ? `${prompt.label}: (x, y)` : `${prompt.label}: enter a value`;
+  $("#canvasGraphPointInput").value = "";
+  $("#canvasReadingConfirm").textContent = "Add key point";
+  $("#canvasGraphGuidedPanel").hidden = false;
+  $("#canvasGraphPreviewPanel").hidden = !workflow.functions.length;
+  $("#canvasGraphFunctionHeading").textContent = `Function ${workflow.functionIndex} of ${workflow.functionCount}: key details`;
+  placeCanvasGraphConfirmButton(canvas);
+  setCanvasReadingStatus("Enter the requested exact value, then add it to the graph details.");
+  requestAnimationFrame(() => $("#canvasGraphPointInput").focus({ preventScroll: true }));
+}
+
+function updateCanvasGraphHistory(canvas) {
+  const history = $("#canvasGraphPointHistory");
+  history.replaceChildren();
+  const workflow = canvas.graphWorkflow;
+  (workflow?.points || []).forEach((point) => {
+    const item = document.createElement("span");
+    item.textContent = `${point.label}: ${point.value}`;
+    history.append(item);
+  });
+}
+
+function renderConfirmedCanvasGraph(canvas, includeCurrent = false) {
+  const workflow = canvas.graphWorkflow;
+  const functions = workflow.functions.slice();
+  if (includeCurrent && workflow.currentResult) functions.push({ graphType: workflow.currentType, result: workflow.currentResult });
+  const svg = renderCanvasGraphPreview(functions);
+  const panel = $("#canvasGraphPreviewPanel");
+  const target = $("#canvasGraphPreview");
+  panel.hidden = !svg;
+  target.innerHTML = svg;
+  $("#canvasGraphPreviewStatus").textContent = svg
+    ? "Review the reconstructed curve and the key points you confirmed."
+    : "The graph details were reconstructed, but this preview could not be displayed. Check the type and points before continuing.";
+  return Boolean(svg);
+}
+
+async function reconstructCanvasGraphFunction(canvas) {
+  const workflow = canvas.graphWorkflow;
+  const photo = canvas.readingPhoto;
+  if (!photo || !workflow?.currentType) {
+    setCanvasReadingStatus("The graph image or function type is missing. Go back and review the sketch.", "error");
+    return;
+  }
+  workflow.stage = "reconstructing";
+  workflow.activePrompt = null;
+  placeCanvasGraphConfirmButton(canvas);
+  $("#canvasGraphPreviewPanel").hidden = true;
+  updateCanvasStage();
+  $("#canvasReadingConfirm").disabled = true;
+  setCanvasReadingStatus(`Building function ${workflow.functionIndex} of ${workflow.functionCount} from its confirmed type and points…`, "", true);
+  try {
+    const circleType = workflow.currentType.toLowerCase().includes("circle");
+    let result;
+    if (circleType) {
+      const centerEntry = workflow.points.find((point) => point.label.toLowerCase() === "centre");
+      const radiusEntry = workflow.points.find((point) => point.label.toLowerCase() === "radius");
+      const center = parseCanvasGraphCoordinate(centerEntry?.value);
+      const radius = parseCanvasGraphNumber(radiusEntry?.value);
+      if (!center || radius === null || radius <= 0) throw new Error("Invalid circle details");
+      const margin = Math.max(0.5, radius * 0.2);
+      result = {
+        status: "ready",
+        graph_type: workflow.currentType,
+        equation: "",
+        x_min: center.x - radius - margin,
+        x_max: center.x + radius + margin,
+        y_min: center.y - radius - margin,
+        y_max: center.y + radius + margin,
+        critical_points: [{ label: "Centre", x: center.x, y: center.y }],
+        circle: { x: center.x, y: center.y, radius, semicircle: workflow.currentType.toLowerCase().includes("semi") },
+      };
+    } else result = await postJson("/api/education/photo/reconstruct-graph", {
+      inspection_id: photo.inspectionId,
+      photo_id: photo.photoId,
+      grade: Math.max(1, Math.min(12, Number(state.grade) || 12)),
+      context: [
+        currentCanvasQuestionText(),
+        `This is function ${workflow.functionIndex} of ${workflow.functionCount} on one shared graph. Use only the confirmed function type and learner-supplied key points. Never estimate exact coordinates from the sketch.`,
+        canvas.questionAwareGraph ? "This is a learner task. Do not disclose or add a requested equation to the answer; return the graph preview only." : "",
+      ].filter(Boolean).join("\n"),
+      confirmed_graph_type: workflow.currentType,
+      drawing_description: $("#canvasReadingDrawing").value.trim(),
+      points: workflow.points.map(({ label, value }) => ({ label, value })),
+      user_equation: canvas.questionAwareGraph ? "" : $("#canvasGraphDetails").value.trim(),
+    });
+    workflow.currentResult = result;
+    if (String(result.status || "").toLowerCase() === "needs_point") {
+      workflow.extraPointCount += 1;
+      if (workflow.extraPointCount > 4) {
+        workflow.stage = "retry";
+        $("#canvasGraphPointPrompt").textContent = "More information is needed. Add another exact key point or correct the function type and try again.";
+        $("#canvasReadingConfirm").textContent = "Retry preview";
+        setCanvasReadingStatus("More exact graph information is needed before a preview can be made.", "warning");
+        return;
+      }
+      setCanvasGraphPrompt(canvas, {
+        label: sanitizeLearnerFacingText(String(result.next_point_label || "Additional key point")).slice(0, 80),
+        prompt: canvas.questionAwareGraph
+          ? `Enter the ${sanitizeLearnerFacingText(String(result.next_point_label || "additional key point")).toLowerCase()} you worked out as coordinates (x, y).`
+          : sanitizeLearnerFacingText(String(result.next_point_prompt || "Enter one additional key point as coordinates (x, y).")),
+        kind: "coordinate",
+      });
       return;
     }
-    setPracticeKeyboardVisible(true);
-  } else if (state.canvasContext === "exam") {
-    const answer = $("#examAnswer");
-    answer.value = [answer.value.trimEnd(), value].filter(Boolean).join(answer.value.trim() ? "\n" : "");
-    answer.dispatchEvent(new Event("input", { bubbles: true }));
-    answer.focus({ preventScroll: true });
-  } else {
-    appendToComposer(value);
+    if (String(result.status || "").toLowerCase() !== "ready" || (!result.circle && !String(result.equation || "").trim())) {
+      workflow.stage = "retry";
+      $("#canvasGraphType").disabled = false;
+      $("#canvasGraphFunctionHeading").textContent = `Function ${workflow.functionIndex} of ${workflow.functionCount}`;
+      $("#canvasGraphPointPrompt").textContent = "This graph needs more learner-provided details. Add a key point or correct the function type, then try again.";
+      $("#canvasGraphPointInput").value = "";
+      $("#canvasReadingConfirm").textContent = workflow.points.length ? "Add key point" : "Retry preview";
+      setCanvasReadingStatus("The graph is not determined yet. Check its type and confirmed points.", "warning");
+      return;
+    }
+    if (!result.circle && !canvasGraphEquationMatchesPoints(result.equation, workflow.points)) {
+      workflow.stage = "retry";
+      $("#canvasGraphType").disabled = false;
+      $("#canvasGraphGuidedPanel").hidden = false;
+      $("#canvasGraphPointPrompt").textContent = "The preview does not match every exact point you entered. Check the function type and points, then retry.";
+      $("#canvasGraphPointInput").value = "";
+      $("#canvasReadingConfirm").textContent = "Retry preview";
+      setCanvasReadingStatus("The preview does not pass through all confirmed points. Check the details before continuing.", "error");
+      return;
+    }
+    workflow.stage = "preview";
+    $("#canvasGraphGuidedPanel").hidden = true;
+    $("#canvasGraphType").disabled = false;
+    if (!renderConfirmedCanvasGraph(canvas, true)) {
+      workflow.stage = "retry";
+      $("#canvasGraphGuidedPanel").hidden = false;
+      $("#canvasGraphType").disabled = false;
+      $("#canvasGraphPointPrompt").textContent = "The returned function could not be plotted. Check the function type and exact points, then retry or add another point.";
+      $("#canvasReadingConfirm").textContent = "Retry preview";
+      setCanvasReadingStatus("The graph preview could not be displayed. Check the confirmed details before continuing.", "error");
+      return;
+    }
+    $("#canvasGraphPreviewPanel").hidden = false;
+    $("#canvasGraphFunctionHeading").textContent = `Review function ${workflow.functionIndex} of ${workflow.functionCount}`;
+    $("#canvasReadingConfirm").textContent = workflow.functionIndex < workflow.functionCount ? "Confirm function" : "Finish functions";
+    setCanvasReadingStatus("Review the graph preview, then confirm this function before continuing.", "success");
+  } catch {
+    workflow.stage = "retry";
+    $("#canvasGraphType").disabled = false;
+    $("#canvasGraphGuidedPanel").hidden = false;
+    $("#canvasGraphPointPrompt").textContent = "Graph preview could not be made. Your confirmed points are saved; retry or add another point.";
+    $("#canvasReadingConfirm").textContent = workflow.points.length ? "Add key point" : "Retry preview";
+    setCanvasReadingStatus("Graph preview could not be made. Your confirmed points are saved.", "error");
+  } finally {
+    if (state.canvas === canvas) {
+      placeCanvasGraphConfirmButton(canvas);
+      $("#canvasReadingConfirm").disabled = false;
+      updateCanvasStage();
+    }
+    setCanvasReadingStatus($("#canvasReadingStatus").textContent, $("#canvasReadingStatus").dataset.kind || "", false);
   }
-  $("#canvasTranscriptionPanel").hidden = true;
-  setCanvasTranscriptionLoading(false);
-  showToast("Recognized maths added. Check it before submitting your answer.");
+}
+
+async function advanceCanvasGraphWorkflow() {
+  const canvas = state.canvas;
+  const workflow = canvas?.graphWorkflow;
+  if (!canvas || !workflow) return;
+  if (workflow.stage === "confirm-type") {
+    const graphType = $("#canvasGraphType").value.trim();
+    if (!graphType || /\bunclear\b/i.test(graphType)) {
+      setCanvasReadingStatus("Choose a clear graph type for this function before continuing.", "error");
+      return;
+    }
+    workflow.currentType = graphType;
+    workflow.points = [];
+    workflow.extraPointCount = 0;
+    $("#canvasGraphType").disabled = true;
+    $("#canvasGraphPointHistory").replaceChildren();
+    $("#canvasGraphGuidedStatus").textContent = "Enter exact values given in the question or already established in your work. Do not estimate from an unnumbered sketch.";
+    const prompts = canvasGraphInitialPrompts(graphType);
+    workflow.promptQueue = prompts.slice(1);
+    setCanvasGraphPrompt(canvas, prompts[0]);
+    return;
+  }
+  if (workflow.stage === "collecting") {
+    const prompt = workflow.activePrompt;
+    if (!prompt) return reconstructCanvasGraphFunction(canvas);
+    const value = $("#canvasGraphPointInput").value.trim();
+    const error = validateCanvasGraphEntry(prompt, value);
+    if (error) {
+      setCanvasReadingStatus(error, "error");
+      return;
+    }
+    setCanvasReadingStatus("");
+    workflow.points.push({ label: prompt.label, value });
+    updateCanvasGraphHistory(canvas);
+    if (workflow.promptQueue.length) {
+      setCanvasGraphPrompt(canvas, workflow.promptQueue.shift());
+      return;
+    }
+    await reconstructCanvasGraphFunction(canvas);
+    return;
+  }
+  if (workflow.stage === "retry") {
+    const editedType = $("#canvasGraphType").value.trim();
+    if (editedType && !/\bunclear\b/i.test(editedType)) workflow.currentType = editedType;
+    const value = $("#canvasGraphPointInput").value.trim();
+    if (value) {
+      const prompt = { label: "Additional key point", kind: "coordinate" };
+      const error = validateCanvasGraphEntry(prompt, value);
+      if (error) { setCanvasReadingStatus(error, "error"); return; }
+      workflow.points.push({ label: prompt.label, value });
+      updateCanvasGraphHistory(canvas);
+    }
+    await reconstructCanvasGraphFunction(canvas);
+    return;
+  }
+  if (workflow.stage === "preview") {
+    workflow.functions.push({ graphType: workflow.currentType, points: workflow.points.slice(), result: workflow.currentResult });
+    if (workflow.functionIndex < workflow.functionCount) {
+      workflow.functionIndex += 1;
+      workflow.stage = "confirm-type";
+      workflow.currentType = "";
+      workflow.currentResult = null;
+      workflow.points = [];
+      workflow.promptQueue = [];
+      $("#canvasGraphType").disabled = false;
+      $("#canvasGraphType").value = "";
+      $("#canvasGraphDetails").value = "";
+      $("#canvasGraphGuidedPanel").hidden = false;
+      $("#canvasGraphFunctionHeading").textContent = `Function ${workflow.functionIndex} of ${workflow.functionCount}: confirm its type`;
+      $("#canvasGraphGuidedStatus").textContent = "Choose or correct this function's graph type. Then enter its exact key details.";
+      $("#canvasGraphPointHistory").replaceChildren();
+      $("#canvasGraphPointPrompt").textContent = "Confirm the graph type above to begin collecting key points.";
+      $("#canvasGraphPointInput").value = "";
+      $("#canvasGraphPreviewPanel").hidden = false;
+      renderConfirmedCanvasGraph(canvas);
+      $("#canvasReadingConfirm").textContent = "Confirm type";
+      placeCanvasGraphConfirmButton(canvas);
+      setCanvasReadingStatus(`Function ${workflow.functionIndex - 1} confirmed. Continue with function ${workflow.functionIndex} of ${workflow.functionCount}.`);
+      return;
+    }
+    const summary = workflow.functions.map((item, index) => {
+      const details = item.points.map((point) => `${point.label}: ${point.value}`).join(", ");
+      return `Function ${index + 1}: ${item.graphType}${details ? `; confirmed details: ${details}` : ""}`;
+    }).join("\n");
+    canvas.confirmedReading = {
+      words: "",
+      formula: "",
+      drawing: $("#canvasReadingDrawing").value.trim(),
+      comment: $("#canvasReadingComment").value.trim(),
+      graphType: workflow.functions.map((item) => item.graphType).join("; "),
+      graphDetails: summary,
+    };
+    canvas.readingConfirmed = true;
+    $("#canvasReadingConfirm").textContent = "Use graph";
+    workflow.stage = "all-ready";
+    placeCanvasGraphConfirmButton(canvas);
+    updateCanvasStage();
+    setCanvasReadingStatus("All function previews are confirmed. Use the graph to attach it to your work.", "success");
+    return;
+  }
+  if (workflow.stage === "all-ready") {
+    $("#canvasReadingReview").hidden = true;
+    $("#finishCanvas").click();
+  }
+}
+
+async function advanceCanvasGraphWorkflowSafely() {
+  try {
+    await advanceCanvasGraphWorkflow();
+  } catch (error) {
+    console.error("Graph review could not continue", error);
+    setCanvasReadingStatus("Graph review could not continue. Your confirmed details are still here; check them and try again.", "error");
+  }
+}
+
+function appendConfirmedCanvasReading(reading) {
+  if (!reading || state.canvas.readingApplied) return;
+  const context = state.canvasContext || "";
+  const editor = context.startsWith("practice") ? "practice" : context.startsWith("exam") ? "exam" : "ask";
+  const getCurrent = () => editor === "practice" ? getPracticeEditorLatex() : getMathEditorLatex(editor);
+  const send = (name, value = "") => editor === "practice"
+    ? practiceEditorCommand({ name, value })
+    : mathEditorCommand(editor, { name, value });
+  let current = String(getCurrent() || "");
+  let added = false;
+  const addPart = (value, command = "insertText") => {
+    const text = String(value || "").trim();
+    if (!text || current.includes(text)) return;
+    if (current.trim() || added) send("newLine");
+    send(command, text);
+    current += `${current ? "\n" : ""}${text}`;
+    added = true;
+  };
+  addPart(reading.words);
+  addPart(reading.formula, "insertLatex");
+  addPart(reading.graphType ? `Learner-confirmed graph type: ${reading.graphType}` : "");
+  addPart(reading.graphDetails ? `Learner-confirmed equation and key graph information: ${reading.graphDetails}` : "");
+  addPart(reading.drawing ? `Confirmed drawing description: ${reading.drawing}` : "");
+  addPart(reading.comment ? `Learner's note: ${reading.comment}` : "");
+  state.canvas.readingApplied = true;
+}
+
+$("#canvasReadWritingButton").addEventListener("click", (event) => {
+  const canvas = state.canvas;
+  if (!canvas || canvas.readingConfirmed) return;
+  if (canvas.stage === "graph-setup") {
+    setStatus($("#canvasGraphCountStatus"), "Enter a whole number greater than 0 before drawing the graph.", "error");
+    $("#canvasGraphFunctionCount").focus({ preventScroll: true });
+    event.stopImmediatePropagation();
+    return;
+  }
+  if (canvas.stage === "writing" && canvas.mode !== "graph") {
+    if (!canvas.strokes.length) {
+      setStatus($("#canvasReadingStatus"), "Write or draw something on the canvas first.", "error");
+      return;
+    }
+    enterCanvasRegionSelection();
+    event.stopImmediatePropagation();
+    return;
+  }
+  if (canvas.stage === "regions" && !canvas.regions.length) {
+    setCanvasReadingStatus("Mark at least one area first. Choose Words, Maths, or Drawings.", "error");
+    event.stopImmediatePropagation();
+    return;
+  }
+  if (canvas.stage === "writing" && canvas.mode === "graph" && !canvas.strokes.length) {
+    $("#canvasReadingReview").hidden = false;
+    setCanvasReadingStatus("Draw the graph before asking for a review.", "error");
+    event.stopImmediatePropagation();
+    return;
+  }
+  if (canvas.stage === "regions" || canvas.stage === "writing") {
+    canvas.stage = "transcribing";
+    updateCanvasStage();
+  }
+  event.stopImmediatePropagation();
+  void reviewCanvasReading();
+});
+$$('.canvas-region-tool').forEach((button) => button.addEventListener("click", () => {
+  state.canvas.regionKind = button.dataset.canvasRegionKind;
+  setStatus($("#canvasReadingStatus"), `Mark the ${state.canvas.regionKind} area on the canvas.`);
+  updateCanvasStage();
+}));
+$("#canvasBackWritingButton").addEventListener("click", () => {
+  const viewport = state.canvas.writingViewport;
+  state.canvas.stage = "writing";
+  if (viewport) {
+    state.canvas.scale = viewport.scale;
+    state.canvas.offsetX = viewport.offsetX;
+    state.canvas.offsetY = viewport.offsetY;
+  }
+  $("#canvasReadingReview").hidden = true;
+  updateCanvasStage();
+});
+$("#canvasGraphStartButton").addEventListener("click", () => {
+  const input = $("#canvasGraphFunctionCount");
+  const count = input.valueAsNumber;
+  if (!Number.isSafeInteger(count) || count < 1) {
+    setStatus($("#canvasGraphCountStatus"), "Enter a whole number greater than 0.", "error");
+    input.focus({ preventScroll: true });
+    return;
+  }
+  setStatus($("#canvasGraphCountStatus"), "");
+  state.canvas.graphFunctionCount = count;
+  state.canvas.stage = "writing";
+  updateCanvasStage();
+});
+
+$("#canvasReadingConfirm").addEventListener("click", async () => {
+  if (state.canvas?.mode === "graph" && state.canvas.graphWorkflow) {
+    await advanceCanvasGraphWorkflowSafely();
+    return;
+  }
+  const reading = {
+    words: $("#canvasReadingWords").value.trim(),
+    formula: getMathEditorLatex("canvasMath").trim(),
+    drawing: $("#canvasReadingDrawing").value.trim(),
+    comment: $("#canvasReadingComment").value.trim(),
+    graphType: $("#canvasGraphType").value.trim(),
+    graphDetails: $("#canvasGraphDetails").value.trim(),
+  };
+  if (!reading.words && !reading.formula && !reading.drawing && !reading.comment) {
+    setStatus($("#canvasReadingStatus"), "There is no confirmed reading to use. Edit a field or choose Use image as drawn.", "error");
+    return;
+  }
+  state.canvas.confirmedReading = reading;
+  state.canvas.readingConfirmed = true;
+  $("#canvasReadingConfirm").disabled = true;
+  $("#finishCanvas").textContent = "Adding…";
+  $("#finishCanvas").click();
+});
+for (const selector of ["#canvasGraphType", "#canvasGraphPointInput"]) {
+  $(selector).addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    $("#canvasReadingConfirm").click();
+  });
+}
+
+$("#canvasReadingImageOnly").addEventListener("click", () => {
+  state.canvas.confirmedReading = null;
+  state.canvas.readingConfirmed = true;
+  $("#canvasReadingConfirm").disabled = true;
+  $("#finishCanvas").textContent = "Adding…";
+  $("#finishCanvas").click();
+});
+
+$("#canvasReadingClose").addEventListener("click", () => {
+  $("#canvasReadingReview").hidden = true;
+  if (state.canvas.mode === "graph") state.canvas.stage = "writing";
+  else state.canvas.stage = "regions";
+  updateCanvasStage();
+  setStatus($("#canvasReadingStatus"), "Review cancelled. The canvas is still here.");
 });
 
 workingCanvas.addEventListener("pointerdown", (event) => {
+  if (!canvasSupportsDirectInput() && !canvasCanSelectWithMouse(event)) {
+    event.preventDefault();
+    return;
+  }
   const current = state.canvas;
+  if (!current || !["writing", "regions"].includes(current.stage)) return;
   event.preventDefault();
   workingCanvas.setPointerCapture(event.pointerId);
   current.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -3225,12 +5546,22 @@ workingCanvas.addEventListener("pointerdown", (event) => {
       current.strokes.pop();
       current.active = null;
     }
+    current.draftRegion = null;
+    current.drag = null;
     const pair = [...current.pointers.values()];
     current.pinch = current.zoom ? { distance: canvasDistance(pair[0], pair[1]), scale: current.scale, offsetX: current.offsetX, offsetY: current.offsetY, midpoint: canvasMidpoint(pair[0], pair[1]) } : null;
     return;
   }
   if (current.pan) {
     current.drag = { x: event.clientX, y: event.clientY, offsetX: current.offsetX, offsetY: current.offsetY };
+    return;
+  }
+  if (current.stage === "regions") {
+    const point = canvasPoint(event);
+    const rect = workingCanvas.getBoundingClientRect();
+    const screenPoint = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    current.draftRegion = { id: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`, kind: current.regionKind, start: point, end: point, screenStart: screenPoint, screenEnd: screenPoint };
+    drawCanvasRegionOverlay();
     return;
   }
   invalidateCanvasTranscription();
@@ -3241,6 +5572,7 @@ workingCanvas.addEventListener("pointerdown", (event) => {
   drawCanvas();
 });
 workingCanvas.addEventListener("pointermove", (event) => {
+  if (!canvasSupportsDirectInput() && !canvasCanSelectWithMouse(event)) return;
   const current = state.canvas;
   if (!current.pointers.has(event.pointerId)) return;
   current.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -3259,6 +5591,11 @@ workingCanvas.addEventListener("pointermove", (event) => {
     current.offsetX = current.drag.offsetX + event.clientX - current.drag.x;
     current.offsetY = current.drag.offsetY + event.clientY - current.drag.y;
     drawCanvas();
+  } else if (current.draftRegion && pair.length === 1) {
+    current.draftRegion.end = canvasPoint(event);
+    const rect = workingCanvas.getBoundingClientRect();
+    current.draftRegion.screenEnd = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    drawCanvasRegionOverlay();
   } else if (current.active && pair.length === 1) {
     current.active.points.push(canvasPoint(event));
     drawCanvas();
@@ -3268,7 +5605,26 @@ workingCanvas.addEventListener("pointermove", (event) => {
   const current = state.canvas;
   current.pointers.delete(event.pointerId);
   if (current.pointers.size < 2) current.pinch = null;
-  if (!current.pointers.size) { current.active = null; current.drag = null; }
+  if (current.pointers.size === 1 && current.pan) {
+    const remaining = [...current.pointers.values()][0];
+    current.drag = { x: remaining.x, y: remaining.y, offsetX: current.offsetX, offsetY: current.offsetY };
+  }
+  if (!current.pointers.size) {
+    current.active = null;
+    current.drag = null;
+    if (current.draftRegion) {
+      const draft = current.draftRegion;
+        if (event.type === "pointerup") {
+          draft.end = canvasPoint(event);
+          const rect = workingCanvas.getBoundingClientRect();
+          draft.screenEnd = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+        }
+      current.draftRegion = null;
+        addCanvasRegion(draft.start, draft.end, draft.kind, draft.id, null, canvasLocalRect(draft.screenStart, draft.screenEnd));
+      drawCanvasRegionOverlay();
+      syncPhoneCanvasSetup();
+    }
+  }
 }));
 workingCanvas.addEventListener("wheel", (event) => {
   if (!state.canvas.zoom) return;
@@ -3304,16 +5660,38 @@ $("#canvasEraserButton").addEventListener("click", (event) => {
   event.currentTarget.textContent = state.canvas.eraser ? "Eraser on" : "Eraser";
 });
 $("#canvasDialog").addEventListener("close", () => {
+  document.documentElement.classList.remove("canvas-dialog-open");
+  document.body.classList.remove("canvas-dialog-open");
   if (state.canvasReturnFocus instanceof HTMLElement) state.canvasReturnFocus.focus({ preventScroll: true });
 });
 $("#canvasFitButton").addEventListener("click", fitCanvasToWriting);
 $("#undoCanvas").addEventListener("click", () => {
+  if (state.canvas.stage === "regions") {
+    if (state.canvas.regions.length) {
+      releaseCanvasRegionSnapshot(state.canvas.regions.pop());
+      invalidateCanvasTranscription();
+      drawCanvasRegionOverlay();
+      renderCanvasRegionSnapshots();
+      syncPhoneCanvasSetup();
+    }
+    return;
+  }
   if (state.canvas.strokes.length) invalidateCanvasTranscription();
   state.canvas.strokes.pop();
   drawCanvas();
   if (phoneCanvasSession) phoneCanvasSend({ type: "setup", strokes: phoneCanvasSnapshot() });
 });
 $("#clearCanvas").addEventListener("click", () => {
+  if (state.canvas.stage === "regions") {
+    if (state.canvas.regions.length) invalidateCanvasTranscription();
+    state.canvas.regions.forEach(releaseCanvasRegionSnapshot);
+    state.canvas.regions = [];
+    state.canvas.draftRegion = null;
+    drawCanvasRegionOverlay();
+    renderCanvasRegionSnapshots();
+    syncPhoneCanvasSetup();
+    return;
+  }
   if (state.canvas.strokes.length) invalidateCanvasTranscription();
   state.canvas.strokes = [];
   drawCanvas();
@@ -3341,6 +5719,11 @@ if (window.ResizeObserver) {
 window.addEventListener("resize", () => { if ($("#canvasDialog").open) resizeCanvas(); });
 
 $("#usePhoneCanvas").addEventListener("click", async () => {
+  if (state.canvas?.mode === "graph" && (!Number.isSafeInteger(state.canvas.graphFunctionCount) || state.canvas.graphFunctionCount < 1)) {
+    setStatus($("#canvasGraphCountStatus"), "Enter a whole number greater than 0 before opening the phone canvas.", "error");
+    $("#canvasGraphFunctionCount").focus({ preventScroll: true });
+    return;
+  }
   const panel = $("#phoneCanvasPairPanel");
   if (!panel.hidden && !phoneCanvasSession) {
     await startPhoneCanvas();
@@ -3348,9 +5731,12 @@ $("#usePhoneCanvas").addEventListener("click", async () => {
   }
   panel.hidden = !panel.hidden;
   $("#usePhoneCanvas").setAttribute("aria-expanded", String(!panel.hidden));
+  syncCanvasInputMode();
   if (!panel.hidden) await startPhoneCanvas();
 });
+$("#canvasPhoneOnlyConnect").addEventListener("click", () => $("#usePhoneCanvas").click());
 $("#stopPhoneCanvas").addEventListener("click", () => stopPhoneCanvas());
+$("#copyPhoneCanvasPairServer").addEventListener("click", copyPhoneCanvasPairServer);
 $("#canvasDialog").addEventListener("close", () => {
   if (Date.now() < phoneCanvasSubmissionSentUntil) {
     clearTimeout(phoneCanvasCloseTimer);
@@ -3365,22 +5751,67 @@ $("#finishCanvas").addEventListener("click", async () => {
   const button = $("#finishCanvas");
   const canvas = state.canvas;
   const revision = canvas.revision;
+  if (canvas.stage === "graph-setup") {
+    setStatus($("#canvasGraphCountStatus"), "Enter a whole number greater than 0 before drawing the graph.", "error");
+    $("#canvasGraphFunctionCount").focus({ preventScroll: true });
+    return;
+  }
+  if (!canvas.strokes.length) {
+    showToast("Write or draw something before using the canvas.");
+    if (phoneCanvasSession) phoneCanvasSend({ type: "submission_error", message: "Write or draw something before using the canvas." });
+    return;
+  }
   if (state.canvasContext.startsWith("practice") && state.practiceAnswerPhotoIds.length >= 3) {
     showToast("The limit is three handwritten images per practice attempt.");
     if (phoneCanvasSession) phoneCanvasSend({ type: "submission_error", message: "This attempt already has the maximum number of handwritten images." });
     return;
   }
+  if (!canvas.readingConfirmed) {
+    if (canvas.stage === "graph-setup") {
+      setStatus($("#canvasGraphCountStatus"), "Enter a whole number greater than 0 before drawing the graph.", "error");
+      $("#canvasGraphFunctionCount").focus({ preventScroll: true });
+      return;
+    }
+    if (canvas.stage === "writing" && canvas.mode !== "graph") {
+      enterCanvasRegionSelection();
+      return;
+    }
+    if (canvas.stage === "review") {
+      $("#canvasReadingReview").hidden = false;
+      $("#canvasReadingResults").hidden = false;
+      if (canvas.mode === "graph" && canvas.graphWorkflow) {
+        await advanceCanvasGraphWorkflowSafely();
+        return;
+      }
+      $("#canvasReadingReview").scrollIntoView({ behavior: "smooth", block: "start" });
+      return;
+    }
+    if (canvas.stage === "transcribing") return;
+    if (canvas.stage === "regions" && !canvas.regions.length) {
+      setCanvasReadingStatus("Mark at least one area first. Choose Words, Maths, or Drawings.", "error");
+      return;
+    }
+    canvas.stage = "transcribing";
+    updateCanvasStage();
+    await reviewCanvasReading();
+    return;
+  }
   button.disabled = true;
+  button.textContent = "Adding…";
+  $("#canvasReadingReview").hidden = false;
+  $("#canvasReadingResults").hidden = false;
+  $("#canvasReadingConfirm").disabled = true;
+  setCanvasReadingStatus("Adding your confirmed work…", "", true);
   try {
-    fitCanvasToWriting();
-    const photo = await ensureCanvasPhoto(canvas, revision);
+    const photo = await ensureCanvasPhoto(canvas, revision, (message) => setCanvasReadingStatus(message, "", true));
     assertCanvasSnapshotCurrent(canvas, revision);
+    appendConfirmedCanvasReading(canvas.confirmedReading);
     const { file, blob, photoId } = photo;
     const previewUrl = URL.createObjectURL(blob);
     if (state.canvasContext === "ask-write" || state.canvasContext === "ask-graph") {
       state.askPhotos.push({ id: photoId, filename: file.name, previewUrl });
       appendMessage("Canvas working attached. It will be included when you press Send.", { kind: "Canvas working", imageUrl: previewUrl });
-      $("#askInput").focus({ preventScroll: true });
+      mathEditorCommand("ask", { name: "focus" });
     } else if (state.canvasContext.startsWith("practice")) {
       if (photoId && !state.practiceAnswerPhotoIds.includes(photoId)) state.practiceAnswerPhotoIds.push(photoId);
       state.practiceAnswerPhotoPreviews.push({ id: photoId, url: previewUrl });
@@ -3388,7 +5819,7 @@ $("#finishCanvas").addEventListener("click", async () => {
       if (key) sessionStorage.setItem(key, JSON.stringify(state.practiceAnswerPhotoIds));
       renderPracticeAnswerAttachments();
       showToast("Canvas working attached. Send it for marking when ready.");
-    } else if (state.canvasContext === "exam") {
+    } else if (state.canvasContext.startsWith("exam")) {
       const question = state.examCurrentQuestion;
       if (question && photoId) {
         const existing = state.examAnswerAttachments.get(question.id) || [];
@@ -3401,10 +5832,19 @@ $("#finishCanvas").addEventListener("click", async () => {
       phoneCanvasSend({ type: "submitted" });
     }
     $("#canvasDialog").close();
-  } catch (error) {
-    if (phoneCanvasSession) phoneCanvasSend({ type: "submission_error", message: error.message || "Canvas submission failed." });
-    showToast(error.message);
-  } finally { button.disabled = false; }
+  } catch {
+    canvas.readingConfirmed = true;
+    $("#canvasReadingConfirm").disabled = false;
+    setCanvasReadingStatus("Your work could not be attached. It is still here; check your connection and try again.", "error");
+    if (phoneCanvasSession) phoneCanvasSend({ type: "submission_error", message: "Your work could not be attached. It is still available on the computer; check the connection and try again." });
+    showToast("Your work could not be attached. It is still here; check your connection and try again.");
+  } finally {
+    if (state.canvas === canvas && $("#canvasDialog").open) {
+      button.disabled = false;
+      updateCanvasStage();
+      if (canvas.readingConfirmed) $("#canvasReadingConfirm").disabled = false;
+    }
+  }
 });
 
 function registerImageGestures() {

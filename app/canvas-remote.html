@@ -3,15 +3,15 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0e766e">
+  <meta name="theme-color" content="#0e5fae">
   <meta name="robots" content="noindex, nofollow">
   <title>SharperTime phone canvas</title>
-  <link rel="stylesheet" href="./styles.css?v=23">
+  <link rel="stylesheet" href="./styles.css?v=50">
   <style>
     body { min-height: 100svh; }
     .phone-remote-page { width: min(100%, 1050px); min-height: 100svh; margin: 0 auto; padding: max(12px, env(safe-area-inset-top)) 14px max(12px, env(safe-area-inset-bottom)); }
     .phone-remote-card { display: grid; gap: 14px; padding: 18px; border: 1px solid var(--line); border-radius: 18px; background: #fff; box-shadow: var(--shadow); }
-    .phone-remote-brand { width: 138px; height: 48px; object-fit: contain; }
+    .phone-remote-brand { width: 138px; height: 73px; object-fit: cover; object-position: center; mix-blend-mode: multiply; }
     .phone-remote-page h1 { margin: 0; font-size: clamp(23px, 5vw, 30px); }
     .phone-remote-page p { margin: 0; color: var(--ink-soft); line-height: 1.5; }
     .phone-pair-form { display: grid; gap: 10px; max-width: 440px; }
@@ -19,22 +19,22 @@
     .phone-pair-form input { min-height: 52px; font-size: 22px; letter-spacing: .18em; text-align: center; }
     .phone-signin-form { margin-top: 2px; }
     .phone-signin-form input { min-height: 46px; font-size: 16px; letter-spacing: normal; text-align: left; }
-    .phone-signin-note { padding: 12px; border-radius: 10px; background: var(--teal-pale); font-size: 13px; }
+    .phone-signin-note { padding: 12px; border-radius: 10px; background: var(--brand-pale); font-size: 13px; }
     .phone-canvas-workspace { height: calc(100svh - 24px - env(safe-area-inset-top) - env(safe-area-inset-bottom)); min-height: 360px; display: flex; flex-direction: column; gap: 10px; }
     .phone-canvas-header { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-    .phone-canvas-header .phone-remote-brand { width: 112px; height: 38px; }
-    .phone-canvas-status { min-width: 0; color: var(--teal-dark); font-size: 12px; font-weight: 700; text-align: right; }
-    .phone-question { flex: 0 1 auto; max-height: 18svh; overflow: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #f8fbfa; font-family: Georgia, "Times New Roman", serif; font-size: 15px; line-height: 1.4; white-space: pre-wrap; }
+    .phone-canvas-header .phone-remote-brand { width: 112px; height: 59px; }
+    .phone-canvas-status { min-width: 0; color: var(--brand-navy); font-size: 12px; font-weight: 700; text-align: right; }
+    .phone-question { flex: 0 1 auto; max-height: 18svh; overflow: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: #f8fbff; font-family: Georgia, "Times New Roman", serif; font-size: 15px; line-height: 1.4; white-space: pre-wrap; }
     .phone-question:empty { display: none; }
     .phone-canvas-tools { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 5px; }
     .phone-canvas-tools .button { flex: 0 0 auto; min-height: 36px; padding: 6px 10px; white-space: nowrap; }
     .phone-pan-control { gap: 7px; }
-    .pan-hand-badge { width: 22px; height: 22px; display: inline-grid; flex: 0 0 auto; place-items: center; border-radius: 7px; background: var(--teal); }
+    .pan-hand-badge { width: 22px; height: 22px; display: inline-grid; flex: 0 0 auto; place-items: center; border-radius: 7px; background: var(--brand-blue); }
     .pan-hand-icon { width: 17px; height: 17px; display: block; fill: none; stroke: #fff; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
-    .phone-canvas-tools .button[aria-pressed="true"] { border-color: var(--teal); color: var(--teal-dark); background: var(--teal-pale); }
-    .phone-canvas-wrap { position: relative; flex: 1 1 0; min-height: 120px; overflow: hidden; border: 1px solid #b9ceca; border-radius: 12px; background: #fff; touch-action: none; }
+    .phone-canvas-tools .button[aria-pressed="true"] { border-color: var(--brand-blue); color: var(--brand-navy); background: var(--brand-pale); }
+    .phone-canvas-wrap { position: relative; flex: 1 1 0; min-height: 120px; overflow: hidden; border: 1px solid #c2d2e5; border-radius: 12px; background: #fff; touch-action: none; }
     #phoneCanvas { width: 100%; height: 100%; display: block; touch-action: none; }
-    #phoneCanvasMinimap { position: absolute; z-index: 2; top: 9px; right: 9px; width: min(30vw, 132px); height: 88px; border: 1px solid #9cb8b2; border-radius: 9px; background: rgba(255,255,255,.96); box-shadow: 0 2px 8px rgba(17,50,45,.14); pointer-events: none; }
+    #phoneCanvasMinimap { position: absolute; z-index: 2; top: 9px; right: 9px; width: min(30vw, 132px); height: 88px; border: 1px solid #aebfd3; border-radius: 9px; background: rgba(255,255,255,.96); box-shadow: 0 2px 8px rgba(10,35,68,.14); pointer-events: none; }
     .phone-canvas-footer { flex: 0 0 auto; min-height: 20px; color: var(--ink-soft); font-size: 12px; }
     .phone-canvas-workspace.question-hidden .phone-question { display: none !important; }
     @media (max-width: 700px) {
@@ -50,7 +50,7 @@
       body.phone-canvas-active { height: var(--phone-viewport-height, 100dvh); min-height: 0; overflow: hidden; }
       body.phone-canvas-active .phone-remote-page { height: 100%; min-height: 0; padding: max(4px, env(safe-area-inset-top)) 8px max(4px, env(safe-area-inset-bottom)); overflow: hidden; }
       body.phone-canvas-active .phone-canvas-workspace { height: 100%; min-height: 0; gap: 5px; }
-      .phone-canvas-header .phone-remote-brand { width: 96px; height: 32px; }
+      .phone-canvas-header .phone-remote-brand { width: 96px; height: 51px; }
       .phone-canvas-status { max-width: 65%; overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
       .phone-question { max-height: 22dvh; min-height: 0; padding: 5px 8px; font-size: 11px; line-height: 1.2; }
       .phone-canvas-tools { gap: 3px; row-gap: 4px; }
@@ -65,7 +65,7 @@
 <body>
   <main class="phone-remote-page">
     <section id="pairScreen" class="phone-remote-card">
-      <img class="phone-remote-brand" src="../assets/brand/sharperx-logo.png" alt="SharperX">
+      <img class="phone-remote-brand" src="./icon.svg" alt="SharperTime logo">
       <h1>Connect your phone</h1>
       <p>Use your phone to write or draw on the canvas open on your computer. Local sessions require both devices to use the same Wi-Fi.</p>
       <div id="phoneSignInPrompt" class="phone-signin-note" hidden>Sign in with the same SharperTime account used on the computer. This phone will connect automatically after sign-in.</div>
@@ -80,13 +80,15 @@
         <label for="phonePairCode">Pairing code</label>
         <input id="phonePairCode" name="code" type="text" inputmode="numeric" autocomplete="one-time-code" pattern="[0-9]{6}" maxlength="6" placeholder="000000" required>
         <button class="button primary" type="submit">Connect phone</button>
+        <a id="openNativeCanvas" class="button secondary" href="sharpertimecanvas://pair" hidden>Open SharperTime Canvas app</a>
+        <a class="button subtle" href="./canvas-install.html">Get the Android canvas app</a>
       </form>
       <div id="phonePairStatus" class="status" role="status" aria-live="polite"></div>
     </section>
 
     <section id="phoneCanvasWorkspace" class="phone-canvas-workspace" hidden>
       <header class="phone-canvas-header">
-        <img class="phone-remote-brand" src="../assets/brand/sharperx-logo.png" alt="SharperX">
+        <img class="phone-remote-brand" src="./icon.svg" alt="SharperTime logo">
         <div id="phoneCanvasConnectionStatus" class="phone-canvas-status" role="status" aria-live="polite">Connecting…</div>
       </header>
       <div id="phoneCanvasQuestion" class="phone-question" aria-label="Current question"></div>
@@ -98,13 +100,13 @@
         <button id="phoneCanvasPan" class="button subtle phone-pan-control" type="button" aria-pressed="false" aria-label="Enable pan mode"><span class="pan-hand-badge" aria-hidden="true"><svg class="pan-hand-icon" viewBox="0 0 24 24"><path d="M23.5 12.5c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V6c0-.83-.67-1.5-1.5-1.5S17.5 5.17 17.5 6v6c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V4c0-.83-.67-1.5-1.5-1.5S11.5 3.17 11.5 4v8c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V8c0-.83-.67-1.5-1.5-1.5S5.5 7.17 5.5 8v9l-2.27-2.28c-.29-.29-.68-.44-1.06-.44s-.77.15-1.06.44c-.59.59-.59 1.54 0 2.12L6.5 23.5c.94.94 2.22 1.5 3.54 1.5H19c1.66 0 3-1.34 3-3v-9.5z"/></svg></span><span id="phoneCanvasPanLabel">Pan</span></button>
         <button id="phoneCanvasZoomToggle" class="button subtle" type="button" aria-pressed="false" aria-label="Enable pinch-to-zoom">Zoom off</button>
         <button id="phoneCanvasFit" class="button subtle" type="button" aria-label="Fit the writing to the canvas">Fit</button>
-        <button id="phoneCanvasSubmit" class="button primary" type="button" disabled>Submit canvas</button>
+        <button id="phoneCanvasSubmit" class="button primary" type="button" hidden disabled>Next</button>
         <button id="phoneCanvasDisconnect" class="button subtle" type="button">Disconnect</button>
       </div>
       <div class="phone-canvas-wrap"><canvas id="phoneCanvas" aria-label="Write or draw your answer with your finger or stylus"></canvas><canvas id="phoneCanvasMinimap" aria-label="Overview of the writing extent" role="img"></canvas></div>
       <div id="phoneCanvasHelp" class="phone-canvas-footer">Draw with one finger or a stylus. Turn Zoom on before pinching with two fingers; use Pan to move the view. Fit shows all your writing.</div>
     </section>
   </main>
-  <script type="module" src="./canvas-remote.js?v=9"></script>
+  <script type="module" src="./canvas-remote.js?v=19"></script>
 </body>
 </html>

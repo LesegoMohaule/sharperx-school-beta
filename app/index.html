@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <meta name="theme-color" content="#0e766e">
+  <meta name="theme-color" content="#0e5fae">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="SharperTime">
@@ -12,7 +12,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icon.svg">
-  <link rel="stylesheet" href="./styles.css?v=27">
+  <link rel="stylesheet" href="./styles.css?v=59">
   <script>
     try {
       if (/[?&](email|password)=/i.test(window.location.search) && window.history && window.history.replaceState) {
@@ -23,15 +23,14 @@
       }
     } catch (error) { /* The login form remains available when browser storage is disabled. */ }
   </script>
-  <script>window.MathJax = { tex: { inlineMath: [["\\(", "\\)"], ["$", "$"]], displayMath: [["\\[", "\\]"], ["$$", "$$"]] }, options: { skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"] } };</script>
+  <script>window.MathJax = { tex: { inlineMath: [["\\(", "\\)"], ["$", "$"]], displayMath: [["\\[", "\\]"], ["$$", "$$"]] }, options: { skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"] }, svg: { fontCache: "local" } };</script>
   <title>SharperTime workspace</title>
 </head>
 <body>
   <div class="session-checking" role="status" aria-live="polite">Restoring your SharperTime workspace…</div>
   <div id="authScreen" class="auth-screen">
     <a class="auth-brand" href="../" aria-label="SharperTime home">
-      <img src="../assets/brand/sharperx-logo.png" alt="SharperX — Sharper Solutions Brighter Futures">
-      <span><strong>SharperTime</strong><small>Mathematics workspace</small></span>
+      <img src="./icon.svg" alt="SharperTime logo">
     </a>
     <section class="auth-card" aria-labelledby="authTitle">
       <p class="eyebrow">Your learning space</p>
@@ -49,11 +48,13 @@
   <div id="workspace" class="workspace" hidden>
     <header class="topbar">
       <a class="brand" href="../" aria-label="SharperTime home">
-        <img src="../assets/brand/sharperx-logo.png" alt="">
-        <span><strong>SharperTime</strong><small>Learn by doing</small></span>
+        <img src="./icon.svg" alt="">
+        <span><small>Learn by doing</small></span>
       </a>
       <div class="topbar-tools">
         <label class="grade-quick">Grade <select id="globalGrade" aria-label="Current grade"><option>8</option><option>9</option><option>10</option><option>11</option><option selected>12</option></select></label>
+        <div id="aiCreditBalance" class="ai-credit-balance" role="status" aria-live="polite" aria-label="AI credit balance" title="Your SharperTime AI credit balance"><span class="ai-credit-icon" aria-hidden="true">✦</span><span class="ai-credit-label">AI credits</span><strong id="aiCreditsRemaining">Loading…</strong></div>
+        <span id="primarySessionStatus" class="primary-session-status" role="status" aria-live="polite" aria-label="Checking signed-in device">Checking device…</span>
         <span id="deviceTypeStatus" class="device-type-status">Phone remote available</span>
         <button id="deviceRemoteButton" class="button primary device-remote-launch" type="button" aria-haspopup="dialog" title="Show a QR code to connect your phone">▦ Connect phone · QR</button>
         <span id="deviceRemoteBadge" class="device-remote-badge" role="status" aria-live="polite" hidden>Phone connected</span>
@@ -74,6 +75,11 @@
       </nav>
 
       <main class="main-panel" id="mainPanel">
+        <div id="processingIndicator" class="processing-indicator" role="status" aria-live="polite" aria-atomic="true" hidden>
+          <span class="processing-indicator-spinner" aria-hidden="true"></span>
+          <span data-processing-message>Processing your request…</span>
+          <span class="processing-indicator-track" role="progressbar" aria-label="Request progress" aria-valuetext="In progress"><span></span></span>
+        </div>
         <section class="view is-visible" data-view-panel="ask" aria-labelledby="askTitle">
           <header class="view-heading">
             <div><p class="eyebrow">Ask</p><h1 id="askTitle">What would you like help with?</h1><p class="muted">Ask a question, upload a paper, or show your working. You stay in control of the attempt.</p></div>
@@ -81,7 +87,7 @@
           <div class="ask-layout">
             <div class="conversation-column">
               <div id="chatMessages" class="chat-messages" aria-live="polite">
-                <article class="message assistant-message welcome-message"><span class="message-kind">SharperTime</span><p>Type a maths question or instruction. You can also upload a question paper, attach a photo, record a voice note, or use the canvas.</p></article>
+                <article class="message assistant-message welcome-message"><span class="message-kind">SharperTime</span><p id="appWelcomeMessage">Type a maths question or instruction. You can also upload a question paper, attach a photo, record a voice note, or use the canvas.</p><div class="welcome-audio-controls"><button id="playWelcomeMessage" class="button subtle" type="button">🔊 Listen to welcome</button><span id="welcomeAudioStatus" role="status" aria-live="polite"></span></div></article>
               </div>
               <section id="paperTools" class="paper-tools" hidden aria-label="Uploaded question paper">
                 <div class="paper-tools-heading"><div><strong id="paperFileName">Question paper ready</strong><small id="paperStatus">Select a question number to preview its page.</small></div><button id="clearPaperButton" class="icon-button" type="button" aria-label="Clear paper from this session">×</button></div>
@@ -102,20 +108,26 @@
                   <button id="askLiveTutorButton" class="tool-button live-tutor-launch" data-live-start="ask" type="button" aria-label="Start a live audio tutoring session">◖<span>Talk to tutor</span></button>
                   <button class="tool-button" type="button" data-open-canvas="ask-write">✎ / ☝<span>Write</span></button>
                   <button class="tool-button" type="button" data-open-canvas="ask-graph">✎ / ☝<span>Draw graph</span></button>
+                  <button id="askKeyboardToggle" class="tool-button math-editor-keyboard-toggle" data-editor-target="ask" type="button" aria-expanded="false" aria-controls="practiceMathKeyboard" aria-label="Open maths keyboard">⌨<span>Math keyboard</span></button>
                 </div>
                 <section class="live-tutor-panel" data-live-panel="ask" aria-label="Live tutor audio controls" hidden>
                   <div class="live-tutor-session-copy"><strong>Live tutor</strong><span data-live-status role="status" aria-live="polite">Connecting status will appear here.</span></div>
+                  <label class="live-tutor-language-label">Tutor language<select data-live-language aria-label="Choose the language for tutor replies"></select></label>
                   <label class="live-tutor-voice-label">Voice on this device<select data-live-voice aria-label="Choose a voice installed on this device"></select></label>
                   <div class="live-tutor-actions">
                     <button class="button subtle" data-live-action="mute" type="button" aria-pressed="false">Mute microphone</button>
+                    <button class="button subtle" data-live-action="pause-speaking" type="button" disabled>Pause speaking</button>
+                    <button class="button subtle" data-live-action="resume-speaking" type="button" disabled>Resume speaking</button>
                     <button class="button subtle" data-live-action="stop-speaking" type="button">Stop speaking</button>
                     <button class="button subtle" data-live-action="repeat" type="button" disabled>Repeat tutor</button>
+                    <button class="button subtle" data-live-action="transcripts" type="button" aria-pressed="true">Show transcript: On</button>
                     <button class="button subtle" data-live-action="end" type="button">End session</button>
                   </div>
-                  <p class="live-tutor-note">Audio is sent to SharperTime for transcription. The live voice service does not store recordings. Captions stay in this conversation.</p>
+                  <p class="live-tutor-note">The microphone is active only during a recording you start with Voice. Press Voice again to send it; 10 seconds of silence stops the mic and discards the clip without sending it. The live voice service does not store recordings.</p>
                 </section>
-                <label class="composer-label" for="askInput">Your question or instruction</label>
-                <textarea id="askInput" rows="3" placeholder="Type a question or instruction. Add your working if you want it marked." maxlength="20000"></textarea>
+                <div class="composer-label">Your question or instruction</div>
+                <div class="math-editor-frame ask-math-editor-frame"><iframe id="askMathEditor" title="Question and maths editor" src="./math-editor.html?v=17"></iframe></div>
+                <div id="askMathKeyboardMount" class="math-keyboard-mount"></div>
                 <div class="composer-footer"><span id="voiceStatus" class="muted" role="status"></span><button id="sendAskButton" class="button primary send-button" type="submit">Send <span aria-hidden="true">➤</span></button></div>
                 <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
                 <input id="paperInput" type="file" accept=".pdf,application/pdf" hidden>
@@ -148,15 +160,19 @@
               <div class="hint-actions"><button id="practiceHintButton" class="button secondary" type="button">Show a hint</button><button id="practiceFormulaButton" class="button subtle" type="button">Show formulae</button><button id="practiceLiveTutorButton" class="button secondary live-tutor-launch" data-live-start="practice" type="button">Talk through this question</button></div>
               <section class="live-tutor-panel practice-live-tutor-panel" data-live-panel="practice" aria-label="Live tutor audio controls" hidden>
                 <div class="live-tutor-session-copy"><strong>Live tutor</strong><span data-live-status role="status" aria-live="polite">Connecting status will appear here.</span></div>
+                <label class="live-tutor-language-label">Tutor language<select data-live-language aria-label="Choose the language for tutor replies"></select></label>
                 <label class="live-tutor-voice-label">Voice on this device<select data-live-voice aria-label="Choose a voice installed on this device"></select></label>
                 <div class="live-tutor-actions">
                   <button class="button subtle" data-live-action="mute" type="button" aria-pressed="false">Mute microphone</button>
+                  <button class="button subtle" data-live-action="pause-speaking" type="button" disabled>Pause speaking</button>
+                  <button class="button subtle" data-live-action="resume-speaking" type="button" disabled>Resume speaking</button>
                   <button class="button subtle" data-live-action="stop-speaking" type="button">Stop speaking</button>
                   <button class="button subtle" data-live-action="repeat" type="button" disabled>Repeat tutor</button>
+                  <button class="button subtle" data-live-action="transcripts" type="button" aria-pressed="true">Show transcript: On</button>
                   <button class="button subtle" data-live-action="end" type="button">End session</button>
                 </div>
                 <div class="live-tutor-transcript" data-live-transcript aria-live="polite" aria-label="Live tutoring transcript"></div>
-                <p class="live-tutor-note">Audio is sent to SharperTime for transcription. The live voice service does not store recordings. Speaking an answer never submits it for marking.</p>
+                <p class="live-tutor-note">The microphone is active only during a recording you start with Voice. Press Voice again to send it; 10 seconds of silence stops the mic and discards the clip without sending it. Speaking never submits your work for marking.</p>
               </section>
               <div id="practiceHints" class="hint-content" hidden></div>
               <section class="practice-response" aria-label="Your working and answer">
@@ -166,15 +182,11 @@
                   <button id="practiceCanvasButton" class="tool-button" type="button" aria-label="Write your working by hand">✎<span>Write / draw</span></button>
                   <button id="practiceGraphCanvasButton" class="tool-button" type="button" aria-label="Draw a graph for this answer">⌁<span>Draw graph</span></button>
                   <button id="practiceHandwritingButton" class="tool-button" type="button" aria-label="Upload a photo of handwritten working">📷<span>Upload work</span></button>
-                  <button id="practiceKeyboardToggle" class="tool-button" type="button" aria-expanded="false" aria-controls="practiceMathKeyboard">⌨<span>Math keyboard</span></button>
+                  <button id="practiceKeyboardToggle" class="tool-button math-editor-keyboard-toggle" data-editor-target="practice" type="button" aria-expanded="false" aria-controls="practiceMathKeyboard">⌨<span>Math keyboard</span></button>
                 </div>
                 <div id="practiceVoiceStatus" class="status" role="status" aria-live="polite"></div>
-                <div id="practiceVoiceReview" class="voice-review" hidden>
-                  <label>Editable transcript<textarea id="practiceVoiceTranscript" rows="2" placeholder="Review the words recognized from your voice note."></textarea></label>
-                  <label>Mathematical form<textarea id="practiceVoiceMath" rows="2" placeholder="Use Format as math to prepare textbook notation."></textarea></label>
-                  <div class="voice-review-actions"><button id="practiceFormatVoiceMath" class="button subtle" type="button">Format as math</button><button id="practiceUseVoiceTranscript" class="button secondary" type="button">Use transcript</button><button id="practiceUseVoiceMath" class="button secondary" type="button">Use math</button><button id="practiceDismissVoice" class="button subtle" type="button">Dismiss</button></div>
-                </div>
                 <div id="practiceMathKeyboard" class="math-keyboard" hidden>
+                  <div class="math-keyboard-preview" aria-live="polite"><span>Live textbook preview</span><div id="mathKeyboardPreview" class="math-keyboard-preview-content"></div></div>
                   <div class="math-keyboard-tabs" role="tablist" aria-label="Math keyboard sections">
                     <button type="button" role="tab" aria-selected="true" data-keyboard-mode="Alphabet">ABC</button>
                     <button type="button" role="tab" aria-selected="false" data-keyboard-mode="Basic">Alg</button>
@@ -183,10 +195,22 @@
                     <button type="button" role="tab" aria-selected="false" data-keyboard-mode="Greek">Greek</button>
                     <button type="button" role="tab" aria-selected="false" data-keyboard-mode="Shorthand">Notation</button>
                   </div>
-                  <div id="practiceMathKeys" class="math-key-grid" role="group" aria-label="Math keyboard keys"></div>
-                  <div class="math-keyboard-actions"><button type="button" data-editor-action="undo" aria-label="Undo">↶</button><button type="button" data-editor-action="moveLeft" aria-label="Move cursor left">←</button><button type="button" data-editor-action="moveRight" aria-label="Move cursor right">→</button><button type="button" data-editor-action="backspace" aria-label="Delete before cursor">⌫</button><button type="button" class="math-key-enter" data-editor-action="newLine" aria-label="Enter new line">↵ <span>Enter</span></button></div>
+                  <div class="math-keyboard-body">
+                    <div id="mathKeyboardKeys" class="math-key-grid" role="group" aria-label="Math keyboard keys"></div>
+                    <div id="mathKeyboardNumericKeys" class="math-numeric-grid" role="group" aria-label="Number and operator keys"></div>
+                  </div>
+                  <div class="math-keyboard-actions" aria-label="Editor actions">
+                    <button type="button" data-editor-action="undo" aria-label="Undo">↶</button><button type="button" data-editor-action="redo" aria-label="Redo">↷</button>
+                    <button type="button" data-editor-action="moveHome" aria-label="Move cursor to line start">⇤</button><button type="button" data-editor-action="moveUp" aria-label="Move cursor up">↑</button>
+                    <button type="button" data-editor-action="moveLeft" aria-label="Move cursor left">←</button><button type="button" data-editor-action="moveRight" aria-label="Move cursor right">→</button>
+                    <button type="button" data-editor-action="moveDown" aria-label="Move cursor down">↓</button><button type="button" data-editor-action="moveEnd" aria-label="Move cursor to line end">⇥</button>
+                    <button type="button" data-editor-action="delete" aria-label="Delete after cursor">⌦</button><button type="button" data-editor-action="backspace" aria-label="Delete before cursor">⌫</button>
+                    <button type="button" data-editor-action="selectAll" aria-label="Select all maths">All</button><button type="button" data-editor-action="copy" aria-label="Copy maths">Copy</button><button type="button" data-editor-action="paste" aria-label="Paste maths">Paste</button><button type="button" data-editor-action="clear" aria-label="Clear maths">AC</button>
+                  </div>
+                  <div class="math-keyboard-footer"><button type="button" class="math-key-space" data-editor-insert="space">Space</button><button type="button" class="math-key-enter" data-editor-action="newLine">↵ <span>Enter</span></button><button type="button" class="math-key-hide" data-keyboard-hide>Hide</button></div>
                 </div>
-                <div class="math-editor-frame"><iframe id="practiceMathEditor" title="Structured textbook maths editor" src="./math-editor.html?v=15"></iframe></div>
+                <div class="math-editor-frame"><iframe id="practiceMathEditor" title="Structured textbook maths editor" src="./math-editor.html?v=17"></iframe></div>
+                <div id="practiceMathKeyboardMount" class="math-keyboard-mount"></div>
                 <div id="practiceAnswerAttachments" class="practice-answer-attachments" aria-live="polite"></div>
                 <input id="practiceHandwritingInput" type="file" accept="image/*" capture="environment" hidden>
               </section>
@@ -206,10 +230,29 @@
             <button id="startExamSession" class="button primary" type="button" hidden>Start assessment</button>
           </div>
           <article id="examWorkspace" class="question-card exam-workspace" hidden>
-            <div class="question-card-top"><span id="examProgress" class="eyebrow"></span><div class="question-top-actions"><button id="examFullScreen" class="button subtle" type="button" hidden>View full screen</button><button id="examCanvasButton" class="button subtle" type="button">Open canvas</button></div></div>
+            <div class="question-card-top"><span id="examProgress" class="eyebrow"></span><div class="question-top-actions"><button id="examFullScreen" class="button subtle" type="button" hidden>View full screen</button><button id="examCanvasButton" class="button subtle" type="button">Open canvas</button><button id="examGraphCanvasButton" class="button subtle" type="button">Draw graph</button></div></div>
             <h2 id="examQuestionTitle">Question</h2><div id="examQuestionText" class="math-content"></div><div id="examQuestionVisuals" class="question-visuals"></div>
             <div class="exam-guidance"><button id="examGuidanceButton" class="button secondary" type="button">Ask for a hint</button><div id="examGuidanceText" class="hint-content" hidden></div></div>
-            <label class="answer-label">Your working<textarea id="examAnswer" rows="8" placeholder="Enter your working for this question."></textarea></label>
+            <div class="answer-label"><span>Your working</span><div class="math-editor-frame exam-math-editor-frame"><iframe id="examAnswer" title="Test and exam working editor" src="./math-editor.html?v=17"></iframe></div></div>
+            <div class="exam-answer-tools"><button id="examVoiceButton" class="tool-button" type="button" aria-label="Record a voice note for this answer">🎙<span>Voice</span></button><button id="examLiveTutorButton" class="button secondary live-tutor-launch" data-live-start="exam" type="button">Talk through this question</button><button id="examKeyboardToggle" class="tool-button math-editor-keyboard-toggle" data-editor-target="exam" type="button" aria-expanded="false" aria-controls="practiceMathKeyboard" aria-label="Open maths keyboard">⌨<span>Math keyboard</span></button></div>
+            <div id="examVoiceStatus" class="status" role="status" aria-live="polite"></div>
+            <section class="live-tutor-panel practice-live-tutor-panel" data-live-panel="exam" aria-label="Live tutor audio controls" hidden>
+              <div class="live-tutor-session-copy"><strong>Live tutor</strong><span data-live-status role="status" aria-live="polite">Connecting status will appear here.</span></div>
+              <label class="live-tutor-language-label">Tutor language<select data-live-language aria-label="Choose the language for tutor replies"></select></label>
+              <label class="live-tutor-voice-label">Voice on this device<select data-live-voice aria-label="Choose a voice installed on this device"></select></label>
+              <div class="live-tutor-actions">
+                <button class="button subtle" data-live-action="mute" type="button" aria-pressed="false">Mute microphone</button>
+                <button class="button subtle" data-live-action="pause-speaking" type="button" disabled>Pause speaking</button>
+                <button class="button subtle" data-live-action="resume-speaking" type="button" disabled>Resume speaking</button>
+                <button class="button subtle" data-live-action="stop-speaking" type="button">Stop speaking</button>
+                <button class="button subtle" data-live-action="repeat" type="button" disabled>Repeat tutor</button>
+                <button class="button subtle" data-live-action="transcripts" type="button" aria-pressed="true">Show transcript: On</button>
+                <button class="button subtle" data-live-action="end" type="button">End session</button>
+              </div>
+              <div class="live-tutor-transcript" data-live-transcript aria-live="polite" aria-label="Live tutoring transcript"></div>
+              <p class="live-tutor-note">The microphone is active only during a recording you start with Voice. Press Voice again to send it; 10 seconds of silence stops the mic and discards the clip without sending it. Speaking does not submit your assessment answer.</p>
+            </section>
+            <div id="examMathKeyboardMount" class="math-keyboard-mount"></div>
             <div class="answer-actions"><button id="saveExamAnswer" class="button secondary" type="button">Save answer</button><button id="previousExamQuestion" class="button subtle" type="button">Previous</button><button id="nextExamQuestion" class="button subtle" type="button">Next</button><button id="submitExam" class="button primary" type="button">Submit assessment</button></div>
           </article>
           <div id="examResult" class="feedback-card" hidden></div>
@@ -232,6 +275,33 @@
     </nav>
   </div>
 
+  <dialog id="voiceReviewDialog" class="voice-review-dialog" aria-labelledby="voiceReviewTitle">
+    <div class="dialog-toolbar"><strong id="voiceReviewTitle">Review your voice note</strong><button id="voiceReviewClose" class="button subtle" type="button">Close</button></div>
+    <section class="voice-review" aria-label="Correct and format your transcription">
+      <p class="muted voice-review-guidance">Check the recognized words, then format any spoken maths. Review the textbook form before using it.</p>
+      <label for="voiceReviewTranscript">Editable transcript<textarea id="voiceReviewTranscript" rows="3" placeholder="Your recognized words will appear here."></textarea></label>
+      <div class="voice-math-field"><span>Mathematical form</span><div class="math-editor-frame voice-math-editor-frame"><iframe id="voiceReviewMath" title="Voice maths editor" src="./math-editor.html?v=17"></iframe></div></div>
+      <button id="voiceReviewMathKeyboardToggle" class="tool-button voice-math-keyboard-toggle math-editor-keyboard-toggle" data-editor-target="voiceMath" type="button" aria-expanded="false" aria-controls="practiceMathKeyboard" aria-label="Open maths keyboard for the mathematical form">⌨<span>Math keyboard</span></button>
+      <div id="voiceReviewMathKeyboardMount" class="math-keyboard-mount"></div>
+      <div class="voice-review-actions"><span id="voiceReviewStatus" class="status" role="status" aria-live="polite"></span><button id="voiceReviewFormatMath" class="button subtle" type="button">Format as math</button><button id="voiceReviewUseTranscript" class="button secondary" type="button">Use transcript</button><button id="voiceReviewUseMath" class="button secondary" type="button">Use math</button><button id="voiceReviewSend" class="button primary" type="button" hidden>Send to tutor</button></div>
+    </section>
+  </dialog>
+
+  <dialog id="paperCatalogDialog" class="paper-catalog-dialog" aria-labelledby="paperCatalogTitle">
+    <div class="dialog-toolbar paper-catalog-toolbar"><div><p class="eyebrow">Past papers and memos</p><strong id="paperCatalogTitle">Paper links</strong></div><button id="paperCatalogClose" class="button subtle" type="button">Close</button></div>
+    <section class="paper-catalog-content">
+      <p class="muted">Choose a filename to search the web for a downloadable copy. SharperTime does not host these papers. After downloading, upload the PDF here and choose the question you want help with.</p>
+      <label class="paper-catalog-search-label" for="paperCatalogSearch">Find a paper or memo</label>
+      <div class="paper-catalog-controls">
+        <input id="paperCatalogSearch" type="search" autocomplete="off" placeholder="Search filenames">
+        <button id="paperCatalogSort" class="button subtle" type="button" aria-pressed="true" title="Switch to oldest-first order">Newest first</button>
+      </div>
+      <p id="paperCatalogCount" class="paper-catalog-count" role="status" aria-live="polite"></p>
+      <div id="paperCatalogItems" class="paper-catalog-items"></div>
+      <p id="paperCatalogEmpty" class="paper-catalog-empty" hidden>No matching filenames. Try a year, paper number, or “memo”.</p>
+    </section>
+  </dialog>
+
   <dialog id="imageDialog" class="image-dialog" aria-label="Question diagram or paper page">
     <div class="dialog-toolbar"><button class="button secondary" type="button" data-close-dialog>Close</button><strong id="imageDialogTitle">Question image</strong><button id="imageFitButton" class="button subtle" type="button">Fit</button></div>
     <div id="imageViewport" class="image-viewport"><img id="fullImage" alt="Question image"></div>
@@ -239,18 +309,58 @@
   </dialog>
 
   <dialog id="canvasDialog" class="canvas-dialog" aria-label="Writing canvas">
-    <div class="dialog-toolbar canvas-toolbar"><strong id="canvasTitle">Canvas</strong><div class="canvas-actions"><button id="undoCanvas" class="button subtle" type="button">Undo</button><button id="clearCanvas" class="button subtle" type="button">Clear</button><button id="canvasEraserButton" class="button subtle" type="button" aria-pressed="false" aria-label="Enable eraser">Eraser</button><button id="canvasReadMathButton" class="button subtle" type="button" aria-label="Recognize maths in this canvas">Read maths</button><button id="toggleQuestionSidebar" class="button subtle" type="button" hidden>Show Q</button><button id="canvasPanButton" class="button subtle phone-pan-control" type="button" aria-pressed="false" aria-label="Enable pan mode"><span class="pan-hand-badge" aria-hidden="true"><svg class="pan-hand-icon" viewBox="0 0 24 24"><path d="M23.5 12.5c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V6c0-.83-.67-1.5-1.5-1.5S17.5 5.17 17.5 6v6c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V4c0-.83-.67-1.5-1.5-1.5S11.5 3.17 11.5 4v8c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V8c0-.83-.67-1.5-1.5-1.5S5.5 7.17 5.5 8v9l-2.27-2.28c-.29-.29-.68-.44-1.06-.44s-.77.15-1.06.44c-.59.59-.59 1.54 0 2.12L6.5 23.5c.94.94 2.22 1.5 3.54 1.5H19c1.66 0 3-1.34 3-3v-9.5z"/></svg></span><span id="canvasPanLabel">Pan</span></button><button id="canvasZoomButton" class="button subtle" type="button" aria-pressed="false" aria-label="Enable zoom">Zoom off</button><button id="canvasFitButton" class="button subtle" type="button">Fit</button><button id="usePhoneCanvas" class="button secondary" type="button" aria-expanded="false" aria-controls="phoneCanvasPairPanel">Use phone</button><button class="button subtle" type="button" data-close-dialog>Cancel</button><button id="finishCanvas" class="button primary" type="button">Use canvas</button></div></div>
+    <div class="dialog-toolbar canvas-toolbar"><strong id="canvasTitle">Canvas</strong><div class="canvas-actions"><button id="undoCanvas" class="button subtle" type="button">Undo</button><button id="clearCanvas" class="button subtle" type="button">Clear</button><button id="canvasEraserButton" class="button subtle" type="button" aria-pressed="false" aria-label="Enable eraser">Eraser</button><button id="canvasRegionWordsButton" class="button subtle canvas-region-tool" type="button" data-canvas-region-kind="words" hidden>Words</button><button id="canvasRegionMathButton" class="button subtle canvas-region-tool" type="button" data-canvas-region-kind="maths" hidden>Maths</button><button id="canvasRegionDrawingButton" class="button subtle canvas-region-tool" type="button" data-canvas-region-kind="drawings" hidden>Drawings</button><button id="canvasBackWritingButton" class="button subtle" type="button" hidden>Back to writing</button><button id="canvasReadWritingButton" class="button subtle" type="button">Next</button><button id="toggleQuestionSidebar" class="button subtle" type="button" hidden>Show Q</button><button id="canvasPanButton" class="button subtle phone-pan-control" type="button" aria-pressed="false" aria-label="Enable pan mode"><span class="pan-hand-badge" aria-hidden="true"><svg class="pan-hand-icon" viewBox="0 0 24 24"><path d="M23.5 12.5c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V6c0-.83-.67-1.5-1.5-1.5S17.5 5.17 17.5 6v6c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V4c0-.83-.67-1.5-1.5-1.5S11.5 3.17 11.5 4v8c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V8c0-.83-.67-1.5-1.5-1.5S5.5 7.17 5.5 8v9l-2.27-2.28c-.29-.29-.68-.44-1.06-.44s-.77.15-1.06.44c-.59.59-.59 1.54 0 2.12L6.5 23.5c.94.94 2.22 1.5 3.54 1.5H19c1.66 0 3-1.34 3-3v-9.5z"/></svg></span><span id="canvasPanLabel">Pan</span></button><button id="canvasZoomButton" class="button subtle" type="button" aria-pressed="false" aria-label="Enable zoom">Zoom off</button><button id="canvasFitButton" class="button subtle" type="button">Fit</button><button id="usePhoneCanvas" class="button secondary" type="button" aria-expanded="false" aria-controls="phoneCanvasPairPanel">Use phone</button><button class="button subtle" type="button" data-close-dialog>Cancel</button><button id="finishCanvas" class="button primary" type="button">Review and use</button></div></div>
     <section id="phoneCanvasPairPanel" class="phone-canvas-pair-panel" aria-label="Connect a phone for drawing" hidden>
       <div id="phoneCanvasPairQr" class="phone-canvas-pair-qr" aria-label="Phone connection QR code"></div>
-      <div class="phone-canvas-pair-details"><strong>Draw on your phone</strong><p>Scan this code or open the canvas page and enter the code. Local sessions need both devices on the same Wi-Fi.</p><div class="phone-canvas-code">Pairing code <strong id="phoneCanvasPairCode">------</strong></div><a id="phoneCanvasRemoteLink" href="./canvas-remote.html" target="_blank" rel="noopener">Open the phone canvas page</a><div id="phoneCanvasPairStatus" class="status" role="status" aria-live="polite">Waiting for your phone…</div><button id="stopPhoneCanvas" class="button subtle" type="button">Disconnect phone</button></div>
+      <div class="phone-canvas-pair-details"><strong>Draw on your phone</strong><p>Scan the QR code to open the companion with the code and address filled in. If you enter the code manually, enter the computer address shown here too.</p><div class="phone-canvas-code">Pairing code <strong id="phoneCanvasPairCode">------</strong></div><div id="phoneCanvasPairServerRow" class="phone-canvas-server-address" hidden>Computer address <code id="phoneCanvasPairServerAddress"></code><button id="copyPhoneCanvasPairServer" class="button subtle" type="button">Copy</button></div><a id="phoneCanvasRemoteLink" href="./canvas-remote.html" target="_blank" rel="noopener">Open the phone canvas page</a><a href="./canvas-install.html">Download the Android canvas app</a><div id="phoneCanvasPairStatus" class="status" role="status" aria-live="polite">Waiting for your phone…</div><button id="stopPhoneCanvas" class="button subtle" type="button">Disconnect phone</button></div>
     </section>
-    <section id="canvasTranscriptionPanel" class="canvas-transcription-panel" aria-label="Review recognized maths" hidden>
-      <label for="canvasTranscriptionText">Review and edit the recognized maths</label>
-      <textarea id="canvasTranscriptionText" rows="2" placeholder="Recognized maths will appear here."></textarea>
-      <div class="canvas-transcription-footer"><span id="canvasTranscriptionStatus" class="status" role="status" aria-live="polite"></span><div><button id="canvasTranscriptionUse" class="button primary" type="button">Use text</button><button id="canvasTranscriptionClose" class="button subtle" type="button">Close</button></div></div>
-    </section>
-    <div class="canvas-layout"><div class="drawing-surface"><canvas id="workingCanvas" aria-label="Write or draw your answer"></canvas></div><aside id="canvasQuestionSidebar" class="canvas-question-sidebar" hidden><button id="closeCanvasQuestion" class="icon-button" type="button" aria-label="Hide question">×</button><h2>Question</h2><div id="canvasQuestionText" class="math-content"></div><img id="canvasQuestionImage" alt="Question page" hidden></aside></div>
-    <p class="image-help">Write or draw with a finger, stylus, mouse, or trackpad. Use Pan to move; turn Zoom on before pinching or scrolling to zoom.</p>
+    <section id="canvasReadingReview" class="canvas-transcription-panel canvas-reading-review" aria-label="Review recognized writing and drawing" hidden>
+        <div class="canvas-transcription-label">Review the reading before you send it</div>
+        <p class="muted">Check and correct the recognized words, maths, and drawing description. This step reads your work as written; it does not solve the question. Add a comment if you need to explain anything.</p>
+        <div id="canvasReviewProgress" class="canvas-review-progress" role="progressbar" aria-label="Processing canvas" aria-valuemin="0" aria-valuemax="100" hidden><span></span></div>
+        <div id="canvasReadingStatus" class="status" role="status" aria-live="polite"></div>
+        <div id="canvasRegionSnapshots" class="canvas-region-snapshots" aria-label="Selected image areas" hidden>
+          <strong>Selected image areas</strong>
+          <div class="canvas-region-snapshot-list"></div>
+          <span class="muted">These snapshots are the images that will be read.</span>
+        </div>
+        <div id="canvasReadingResults" hidden>
+          <label for="canvasReadingWords">Recognized words</label>
+          <textarea id="canvasReadingWords" rows="5" spellcheck="false" placeholder="Recognized words appear here"></textarea>
+          <div id="canvasReadingAlternatives" class="canvas-reading-alternatives" aria-label="Alternative handwriting readings" hidden></div>
+          <section id="canvasTranscriptionPanel" class="canvas-math-review" aria-label="Review recognized maths" hidden><div class="canvas-transcription-label">Recognized maths</div><div class="math-editor-frame canvas-math-editor-frame"><iframe id="canvasTranscriptionText" title="Recognized maths editor" src="./math-editor.html?v=17"></iframe></div><div id="canvasMathKeyboardMount" class="math-keyboard-mount"></div><div id="canvasTranscriptionStatus" class="status" role="status" aria-live="polite"></div></section>
+          <label for="canvasReadingDrawing">Graph, shape, or diagram description</label>
+          <textarea id="canvasReadingDrawing" rows="3" spellcheck="false" placeholder="Visible features and labels appear here"></textarea>
+          <div id="canvasGraphReviewFields" hidden>
+            <label for="canvasGraphType">Graph type (confirm or correct)</label>
+            <div class="canvas-graph-entry-row"><input id="canvasGraphType" type="text" autocomplete="off" placeholder="For example: parabola, straight line, or unclear"><div id="canvasGraphTypeAction" class="canvas-graph-inline-action"></div></div>
+            <label id="canvasGraphEquationLabel" for="canvasGraphDetails">Equation (optional)</label>
+            <textarea id="canvasGraphDetails" rows="2" placeholder="Enter an equation only if it is given or already known"></textarea>
+          </div>
+          <section id="canvasGraphGuidedPanel" class="canvas-graph-guided-panel" aria-live="polite" hidden>
+            <h3 id="canvasGraphFunctionHeading">Function 1</h3>
+            <p id="canvasGraphGuidedStatus" class="muted">Confirm the function type, then enter the exact key details you know.</p>
+            <div id="canvasGraphPointHistory" class="canvas-graph-point-history" aria-label="Confirmed graph details"></div>
+            <p id="canvasGraphPointPrompt" class="canvas-graph-point-prompt"></p>
+            <label id="canvasGraphPointInputLabel" for="canvasGraphPointInput">Key point or value</label>
+            <div class="canvas-graph-entry-row"><input id="canvasGraphPointInput" type="text" autocomplete="off" placeholder="For example (2, -4)"><div id="canvasGraphPointAction" class="canvas-graph-inline-action"></div></div>
+          </section>
+          <section id="canvasGraphPreviewPanel" class="canvas-graph-preview-panel" aria-label="Reconstructed graph preview" hidden>
+            <h3>Reconstructed graph preview</h3>
+            <div id="canvasGraphPreview" class="canvas-graph-preview"></div>
+            <p id="canvasGraphPreviewStatus" class="muted" role="status" aria-live="polite"></p>
+            <div id="canvasGraphPreviewAction" class="canvas-graph-inline-action"></div>
+          </section>
+          <label for="canvasReadingComment">Your correction or comment (optional)</label>
+          <textarea id="canvasReadingComment" rows="2" placeholder="Correct a label or explain what you intended"></textarea>
+          <div class="canvas-transcription-footer"><div id="canvasReadingConfirmHome"><button id="canvasReadingConfirm" class="button primary" type="button">Confirm and use</button></div><div><button id="canvasReadingImageOnly" class="button secondary" type="button">Use image as drawn</button></div></div>
+        </div>
+        <button id="canvasReadingClose" class="button subtle" type="button">Back to canvas</button>
+      </section>
+
+    <section id="canvasGraphCountPanel" class="canvas-graph-count-panel" aria-label="Set up graph" hidden><label for="canvasGraphFunctionCount">How many functions should be on this graph?</label><p class="muted">Enter a whole number greater than 0 to continue to the phone canvas.</p><div class="canvas-graph-count-controls"><input id="canvasGraphFunctionCount" type="number" min="1" step="1" inputmode="numeric" aria-describedby="canvasGraphCountStatus" placeholder="Enter a whole number"><button id="canvasGraphStartButton" class="button primary" type="button">Start graph sketch</button></div><div id="canvasGraphCountStatus" class="status" role="status" aria-live="polite"></div></section>
+    <div class="canvas-layout"><div class="drawing-surface"><canvas id="workingCanvas" aria-label="Write or draw your answer"></canvas><canvas id="canvasRegionOverlay" aria-hidden="true"></canvas><div id="canvasPhoneOnlyNotice" class="canvas-phone-only-notice" role="status" hidden><strong>Use your phone to write or draw</strong><p>This device does not have a touch screen. Pair your phone to use the canvas.</p><button id="canvasPhoneOnlyConnect" class="button primary" type="button">Pair phone to draw</button></div></div><aside id="canvasQuestionSidebar" class="canvas-question-sidebar" hidden><button id="closeCanvasQuestion" class="icon-button" type="button" aria-label="Hide question">×</button><h2>Question</h2><div id="canvasQuestionText" class="math-content"></div><img id="canvasQuestionImage" alt="Question page" hidden></aside></div>
+    <p id="canvasHelpText" class="image-help">Write or draw with a finger or stylus on a touch screen. On other devices, pair your phone. Use Pan to move; turn Zoom on before pinching or scrolling to zoom.</p>
   </dialog>
 
   <dialog id="deviceRemoteDialog" class="device-remote-dialog" aria-labelledby="deviceRemoteTitle">
@@ -278,9 +388,9 @@
       var appScript = document.createElement("script");
       if (supportsModules && supportsModernSyntax) {
         appScript.type = "module";
-        appScript.src = "./app.bundle.js?v=1";
+        appScript.src = "./app.bundle.js?v=61";
       } else {
-        appScript.src = "./legacy-app.js?v=9";
+        appScript.src = "./legacy-app.js?v=67";
       }
       appScript.onload = function () {
         loginButton.disabled = false;

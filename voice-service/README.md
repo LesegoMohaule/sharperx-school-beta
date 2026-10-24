@@ -1,8 +1,28 @@
 # SharperTime live tutoring voice service
 
-This small FastAPI service runs beside SharperTime's existing API on the Ubuntu server. It uses Pipecat's SmallWebRTC transport and VAD, sends short in-memory audio segments to SharperTime's authenticated transcription endpoint, and sends recognized turns to the existing tutor endpoint. It does not add a second LLM, STT provider, or API key.
+This FastAPI service runs beside SharperTime's existing API on the Ubuntu server. It keeps Pipecat's SmallWebRTC transport and VAD, sends short in-memory audio segments to language-selected speech recognition, and sends recognized turns to the existing tutor endpoint. English and additional languages supplied by the device continue to use SharperTime's existing transcription endpoint. The nine South African languages listed below use local, open-source recognition models.
 
-The browser reads tutor replies with the voice installed on the learner's phone or computer. Pipecat sends reply text and captions over its WebRTC data channel; browser SpeechSynthesis speaks the math-normalized text. The current tutor API returns a completed turn, so the learner hears each reply after that response completes. It is a live, turn-based conversation, not token-by-token streamed speech.
+The web app keeps its current device voice selector and adds a tutor-language selector. The language selector contains the existing device voice languages plus the nine local-model languages. Tutor instructions request ordinary explanations in the selected language while keeping mathematical terms, number words inside equations, operators, and spoken equations in English. The browser uses an installed device voice matching the selected language when one is available.
+
+The browser reads tutor replies with the voice installed on the learner's phone or computer. Pipecat sends reply text and captions over its WebRTC data channel; browser SpeechSynthesis speaks the math-normalized text. The voice service combines consecutive VAD transcript segments and waits for 0.9 seconds without another segment before sending the learner's turn to the tutor, so short thinking pauses do not trigger an early reply. The tutor API returns a completed turn, so the learner hears each reply after that response completes. It is a live, turn-based conversation, not token-by-token streamed speech.
+
+## South African language speech recognition
+
+The local routes are selected by the requested locale:
+
+- Afrikaans uses `digiphyte/fluister-turbo` (MIT), an int8 faster-whisper model.
+- isiZulu, isiXhosa, Sesotho, Setswana, isiNdebele, Tshivenda, and XiTsonga use `digiphyte/swivuriso-turbo` (MIT), an int8 CTranslate2 conversion of DSFSI's MIT `za-anv-multilingual-whisper-v3-turbo` weights. The model uses language auto-detection for this seven-language set.
+- Sepedi uses Meta's `omniASR_CTC_300M` in the int8 Sherpa-ONNX export (Apache-2.0). The CTC model does not take a language hint.
+
+The two Whisper checkpoints are pinned to repository revisions in `local_asr.py`. The Sepedi model is downloaded into `/opt/sharpertime-voice/models/omnilingual-300m-ctc-int8`. The service loads one local recognizer at a time to limit RAM use; its model cache persists on disk. Install dependencies and model files before restarting the service:
+
+```bash
+sudo /opt/sharpertime-voice/.venv/bin/pip install -r /path/to/sharperx-school-beta/voice-service/requirements.txt
+sudo /path/to/sharperx-school-beta/voice-service/download-asr-models.sh
+sudo systemctl restart sharpertime-voice.service
+```
+
+The selected routes cover nine South African official languages beyond English. The selector only offers languages covered by these routes or by an installed device voice.
 
 Raw audio and full transcripts are not written to disk or logged by this service. A learner's bearer token is validated before a short-lived, single-use WebRTC session token is issued. The verified learner bearer remains in memory only for the active session and is used when forwarding transcription and tutor requests.
 
@@ -41,7 +61,7 @@ location /voice/ {
 }
 ```
 
-Confirm `https://api.46.225.173.118.nip.io/voice/healthz` returns `{"status":"ok"}`. CORS allows only the configured SharperTime app origins. If the API hostname changes, set `window.SHARPERTIME_VOICE_BASE_URL` before the app bundle loads, for example to `https://voice.sharperx.co.za`.
+Confirm `https://api.46.225.173.118.nip.io/voice/healthz` returns `{"status":"ok"}`. CORS allows only the configured SharperTime app origins. Clients that explicitly use this optional service can set `window.SHARPERTIME_VOICE_BASE_URL` before their app bundle loads, for example to `https://voice.sharperx.co.za`.
 
 ## WebRTC and TURN
 

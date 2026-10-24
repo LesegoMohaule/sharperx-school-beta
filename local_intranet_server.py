@@ -3,7 +3,9 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import ipaddress
 import secrets
+import socket
 import time
 from collections import defaultdict, deque
 from dataclasses import dataclass, field
@@ -18,7 +20,7 @@ from starlette.websockets import WebSocketState
 
 
 ROOT = Path(__file__).resolve().parent
-PAIR_CODE_TTL_SECONDS = 5 * 60
+PAIR_CODE_TTL_SECONDS = 15 * 60
 ACTIVE_SESSION_TTL_SECONDS = 2 * 60 * 60
 JOIN_RATE_WINDOW_SECONDS = 10 * 60
 JOIN_RATE_LIMIT = 30
@@ -94,6 +96,23 @@ async def app_home() -> RedirectResponse:
     return RedirectResponse(url="/app/", status_code=307)
 
 
+@app.get("/api/local-network-info")
+async def local_network_info() -> dict:
+    """Return private IPv4 addresses that another device can use to reach this server."""
+    addresses: set[str] = set()
+    try:
+        for result in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            address = result[4][0]
+            parsed = ipaddress.ip_address(address)
+            if parsed.is_loopback:
+                continue
+            if any(parsed in ipaddress.ip_network(network) for network in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16")):
+                addresses.add(address)
+    except OSError:
+        pass
+    return {"ipv4_addresses": sorted(addresses)}
+
+
 @app.post("/api/{kind}/sessions")
 async def create_session(kind: str) -> dict:
     if kind not in PAIRING_KINDS:
@@ -166,12 +185,19 @@ async def join_session(kind: str, request: Request) -> dict:
         }
 
 
+@app.post("/api/canvas-pairing/companion-join")
+async def join_canvas_companion(request: Request) -> dict:
+    """Issue a canvas-only phone token for a short-lived local pairing code."""
+    return await join_session("canvas-pairing", request)
+
+
 @app.websocket("/api/{kind}/ws/{session_id}")
 async def pairing_socket(websocket: WebSocket, kind: str, session_id: str) -> None:
     role = websocket.query_params.get("role", "")
     origin = websocket.headers.get("origin", "")
     host = websocket.headers.get("host", "")
-    if kind not in PAIRING_KINDS or role not in {"host", "phone"} or not origin_matches_request_host(origin, host):
+    origin_allowed = origin_matches_request_host(origin, host) if origin else role == "phone"
+    if kind not in PAIRING_KINDS or role not in {"host", "phone"} or not origin_allowed:
         await websocket.close(code=1008, reason="Connection is not allowed")
         return
 
@@ -277,7 +303,12 @@ async def pairing_socket(websocket: WebSocket, kind: str, session_id: str) -> No
         if notify_peer and not session_removed:
             await send_message(session, peer, {"type": "host_disconnected" if role == "host" else "phone_disconnected"})
         if websocket.client_state == WebSocketState.CONNECTED:
-            await websocket.close()
+            try:
+                await websocket.close()
+            except RuntimeError:
+                # A close frame may already have been sent by an expiry or
+                # cancellation branch above.
+                pass
 
 
 app.mount("/app", StaticFiles(directory=ROOT / "app", html=True), name="sharpertime-app")

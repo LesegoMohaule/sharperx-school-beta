@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 import httpx
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -30,6 +30,7 @@ from pipecat.pipeline.pipeline import Pipeline
 from pipecat.pipeline.worker import PipelineParams, PipelineWorker
 from pipecat.processors.frame_processor import FrameDirection, FrameProcessor
 from pipecat.processors.frameworks.rtvi import RTVIServerMessageFrame
+from pipecat.services.settings import STTSettings
 from pipecat.services.stt_service import SegmentedSTTService
 from pipecat.transports.base_transport import TransportParams
 from pipecat.transports.smallwebrtc.connection import IceServer
@@ -42,6 +43,8 @@ from pipecat.transports.smallwebrtc.request_handler import (
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 from pipecat.workers.runner import WorkerRunner
 
+from local_asr import supports_language, transcribe_local_audio
+
 
 API_BASE_URL = os.getenv("SHARPERTIME_API_BASE_URL", "https://api.46.225.173.118.nip.io").rstrip("/")
 SESSION_TTL_SECONDS = 180
@@ -49,7 +52,21 @@ MAX_TURNS_PER_SESSION = 40
 MAX_SESSION_STARTS_PER_USER_PER_HOUR = 12
 MAX_TURN_TEXT = 1600
 MAX_HISTORY_TURNS = 8
+MAX_ASR_AUDIO_BYTES = 20 * 1024 * 1024
+TURN_END_DEBOUNCE_SECONDS = 0.9
 TURN_CREDENTIAL_TTL_SECONDS = 3 * 60 * 60
+TUTOR_LANGUAGE_NAMES = {
+    "af": "Afrikaans",
+    "nso": "Sepedi",
+    "nr": "isiNdebele",
+    "st": "Sesotho",
+    "tn": "Setswana",
+    "ve": "Tshivenda",
+    "ts": "XiTsonga",
+    "xh": "isiXhosa",
+    "zu": "isiZulu",
+    "en": "English",
+}
 
 
 def _allowed_origins() -> list[str]:
@@ -85,6 +102,8 @@ class HistoryTurn(BaseModel):
 class VoiceSessionContext(BaseModel):
     model_config = ConfigDict(extra="ignore")
     context_type: Literal["ask", "practice"]
+    response_language: str = Field(default="en-ZA", max_length=24)
+    response_language_name: str | None = Field(default=None, max_length=80)
     grade: int = Field(ge=8, le=12)
     topic: str | None = Field(default=None, max_length=240)
     inspection_id: str | None = Field(default=None, max_length=120)
@@ -261,17 +280,34 @@ def _extract_text(body: Any) -> str:
 
 class SharperTimeSTTService(SegmentedSTTService):
     def __init__(self, session: VoiceSession) -> None:
-        super().__init__(trailing_silence_secs=0.45, stt_ttfb_timeout=20)
+        super().__init__(
+            settings=STTSettings(model=None, language=None),
+            trailing_silence_secs=0.45,
+            stt_ttfb_timeout=20,
+            ttfs_p99_latency=1.0,
+        )
         self._session = session
 
     async def run_stt(self, audio: bytes):
         if http_client is None:
             return
         try:
+            response_language = self._session.context.response_language
+            if supports_language(response_language):
+                result = await transcribe_local_audio(audio, response_language)
+                text = result["text"]
+                if text:
+                    yield TranscriptionFrame(
+                        text=text[:MAX_TURN_TEXT],
+                        user_id="learner",
+                        timestamp=datetime.now(timezone.utc).isoformat(),
+                        finalized=True,
+                    )
+                return
             response = await http_client.post(
                 f"{API_BASE_URL}/api/education/speech/transcribe",
                 headers={"Authorization": f"Bearer {self._session.access_token}"},
-                data={"language": "en-ZA"},
+                data={"language": response_language},
                 files={"audio": ("speech.wav", audio, "audio/wav")},
                 timeout=25,
             )
@@ -294,9 +330,11 @@ def _tutor_request(session: VoiceSession, latest_text: str) -> dict[str, Any]:
     context = session.context
     prior = list(session.history)[-MAX_HISTORY_TURNS:]
     conversation = "\n".join(f"{turn.role.title()}: {turn.text}" for turn in prior)
+    language_code = context.response_language.strip().replace("_", "-").casefold().split("-", 1)[0]
+    language_name = context.response_language_name or TUTOR_LANGUAGE_NAMES.get(language_code, context.response_language)
     instructions = (
-        "Continue a live mathematics tutoring conversation. Use short, clear spoken English and guide the learner one step at a time. "
-        "Say mathematical notation in words, such as x squared, plus, equals, a over b, and square root of. "
+        f"Continue a live mathematics tutoring conversation. Use short, clear spoken sentences in {language_name} for ordinary explanations and guide the learner one step at a time. "
+        "Keep all mathematical terms, number words used in equations, operators, and spoken equations in English. For example, say ‘x squared plus 3 equals 7’ in English even inside a sentence in the learner's language. "
         "Ask one brief question when a step is unclear. This voice turn is for tutoring only: do not mark, grade, submit, or claim to have submitted the learner's work."
     )
     details = []
@@ -345,10 +383,19 @@ def _tutor_request(session: VoiceSession, latest_text: str) -> dict[str, Any]:
 def _tutor_text(body: Any) -> str:
     if not isinstance(body, dict):
         return ""
+    final_check = body.get("ai_final_check") if isinstance(body.get("ai_final_check"), dict) else {}
     model = str(body.get("ai_model") or body.get("model") or "").strip().lower()
     effort = str(body.get("ai_reasoning_effort") or body.get("reasoning_effort") or "").strip().lower()
     status = str(body.get("ai_status") or body.get("status") or "").strip().lower()
-    if model != "gpt-6-luna" or effort != "xhigh" or status != "completed":
+    if (
+        model != "gpt-6-luna"
+        or effort != "xhigh"
+        or status != "completed"
+        or str(final_check.get("provider") or "").strip().lower() != "openai"
+        or str(final_check.get("model") or "").strip().lower() != "gpt-6-luna"
+        or str(final_check.get("reasoning_effort") or "").strip().lower() != "xhigh"
+        or final_check.get("approved") is not True
+    ):
         return ""
     for key in ("assistant_message", "answer", "response", "feedback", "message", "tutor_response", "text"):
         value = body.get(key)
@@ -362,6 +409,8 @@ class TutorTurnProcessor(FrameProcessor):
     def __init__(self, session: VoiceSession) -> None:
         super().__init__()
         self._session = session
+        self._pending_turn_text = ""
+        self._pending_turn_task: asyncio.Task[Any] | None = None
 
     async def _send(self, message_type: str, text: str = "") -> None:
         await self.push_frame(RTVIServerMessageFrame(data={"type": message_type, "text": text}))
@@ -395,12 +444,26 @@ class TutorTurnProcessor(FrameProcessor):
                 message = str(error) if "session expired" in str(error).lower() else "I couldn't prepare a reply just now. Please try again or type your question."
                 await self._send("error", message)
 
+    async def _answer_after_turn_end(self) -> None:
+        await asyncio.sleep(TURN_END_DEBOUNCE_SECONDS)
+        user_text = self._pending_turn_text.strip()
+        self._pending_turn_text = ""
+        if user_text:
+            await self._answer(user_text[:MAX_TURN_TEXT])
+
     async def process_frame(self, frame: Frame, direction: FrameDirection) -> None:
         await super().process_frame(frame, direction)
         if isinstance(frame, TranscriptionFrame) and frame.text.strip():
             user_text = frame.text.strip()[:MAX_TURN_TEXT]
             await self._send("transcript", user_text)
-            self.create_task(self._answer(user_text), name="sharpertime-tutor-turn")
+            joined_text = f"{self._pending_turn_text} {user_text}".strip()
+            self._pending_turn_text = joined_text[:MAX_TURN_TEXT]
+            if self._pending_turn_task and not self._pending_turn_task.done():
+                self._pending_turn_task.cancel()
+            self._pending_turn_task = self.create_task(
+                self._answer_after_turn_end(),
+                name="sharpertime-tutor-turn-end",
+            )
         await self.push_frame(frame, direction)
 
 
@@ -453,6 +516,42 @@ async def shutdown() -> None:
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.post("/transcribe")
+async def transcribe_local(request: Request, audio: UploadFile = File(...), language: str = Form("en-ZA")) -> dict[str, Any]:
+    _check_origin(request)
+    token = _bearer_token(request)
+    await _api_user(token)
+    if not supports_language(language):
+        raise HTTPException(status_code=422, detail="Local speech recognition is not available for this language yet.")
+    data = await audio.read(MAX_ASR_AUDIO_BYTES + 1)
+    if not data:
+        raise HTTPException(status_code=400, detail="Uploaded audio file is empty.")
+    if len(data) > MAX_ASR_AUDIO_BYTES:
+        raise HTTPException(status_code=413, detail="Audio file is too large for local speech recognition.")
+    try:
+        result = await transcribe_local_audio(data, language)
+    except (ImportError, FileNotFoundError, RuntimeError) as error:
+        if "not installed" in str(error).lower() or isinstance(error, ImportError):
+            raise HTTPException(status_code=503, detail="The selected language model is not installed on the voice server yet.") from error
+        logger.exception("Local speech recognition failed")
+        raise HTTPException(status_code=502, detail="Local speech recognition failed. Please try again.") from error
+    except Exception as error:
+        logger.exception("Local speech recognition failed")
+        raise HTTPException(status_code=502, detail="Local speech recognition failed. Please try again.") from error
+    transcript = result["text"]
+    return {
+        "file_name": audio.filename,
+        "content_type": audio.content_type,
+        "bytes": len(data),
+        "model": result["model"],
+        "language": result["language"],
+        "requested_locale": language,
+        "raw_transcript": transcript,
+        "transcript": transcript,
+        "normalisation": {"math_symbols_applied": False},
+    }
 
 
 @app.post("/session")

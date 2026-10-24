@@ -1,4 +1,5 @@
-import { getAccessToken, postForm, postPairingJson, pairingWebSocketUrl, isLocalIntranetPage, setAccessToken } from "./api.js?v=18";
+import { API_BASE_URL, getAccessToken, postForm, postPairingJson, pairingWebSocketUrl, isLocalIntranetPage, setAccessToken } from "./api.js?v=24";
+import { renderTextbookMath } from "./math-display.js";
 
 const $ = (selector) => document.querySelector(selector);
 const canvas = $("#phoneCanvas");
@@ -21,6 +22,7 @@ let view = { scale: 1, offsetX: 0, offsetY: 0 };
 let flushFrame = 0;
 let localFrame = { width: 0, height: 0 };
 let hostConnected = false;
+let hostInputEnabled = false;
 let submittedToAnswer = false;
 let heartbeat = 0;
 
@@ -34,7 +36,15 @@ function setPairStatus(message, kind = "") {
 function setCanvasStatus(message, kind = "") {
   const status = $("#phoneCanvasConnectionStatus");
   status.textContent = message || "";
-  status.style.color = kind === "error" ? "var(--error)" : kind === "success" ? "var(--teal-dark)" : "var(--ink-soft)";
+  status.style.color = kind === "error" ? "var(--error)" : kind === "success" ? "var(--brand-navy)" : "var(--ink-soft)";
+}
+
+function updateCanvasControls() {
+  const canEdit = hostConnected && hostInputEnabled && !submittedToAnswer;
+  ["#phoneCanvasUndo", "#phoneCanvasClear", "#phoneCanvasEraser", "#phoneCanvasPan", "#phoneCanvasZoomToggle", "#phoneCanvasFit"]
+    .forEach((selector) => { $(selector).disabled = !canEdit; });
+  $("#phoneCanvasSubmit").hidden = !hostInputEnabled;
+  $("#phoneCanvasSubmit").disabled = !canEdit || strokes.length === 0;
 }
 
 function setPhoneSignInVisible(visible) {
@@ -110,7 +120,7 @@ function drawCanvas() {
     if (!stroke.points.length) continue;
     const first = strokeCanvasPoint(stroke, stroke.points[0], rect.width, rect.height);
     context.beginPath();
-    context.strokeStyle = stroke.tool === "eraser" ? "#fff" : (stroke.color || "#162a29");
+    context.strokeStyle = stroke.tool === "eraser" ? "#fff" : (stroke.color || "#132a45");
     context.lineWidth = Math.max(1, (stroke.width || (stroke.tool === "eraser" ? 24 : 2.2)) * first.scale);
     context.lineCap = "round";
     context.lineJoin = "round";
@@ -156,7 +166,7 @@ function drawMinimap(canvasRect) {
     }
   }
   if (!hasPoints) {
-    map.fillStyle = "#627874";
+    map.fillStyle = "#60738a";
     map.font = "11px sans-serif";
     map.textAlign = "center";
     map.textBaseline = "middle";
@@ -179,7 +189,7 @@ function drawMinimap(canvasRect) {
     const first = strokeCanvasPoint(stroke, stroke.points[0], canvasRect.width, canvasRect.height);
     const start = toMini(first.x, first.y);
     map.beginPath();
-    map.strokeStyle = stroke.tool === "eraser" ? "#fff" : (stroke.color || "#162a29");
+    map.strokeStyle = stroke.tool === "eraser" ? "#fff" : (stroke.color || "#132a45");
     map.lineWidth = Math.max(1, (stroke.width || 2.2) * first.scale * scale);
     map.lineCap = "round";
     map.lineJoin = "round";
@@ -198,7 +208,7 @@ function drawMinimap(canvasRect) {
   const viewTopLeft = toMini(viewLeft, viewTop);
   map.save();
   map.setLineDash([3, 2]);
-  map.strokeStyle = "#0e766e";
+  map.strokeStyle = "#0e5fae";
   map.lineWidth = 1.5;
   map.strokeRect(viewTopLeft.x, viewTopLeft.y, canvasRect.width / view.scale * scale, canvasRect.height / view.scale * scale);
   map.restore();
@@ -285,11 +295,11 @@ function finishStroke() {
   send({ type: "stroke_end", id: activeStroke.id });
   activeStroke = null;
   pointerId = null;
-  $("#phoneCanvasSubmit").disabled = strokes.length === 0 || !hostConnected;
+  $("#phoneCanvasSubmit").disabled = !hostInputEnabled || strokes.length === 0 || !hostConnected;
 }
 
 canvas.addEventListener("pointerdown", (event) => {
-  if (!hostConnected || event.button !== 0) return;
+  if (!hostConnected || !hostInputEnabled || event.button !== 0) return;
   event.preventDefault();
   try { canvas.setPointerCapture(event.pointerId); } catch {}
   pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -321,7 +331,7 @@ canvas.addEventListener("pointerdown", (event) => {
     frame,
     points: [point],
     width: eraserMode ? 24 : (event.pointerType === "pen" ? 2.5 : 2.2),
-    color: eraserMode ? "#fff" : "#162a29",
+    color: eraserMode ? "#fff" : "#132a45",
     tool: eraserMode ? "eraser" : "pen",
   };
   pointerId = event.pointerId;
@@ -368,6 +378,10 @@ canvas.addEventListener("pointermove", (event) => {
   if (activeStroke && event.pointerId === pointerId) finishStroke();
   pointers.delete(event.pointerId);
   if (pointers.size < 2) pinch = null;
+  if (pointers.size === 1 && panMode) {
+    const remaining = [...pointers.values()][0];
+    panDrag = { x: remaining.x, y: remaining.y, offsetX: view.offsetX, offsetY: view.offsetY };
+  }
   if (!pointers.size) panDrag = null;
 }));
 
@@ -389,19 +403,31 @@ function connectSocket(session) {
       document.body.classList.add("phone-canvas-active");
       hostConnected = false;
       setCanvasStatus("Waiting for the computer canvas…");
-      $("#phoneCanvasSubmit").disabled = true;
+      updateCanvasControls();
       requestAnimationFrame(resizeCanvas);
     } else if (message.type === "host_connected") {
       hostConnected = true;
       setCanvasStatus("Connected — draw here to update your computer", "success");
-      $("#phoneCanvasSubmit").disabled = strokes.length === 0;
+      updateCanvasControls();
     } else if (message.type === "setup") {
+      hostInputEnabled = message.stage === "writing";
+      const graphMode = message.mode === "graph";
+      updateCanvasControls();
+      $("#phoneCanvasSubmit").textContent = graphMode ? "Review" : "Next";
+      if (!hostInputEnabled) setCanvasStatus(graphMode ? "Set the function count or review the graph on your computer." : "Select work areas and transcribe on the computer.");
+      $("#phoneCanvasHelp").textContent = hostInputEnabled
+        ? graphMode ? "Draw the graph here, then select Review. Graph recognition and review continue on the computer."
+          : "Write or draw here, then select Next. Choose work areas and transcribe on the computer."
+        : graphMode ? "Your graph is on the computer. Review it there before attaching it."
+          : "Your writing is ready on the computer. Select Words, Maths, or Drawings there, then transcribe.";
+      $("#phoneCanvasSubmit").disabled = !hostInputEnabled || strokes.length === 0 || !hostConnected;
       if ("title" in message || "question" in message) {
         const question = $("#phoneCanvasQuestion");
-        question.textContent = [message.title, message.question].filter(Boolean).join("\n\n").trim();
+        const questionText = [message.title, message.question].filter(Boolean).join("\n\n").trim();
+        renderTextbookMath(question, questionText);
         const questionToggle = $("#phoneCanvasQuestionToggle");
         const workspace = $("#phoneCanvasWorkspace");
-        questionToggle.hidden = !question.textContent;
+        questionToggle.hidden = !questionText;
         workspace.classList.remove("question-hidden");
         questionToggle.textContent = "Hide Q";
         questionToggle.setAttribute("aria-expanded", "true");
@@ -411,12 +437,12 @@ function connectSocket(session) {
           id: String(stroke.id || ""),
           frame: { width: Number(stroke.frame?.width) || localFrame.width, height: Number(stroke.frame?.height) || localFrame.height },
           width: Number(stroke.width) || 2.2,
-          color: stroke.color || "#162a29",
+          color: stroke.color || "#132a45",
           tool: stroke.tool === "eraser" ? "eraser" : "pen",
           points: Array.isArray(stroke.points) ? stroke.points.map((point) => canvasPoint(point)) : [],
         }));
         drawCanvas();
-        $("#phoneCanvasSubmit").disabled = strokes.length === 0 || !hostConnected;
+        $("#phoneCanvasSubmit").disabled = !hostInputEnabled || strokes.length === 0 || !hostConnected;
       }
     } else if (message.type === "host_disconnected" || message.type === "session_closed") {
       if (submittedToAnswer) {
@@ -430,12 +456,27 @@ function connectSocket(session) {
     } else if (message.type === "submitted") {
       submittedToAnswer = true;
       hostConnected = false;
-      $("#phoneCanvasSubmit").disabled = true;
+      hostInputEnabled = false;
+      updateCanvasControls();
       setCanvasStatus("Canvas submitted to your answer.", "success");
       $("#phoneCanvasHelp").textContent = "Your writing has been attached to the question on your computer.";
+    } else if (message.type === "selection_ready") {
+      hostInputEnabled = false;
+      updateCanvasControls();
+      setCanvasStatus("Select work areas and transcribe on the computer.");
+      $("#phoneCanvasHelp").textContent = "Continue on the computer to select Words, Maths, or Drawings and review the transcription.";
+    } else if (message.type === "processing") {
+      hostInputEnabled = false;
+      updateCanvasControls();
+      setCanvasStatus("Your work is being read on the computer…");
+    } else if (message.type === "review_ready") {
+      hostInputEnabled = false;
+      updateCanvasControls();
+      setCanvasStatus("Review and edit the transcription on your computer, then confirm it.", "success");
     } else if (message.type === "submission_error") {
       hostConnected = true;
-      $("#phoneCanvasSubmit").disabled = strokes.length === 0;
+      updateCanvasControls();
+      $("#phoneCanvasSubmit").textContent = "Next";
       setCanvasStatus(message.message || "Canvas could not be submitted. Try again.", "error");
     }
   });
@@ -443,8 +484,8 @@ function connectSocket(session) {
     clearInterval(heartbeat);
     heartbeat = 0;
     hostConnected = false;
+    updateCanvasControls();
     if (!$("#phoneCanvasWorkspace").hidden && !submittedToAnswer) {
-      $("#phoneCanvasSubmit").disabled = true;
       setCanvasStatus("Connection ended. Your phone drawing is still on this screen.", "error");
     }
   });
@@ -505,6 +546,24 @@ $("#phoneSignInForm").addEventListener("submit", async (event) => {
 });
 
 $("#phonePairForm").addEventListener("submit", connectPhone);
+const nativeCanvasLink = $("#openNativeCanvas");
+const phonePairCode = $("#phonePairCode");
+function updateNativeCanvasLink() {
+  const code = phonePairCode.value.replace(/\D/g, "").slice(0, 6);
+  const androidPhone = /Android/i.test(navigator.userAgent) && /Mobile/i.test(navigator.userAgent);
+  const showLink = androidPhone && code.length === 6;
+  nativeCanvasLink.hidden = !showLink;
+  if (showLink) {
+    const pairingApi = isLocalIntranetPage() ? window.location.origin : API_BASE_URL;
+    nativeCanvasLink.href = `sharpertimecanvas://pair?code=${encodeURIComponent(code)}&api=${encodeURIComponent(pairingApi)}`;
+  }
+}
+phonePairCode.addEventListener("input", updateNativeCanvasLink);
+nativeCanvasLink.addEventListener("click", (event) => {
+  updateNativeCanvasLink();
+  if (nativeCanvasLink.hidden) event.preventDefault();
+});
+updateNativeCanvasLink();
 $("#phoneCanvasPan").addEventListener("click", () => setPanMode(!panMode));
 $("#phoneCanvasZoomToggle").addEventListener("click", () => setZoomMode(!zoomMode));
 $("#phoneCanvasEraser").addEventListener("click", () => setEraserMode(!eraserMode));
@@ -517,13 +576,15 @@ $("#phoneCanvasQuestionToggle").addEventListener("click", (event) => {
   requestAnimationFrame(resizeCanvas);
 });
 $("#phoneCanvasUndo").addEventListener("click", () => {
+  if (!hostInputEnabled) return;
   if (activeStroke) finishStroke();
   const removed = strokes.pop();
   if (removed) send({ type: "undo", id: removed.id });
   drawCanvas();
-  $("#phoneCanvasSubmit").disabled = strokes.length === 0 || !hostConnected;
+  $("#phoneCanvasSubmit").disabled = !hostInputEnabled || strokes.length === 0 || !hostConnected;
 });
 $("#phoneCanvasClear").addEventListener("click", () => {
+  if (!hostInputEnabled) return;
   if (activeStroke) finishStroke();
   strokes = [];
   send({ type: "clear" });
@@ -531,9 +592,9 @@ $("#phoneCanvasClear").addEventListener("click", () => {
   $("#phoneCanvasSubmit").disabled = true;
 });
 $("#phoneCanvasSubmit").addEventListener("click", () => {
-  if (!strokes.length || !hostConnected) return;
+  if (!strokes.length || !hostConnected || !hostInputEnabled) return;
   $("#phoneCanvasSubmit").disabled = true;
-  setCanvasStatus("Submitting your canvas…");
+  setCanvasStatus("Sending your writing to the computer…");
   if (!send({ type: "submit" })) {
     $("#phoneCanvasSubmit").disabled = false;
     setCanvasStatus("Connection ended. Reconnect from your computer to submit this canvas.", "error");
@@ -561,7 +622,18 @@ if (!isLocalIntranetPage() && !getAccessToken()) setPhoneSignInVisible(true);
 if (scannedCode) {
   $("#phonePairCode").value = scannedCode.replace(/\D/g, "").slice(0, 6);
   pairSession = scannedSessionId ? { session_id: scannedSessionId } : null;
-  connectPhone(new Event("submit", { cancelable: true }));
+  const cleanCode = $("#phonePairCode").value;
+  const androidPhone = /Android/i.test(navigator.userAgent) && /Mobile/i.test(navigator.userAgent);
+  if (androidPhone && cleanCode.length === 6) {
+    const pairingApi = isLocalIntranetPage() ? window.location.origin : API_BASE_URL;
+    window.location.href = `sharpertimecanvas://pair?code=${encodeURIComponent(cleanCode)}&api=${encodeURIComponent(pairingApi)}`;
+    window.setTimeout(() => {
+      if (document.visibilityState === "visible" && !$("#pairScreen").hidden)
+        connectPhone(new Event("submit", { cancelable: true }));
+    }, 1400);
+  } else {
+    connectPhone(new Event("submit", { cancelable: true }));
+  }
 } else {
   try {
     const saved = JSON.parse(sessionStorage.getItem("sharperx_phone_canvas_session") || "null");

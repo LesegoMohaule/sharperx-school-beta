@@ -27,23 +27,31 @@
       <div class="section-heading compact">
         <p class="section-kicker">Your account</p>
         <h1>Credits and access</h1>
-        <p>The platform is launching soon. Existing account holders can manage Grade 12 Mathematics tutor and lesson-video access here; new registration is currently closed.</p>
+        <p>Your AI credit balance covers tutor requests across the app. The current balance is also shown in the app header and refreshes after each request.</p>
       </div>
 
       <p class="form-status" data-payment-status></p>
       <div class="balance-grid" data-account-dashboard>
         <article><span>Service access</span><strong data-balance="service_access_label">Login required</strong></article>
-        <article><span>AI characters remaining</span><strong data-balance="characters_remaining">0</strong></article>
-        <article><span>Photo questions remaining</span><strong data-balance="photo_questions_remaining">0</strong></article>
-        <article><span>Document uploads remaining</span><strong data-balance="document_uploads_remaining">0</strong></article>
+        <article><span>AI credits remaining</span><strong data-balance="ai_credits_remaining">0</strong></article>
         <article><span>Tutor days left</span><strong data-balance="tutor_days_remaining">0</strong></article>
         <article><span>Video days left</span><strong data-balance="video_days_remaining">0</strong></article>
       </div>
 
+      <form class="login-form is-hidden" data-password-change-form>
+        <h2>Change password</h2>
+        <p>Choose at least 15 characters. A memorable passphrase is fine. Changing your password signs out all devices.</p>
+        <label>Current password<input name="current_password" type="password" autocomplete="current-password" maxlength="128" required></label>
+        <label>New password<input name="password" type="password" autocomplete="new-password" minlength="15" maxlength="128" required></label>
+        <label>Confirm new password<input name="confirm_password" type="password" autocomplete="new-password" minlength="15" maxlength="128" required></label>
+        <button class="button primary full" type="submit">Change password</button>
+        <p class="form-status" data-password-change-status role="status"></p>
+      </form>
+
       <div class="credit-pricing account-products">
         <article class="credit-price-card">
           <h3>Grade 12 Mathematics tutor</h3>
-          <p>R35 adds 30 days of guided Grade 12 Mathematics tutor access and the controlled AI usage allocation for the launch product.</p>
+          <p>R35 adds 30 days of guided Grade 12 Mathematics tutor access and an AI credit allocation. Credits cover tutor requests, including typed, image, and voice input.</p>
           <button class="button primary full" type="button" data-buy-product="tutor_topup_r35">Pay R35 with PayFast</button>
         </article>
         <article class="credit-price-card">

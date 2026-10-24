@@ -34,6 +34,16 @@
         <p class="form-status" data-login-status></p>
       </form>
 
+      <form class="login-form is-hidden" data-verify-email-form>
+        <h2>Verify your email</h2>
+        <p>If you have not verified this address, request a new code and enter it below. Codes expire after 10 minutes.</p>
+        <label>Email address<input name="email" type="email" autocomplete="email" required></label>
+        <label>Verification code<input name="otp_code" type="text" inputmode="numeric" autocomplete="one-time-code" minlength="4" maxlength="12" required></label>
+        <button class="button primary full" type="submit">Verify email</button>
+        <button class="button secondary-dark full" type="button" data-resend-email-code>Send a new code</button>
+        <p class="form-status" data-verify-email-status role="status"></p>
+      </form>
+
       <form class="login-form is-hidden" data-forgot-form>
         <h2>Reset password</h2>
         <p>Enter your account email. A secure reset link will be sent if the account exists.</p>
@@ -44,8 +54,9 @@
 
       <form class="login-form is-hidden" data-reset-form>
         <h2>Create new password</h2>
-        <label>New password<input name="password" type="password" autocomplete="new-password" required></label>
-        <label>Confirm new password<input name="confirm_password" type="password" autocomplete="new-password" required></label>
+        <p>Use at least 15 characters. A memorable passphrase is fine; uppercase letters, numbers and symbols are optional.</p>
+        <label>New password<input name="password" type="password" autocomplete="new-password" minlength="15" maxlength="128" required></label>
+        <label>Confirm new password<input name="confirm_password" type="password" autocomplete="new-password" minlength="15" maxlength="128" required></label>
         <button class="button primary full" type="submit">Save new password</button>
         <p class="form-status" data-reset-status></p>
       </form>

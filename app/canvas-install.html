@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f3f7fc">
+  <meta name="description" content="Download SharperTime Canvas for Android and pair your phone with the SharperTime web app.">
+  <title>Download SharperTime Canvas for Android</title>
+  <style>
+    :root { color-scheme: light; font-family: Inter, "Segoe UI", Arial, sans-serif; color: #0a2854; background: #f3f7fc; }
+    * { box-sizing: border-box; }
+    body { min-width: 320px; min-height: 100vh; margin: 0; background: radial-gradient(circle at 80% 2%, #dceeff 0, transparent 32rem), #f3f7fc; }
+    a { color: inherit; }
+    .top { display:flex; align-items:center; justify-content:space-between; gap:20px; padding:16px clamp(18px,5vw,64px); border-bottom:1px solid #d2dfef; background:rgba(255,255,255,.88); }
+    .logo { display:block; width:174px; max-height:76px; object-fit:contain; }
+    .top nav { display:flex; flex-wrap:wrap; gap:20px; font-size:14px; font-weight:750; }
+    .top nav a { text-decoration:none; }
+    .top nav a:hover { color:#0759b5; }
+    main { width:min(100% - 32px, 920px); margin:48px auto 64px; }
+    .hero, .steps, .note { padding:clamp(22px,5vw,48px); border:1px solid #d2dfef; border-radius:24px; background:#fff; box-shadow:0 18px 60px rgba(10,40,84,.08); }
+    .kicker { margin:0 0 12px; color:#0759b5; font-size:12px; font-weight:850; letter-spacing:.12em; text-transform:uppercase; }
+    h1 { max-width:740px; margin:0; color:#071a32; font-size:clamp(38px,7vw,68px); line-height:.98; letter-spacing:-.055em; }
+    .lead { max-width:700px; margin:20px 0 0; color:#526984; font-size:clamp(17px,2.5vw,21px); line-height:1.55; }
+    .actions { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-top:26px; }
+    .button { display:inline-flex; min-height:52px; align-items:center; justify-content:center; padding:13px 20px; border:1px solid transparent; border-radius:12px; font-size:15px; font-weight:850; text-decoration:none; }
+    .primary { color:white; background:#0759b5; box-shadow:0 10px 24px rgba(7,89,181,.2); }
+    .primary:hover { background:#064991; }
+    .secondary { color:#0759b5; border-color:#c2d2e5; background:white; }
+    .meta { margin:12px 0 0; color:#60738a; font-size:13px; }
+    .download-status { margin-top:18px; padding:14px 16px; border-radius:12px; color:#173b62; background:#eaf4ff; line-height:1.5; }
+    .download-status[hidden] { display:none; }
+    .steps { margin-top:20px; }
+    h2 { margin:0 0 18px; color:#071a32; font-size:clamp(23px,4vw,32px); letter-spacing:-.035em; }
+    ol { display:grid; gap:14px; margin:0; padding-left:24px; color:#405b78; line-height:1.55; }
+    li { padding-left:4px; }
+    .note { margin-top:20px; padding:20px 24px; color:#405b78; line-height:1.55; box-shadow:none; }
+    .note strong { color:#0a2854; }
+    footer { padding:22px 16px 30px; color:#60738a; text-align:center; font-size:13px; }
+    @media(max-width:620px) { .top { align-items:flex-start; }.logo { width:128px; }.top nav { justify-content:flex-end; gap:12px; font-size:12px; }.actions .button { width:100%; }.hero,.steps { border-radius:18px; } }
+  </style>
+</head>
+<body>
+  <header class="top">
+    <a href="../" aria-label="SharperTime marketing website home"><img class="logo" src="../assets/brand/sharpertime-sword-logo-transparent.png" alt="SharperTime"></a>
+    <nav aria-label="Page navigation"><a href="../">Home</a><a href="./">Open the web app</a></nav>
+  </header>
+  <main>
+    <section class="hero">
+      <p class="kicker">Android companion</p>
+      <h1>Write on your SharperTime canvas with your phone.</h1>
+      <p class="lead">Use your Android phone as a touch and stylus surface for the canvas open on your computer. Your strokes appear live on that canvas, where you can review and submit the work.</p>
+      <div class="actions">
+        <a class="button primary" id="downloadApk" href="../assets/downloads/sharpertime-canvas-1.31.apk" download="SharperTime-Canvas-1.31.apk">Download SharperTime Canvas</a>
+        <a class="button secondary" href="./canvas-remote.html">Open phone canvas in browser</a>
+      </div>
+      <p class="meta">Version 1.31 · Android 6.0 or later · APK download (about 46 MB)</p>
+      <p class="meta">If an earlier test build was signed with a different certificate, Android cannot update it in place. Uninstalling that build may remove its local data.</p>
+      <div class="download-status" id="downloadStatus" role="status" aria-live="polite" hidden></div>
+    </section>
+    <section class="steps" aria-labelledby="installTitle">
+      <h2 id="installTitle">Install and connect</h2>
+      <ol>
+        <li>Tap <strong>Download SharperTime Canvas</strong> and wait for the APK download to finish.</li>
+        <li>Open the downloaded APK from your browser's download notification or the Downloads folder. Android opens its installer; tap <strong>Install</strong>.</li>
+        <li>If Android asks, allow your browser to install apps, return to the installer, and confirm. You can switch that permission off again after installation.</li>
+        <li>On your computer, open a canvas and choose <strong>Use phone</strong>. Scan its QR code to fill the code and computer address automatically. If you enter the six-digit code manually for a local session, also enter the computer address shown beside it.</li>
+      </ol>
+    </section>
+    <aside class="note"><strong>Pairing keeps your account session on the computer.</strong> SharperTime Canvas receives a short-lived canvas connection and does not sign in as a second device. The computer remains responsible for reviewing and submitting the work.</aside>
+  </main>
+  <footer>SharperTime Canvas is installed directly from this website. Android will ask you to approve the installation.</footer>
+  <script>
+    const downloadLink = document.querySelector("#downloadApk");
+    const downloadStatus = document.querySelector("#downloadStatus");
+    downloadLink.addEventListener("click", () => {
+      downloadStatus.hidden = false;
+      downloadStatus.textContent = "Your download is starting. When it finishes, open the APK from the browser notification or Downloads to launch Android's installer.";
+    });
+  </script>
+</body>
+</html>

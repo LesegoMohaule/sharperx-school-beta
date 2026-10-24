@@ -1,4 +1,4 @@
-import { getAccessToken, postForm, postPairingJson, pairingWebSocketUrl, isLocalIntranetPage, setAccessToken } from "./api.js?v=18";
+import { getAccessToken, postForm, postPairingJson, pairingWebSocketUrl, isLocalIntranetPage, setAccessToken } from "./api.js?v=23";
 
 const $ = (selector, root = document) => root.querySelector(selector);
 let session = null;

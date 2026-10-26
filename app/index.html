@@ -12,7 +12,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icon.svg">
-  <link rel="stylesheet" href="./styles.css?v=59">
+  <link rel="stylesheet" href="./styles.css?v=60">
   <script>
     try {
       if (/[?&](email|password)=/i.test(window.location.search) && window.history && window.history.replaceState) {
@@ -259,8 +259,13 @@
         </section>
 
         <section class="view" data-view-panel="lessons" aria-labelledby="lessonsTitle" hidden>
-          <header class="view-heading"><div><p class="eyebrow">Lesson videos</p><h1 id="lessonsTitle">Learn from a worked example</h1><p class="muted">Browse available lesson videos for the selected grade.</p></div><label>Grade<select id="lessonGrade"><option>8</option><option>9</option><option>10</option><option>11</option><option selected>12</option></select></label></header>
-          <p id="lessonStatus" class="status" role="status"></p><div id="lessonCatalog" class="lesson-catalog"></div><div id="lessonPlayer" class="lesson-player" hidden></div>
+          <header class="view-heading"><div><p class="eyebrow">Lesson videos</p><h1 id="lessonsTitle">Learn from a worked example</h1><p class="muted">Choose one topic and subtopic to load its lesson video.</p></div></header>
+          <div class="lesson-picker">
+            <label>Grade<select id="lessonGrade"><option>8</option><option>9</option><option>10</option><option>11</option><option selected>12</option></select></label>
+            <label>Topic<select id="lessonTopic" disabled><option value="">Loading topics…</option></select></label>
+            <label>Subtopic<select id="lessonSubtopic" disabled><option value="">Choose a topic first</option></select></label>
+          </div>
+          <p id="lessonStatus" class="status" role="status"></p><div id="lessonPlayer" class="lesson-player" hidden></div>
           <p class="source-note">For free DBE lesson videos, <a href="https://www.education.gov.za/Informationfor/Learners/VideoTutorials.aspx" target="_blank" rel="noopener noreferrer">open the DBE lesson videos page ↗</a></p>
         </section>
 
@@ -388,9 +393,9 @@
       var appScript = document.createElement("script");
       if (supportsModules && supportsModernSyntax) {
         appScript.type = "module";
-        appScript.src = "./app.bundle.js?v=61";
+        appScript.src = "./app.bundle.js?v=62";
       } else {
-        appScript.src = "./legacy-app.js?v=67";
+        appScript.src = "./legacy-app.js?v=68";
       }
       appScript.onload = function () {
         loginButton.disabled = false;

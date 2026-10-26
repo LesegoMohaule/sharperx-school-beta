@@ -282,15 +282,14 @@ input:focus, select:focus, textarea:focus { border-color: var(--brand-cyan); box
 .exam-answer-tools .tool-button { min-width: 112px; }
 .exam-workspace .math-keyboard-mount { margin: 9px 0 12px; }
 .exam-guidance { margin-top: 15px; }
-.lesson-catalog { display: grid; gap: 13px; }
-.lesson-topic { padding: 16px; border: 1px solid var(--line); border-radius: 15px; background: #fff; }
-.lesson-topic h2 { margin: 0 0 12px; font-size: 17px; }
-.lesson-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
-.lesson-item { min-height: 104px; display: grid; align-content: start; gap: 12px; padding: 13px; border: 1px solid #d9e4f0; border-radius: 12px; color: var(--ink); background: #f8fbff; text-align: left; }
-.lesson-item:hover { border-color: var(--brand-blue); background: var(--brand-pale); }
-.lesson-item small { color: var(--ink-soft); }
+.lesson-picker { display: grid; grid-template-columns: minmax(120px, .55fr) minmax(190px, 1fr) minmax(240px, 1.35fr); gap: 12px; margin: 8px 0 14px; padding: 15px; border: 1px solid var(--line); border-radius: 15px; background: #fff; }
+.lesson-picker label { display: grid; gap: 6px; color: var(--ink-soft); font-size: 12px; font-weight: 750; }
+.lesson-picker select { width: 100%; min-height: 43px; padding: 9px 11px; border: 1px solid #cbd8e7; border-radius: 10px; color: var(--ink); background: #fff; font: inherit; }
+.lesson-picker select:disabled { color: #718096; background: #f3f6fa; }
 .lesson-player { margin-top: 18px; padding: 16px; border: 1px solid var(--line); border-radius: 15px; background: #fff; }
-.lesson-player video { width: 100%; max-height: 70vh; border-radius: 11px; background: #081212; }
+.lesson-player h2 { margin: 0 0 12px; font-size: 18px; }
+.lesson-player video, .lesson-player iframe { display: block; width: 100%; max-height: 72vh; min-height: 320px; border: 0; border-radius: 11px; background: #081212; }
+.lesson-player video { object-fit: contain; }
 .report-item { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 15px; border: 1px solid var(--line); border-radius: 13px; background: #fff; }
 .report-item + .report-item { margin-top: 9px; }
 .report-item strong { display: block; }
@@ -313,13 +312,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--brand-cyan); box
 .topic-subtopic-choices label { color: var(--ink-soft); font-size: 12px; }
 .paper-summary { margin: 12px 0; padding: 12px 14px; border-radius: 11px; color: #244c72; background: #eaf5ff; line-height: 1.5; }
 .exam-setup > #startExamSession { margin: 2px 0 14px; }
-.lesson-topic { margin: 18px 0; }
-.lesson-topic > h2 { color: var(--brand-navy); font-size: 18px; }
-.lesson-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(205px, 1fr)); gap: 12px; }
-.lesson-card { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 13px; background: white; }
-.lesson-card > img { width: 100%; max-height: 145px; object-fit: cover; border-radius: 8px; background: #edf4fc; }
-.lesson-card h3 { min-height: 2.7em; font-size: 14px; line-height: 1.35; }
-.lesson-player iframe { display: block; width: 100%; height: 72vh; max-height: 760px; height: min(72vh, 760px); border: 0; border-radius: 11px; background: #081212; }
+.lesson-picker { align-items: end; }
+.lesson-player video, .lesson-player iframe { height: min(72vh, 760px); }
 .saved-reports { display: grid; gap: 10px; }
 .saved-report-card { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 14px; border: 1px solid var(--line); border-radius: 13px; background: white; }
 .saved-report-card > div:first-child { display: grid; gap: 5px; min-width: 0; }
@@ -547,6 +541,9 @@ html.canvas-dialog-open, body.canvas-dialog-open { overflow: hidden; overscroll-
   .filter-card label { flex-basis: 100%; }
   .filter-card > .button { flex: 1; }
   .topic-choice-grid { grid-template-columns: 1fr; }
+  .lesson-picker { grid-template-columns: minmax(0, 1fr); gap: 9px; padding: 12px; }
+  .lesson-player { padding: 11px; }
+  .lesson-player video, .lesson-player iframe { min-height: min(260px, 38vh); height: min(58vh, 520px); }
   .view-heading > label { min-width: 90px; }
   .image-dialog, .canvas-dialog, .voice-review-dialog { width: 100vw; max-width: none; max-height: var(--app-viewport-height); height: var(--app-viewport-height); border: 0; border-radius: 0; }
   .image-viewport { height: calc(var(--app-viewport-height) - 118px); }

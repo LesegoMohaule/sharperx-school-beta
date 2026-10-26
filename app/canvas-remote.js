@@ -25,6 +25,10 @@ let hostConnected = false;
 let hostInputEnabled = false;
 let submittedToAnswer = false;
 let heartbeat = 0;
+let reconnectTimer = 0;
+let reconnectAttempts = 0;
+let stableTimer = 0;
+let sessionClosed = false;
 
 function setPairStatus(message, kind = "") {
   const status = $("#phonePairStatus");
@@ -386,17 +390,29 @@ canvas.addEventListener("pointermove", (event) => {
 }));
 
 function connectSocket(session) {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = 0;
   const socketUrl = pairingWebSocketUrl("canvas-pairing", session.session_id);
   socketUrl.searchParams.set("role", "phone");
-  socket = new WebSocket(socketUrl);
-  socket.addEventListener("open", () => {
-    socket.send(JSON.stringify({ type: "authenticate", token: session.phone_token }));
+  const currentSocket = new WebSocket(socketUrl);
+  socket = currentSocket;
+  const isCurrentSocket = () => socket === currentSocket && pairSession === session;
+  currentSocket.addEventListener("open", () => {
+    if (!isCurrentSocket()) return currentSocket.close();
+    currentSocket.send(JSON.stringify({ type: "authenticate", token: session.phone_token }));
+    clearTimeout(stableTimer);
+    stableTimer = window.setTimeout(() => {
+      if (isCurrentSocket()) reconnectAttempts = 0;
+      stableTimer = 0;
+    }, 30_000);
     clearInterval(heartbeat);
     heartbeat = setInterval(() => send({ type: "ping" }), 30_000);
   });
-  socket.addEventListener("message", (event) => {
+  currentSocket.addEventListener("message", (event) => {
+    if (!isCurrentSocket()) return;
     let message;
     try { message = JSON.parse(event.data); } catch { return; }
+    if (message.type === "session_closed") sessionClosed = true;
     if (message.type === "authenticated") {
       $("#pairScreen").hidden = true;
       $("#phoneCanvasWorkspace").hidden = false;
@@ -446,13 +462,13 @@ function connectSocket(session) {
       }
     } else if (message.type === "host_disconnected" || message.type === "session_closed") {
       if (submittedToAnswer) {
-        if (message.type === "session_closed") socket.close();
+        if (message.type === "session_closed") currentSocket.close();
         return;
       }
       hostConnected = false;
       $("#phoneCanvasSubmit").disabled = true;
       setCanvasStatus("Computer disconnected. Reopen the connection on the computer.", "error");
-      if (message.type === "session_closed") socket.close();
+      if (message.type === "session_closed") currentSocket.close();
     } else if (message.type === "submitted") {
       submittedToAnswer = true;
       hostConnected = false;
@@ -480,16 +496,31 @@ function connectSocket(session) {
       setCanvasStatus(message.message || "Canvas could not be submitted. Try again.", "error");
     }
   });
-  socket.addEventListener("close", () => {
+  currentSocket.addEventListener("close", (event) => {
+    if (!isCurrentSocket()) return;
     clearInterval(heartbeat);
     heartbeat = 0;
+    clearTimeout(stableTimer);
+    stableTimer = 0;
     hostConnected = false;
     updateCanvasControls();
+    if (!sessionClosed && !submittedToAnswer && pairSession === session && ![1008, 4001, 4002].includes(event.code)) {
+      const delay = Math.min(10_000, 750 * (2 ** Math.min(reconnectAttempts, 4)));
+      reconnectAttempts += 1;
+      setCanvasStatus("Connection interrupted. Reconnecting…");
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = 0;
+        if (pairSession === session && !sessionClosed && !submittedToAnswer) connectSocket(session);
+      }, delay);
+      return;
+    }
     if (!$("#phoneCanvasWorkspace").hidden && !submittedToAnswer) {
-      setCanvasStatus("Connection ended. Your phone drawing is still on this screen.", "error");
+      setCanvasStatus(sessionClosed ? "The computer connection expired. Reopen it on the computer and scan the new code." : "Connection ended. Your phone drawing is still on this screen.", "error");
     }
   });
-  socket.addEventListener("error", () => setPairStatus("Could not connect to the computer. Check that both devices are on the same Wi-Fi and try again.", "error"));
+  currentSocket.addEventListener("error", () => {
+    if (isCurrentSocket()) setCanvasStatus("Connection interrupted. Reconnecting…", "error");
+  });
 }
 
 async function connectPhone(event) {
@@ -501,6 +532,8 @@ async function connectPhone(event) {
     return setPairStatus("Sign in with the same SharperTime account used on the computer.");
   }
   submittedToAnswer = false;
+  sessionClosed = false;
+  reconnectAttempts = 0;
   const button = $("#phonePairForm button[type='submit']");
   button.disabled = true;
   setPairStatus("Connecting…");
@@ -601,8 +634,13 @@ $("#phoneCanvasSubmit").addEventListener("click", () => {
   }
 });
 $("#phoneCanvasDisconnect").addEventListener("click", () => {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = 0;
+  clearTimeout(stableTimer);
+  stableTimer = 0;
   clearInterval(heartbeat);
   heartbeat = 0;
+  sessionClosed = true;
   if (socket?.readyState === WebSocket.OPEN) socket.close();
   sessionStorage.removeItem("sharperx_phone_canvas_session");
   pairSession = null;
@@ -639,6 +677,8 @@ if (scannedCode) {
     const saved = JSON.parse(sessionStorage.getItem("sharperx_phone_canvas_session") || "null");
     if (saved?.phone_token && saved?.session_id) {
       pairSession = saved;
+      sessionClosed = false;
+      reconnectAttempts = 0;
       $("#phonePairCode").value = saved.code || "";
       strokes = [];
       connectSocket(saved);

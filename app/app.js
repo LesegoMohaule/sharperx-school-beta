@@ -75,7 +75,12 @@ const state = {
   examAnswers: new Map(),
   examAnswerAttachments: new Map(),
   examVisuals: [],
-  lessonCatalog: [],
+  lessonTopics: [],
+  lessonSubtopics: [],
+  lessonTopicGrade: "",
+  lessonSelectionRequestId: 0,
+  lessonVideoRequestId: 0,
+  lessonVideoController: null,
   canvasContext: null,
   canvasQuestion: null,
   canvasReturnFocus: null,
@@ -296,7 +301,20 @@ function startSessionHeartbeat() {
     if (!state.user || !getAccessToken() || state.sessionHeartbeatInFlight) return;
     state.sessionHeartbeatInFlight = true;
     try {
-      await postJson("/api/auth/heartbeat", {});
+      let heartbeatError = null;
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        try {
+          await postJson("/api/auth/heartbeat", {}, { timeoutMs: 8_000 });
+          heartbeatError = null;
+          break;
+        } catch (error) {
+          heartbeatError = error;
+          if (error?.status === 401 || attempt === 1) break;
+          await new Promise((resolve) => window.setTimeout(resolve, 900));
+          if (!state.user || !getAccessToken()) return;
+        }
+      }
+      if (heartbeatError) throw heartbeatError;
       state.sessionHeartbeatFailures = 0;
       updatePrimarySessionStatus();
     } catch (error) {
@@ -2333,7 +2351,7 @@ $("#markPracticeAnswer").addEventListener("click", async () => {
   setStatus($("#practiceMarkStatus"), "Marking your attempt…");
   try {
     const markingContext = {
-      question_id: question.question_id,
+      question_id: String(question.question_id || question.bank_question_id || question.id || ""),
       bank_version: question.bank_version || "",
       subject: "Mathematics",
       grade: question.grade || state.grade,
@@ -2344,20 +2362,20 @@ $("#markPracticeAnswer").addEventListener("click", async () => {
       learner_final_answer: lastNonEmptyLine(working) || working,
       assistance_mode: state.practiceHintsUsed ? "Hints" : "SolveItMyself",
       hints_used: state.practiceHintsUsed,
-      photo_ids: [...state.practiceAnswerPhotoIds],
     };
     let result;
-    if (state.practiceAnswerPhotoIds.length) {
+    if (working) {
+      result = await postJson("/api/education/math-practice/mark", markingContext);
+    } else if (state.practiceAnswerPhotoIds.length) {
+      if (!state.practiceInspectionId) throw new Error("This handwritten upload is no longer attached to the selected question. Reopen the canvas and attach it again, or transcribe the work in the editor.");
       result = await postJson("/api/education/tutor/ask", {
         subject: "Mathematics", grade: question.grade || state.grade,
         topic: question.topic || "", question: questionLabel(question),
         learner_answer: working || "My complete working and answer are in the attached handwritten image.",
         mode: "mark_attempt", inspection_id: state.practiceInspectionId,
         ai_tier: "luna", allow_web_search: false,
-        math_practice_context: markingContext,
+        math_practice_context: { ...markingContext, photo_ids: [...state.practiceAnswerPhotoIds] },
       });
-    } else {
-      result = await postJson("/api/education/math-practice/mark", markingContext);
     }
     requireTutorCompletion(result, "Practice marking");
     const reportText = readMarkingText(result);
@@ -2967,77 +2985,230 @@ $("#submitExam").addEventListener("click", async () => {
   finally { button.disabled = false; }
 });
 
-async function loadLessons() {
-  const grade = formatGrade($("#lessonGrade").value || state.grade);
-  const host = $("#lessonCatalog");
-  host.replaceChildren();
-  setStatus($("#lessonStatus"), "Loading Grade " + grade + " lesson videos…");
-  try {
-    const result = await getJson("/api/lesson-videos/mathematics/catalog?grade=" + grade);
-    state.lessonCatalog = result.topics || [];
-    state.lessonCatalog.forEach((topic) => {
-      const section = document.createElement("section");
-      section.className = "lesson-topic";
-      const heading = document.createElement("h2");
-      renderMath(heading, topic.topic || "Mathematics");
-      section.append(heading);
-      const grid = document.createElement("div");
-      grid.className = "lesson-grid";
-      (topic.lessons || []).forEach((lesson) => {
-        const card = document.createElement("article");
-        card.className = "lesson-card";
-        if (lesson.thumbnail_url) {
-          const image = document.createElement("img");
-          image.loading = "lazy";
-          image.src = lesson.thumbnail_url;
-          image.alt = "";
-          card.append(image);
-        }
-        const title = document.createElement("h3");
-        renderMath(title, lesson.title);
-        const play = document.createElement("button");
-        play.type = "button";
-        play.className = "button primary";
-        play.textContent = "View lesson";
-        play.addEventListener("click", () => playLessonVideo(grade, topic, lesson, play));
-        card.append(title, play);
-        grid.append(card);
-      });
-      section.append(grid);
-      host.append(section);
-    });
-    setStatus($("#lessonStatus"), state.lessonCatalog.length ? "Grade " + grade + " lesson catalog loaded." : "No uploaded lesson videos are available for Grade " + grade + " yet.", state.lessonCatalog.length ? "success" : "");
-  } catch (error) { setStatus($("#lessonStatus"), error.message, "error"); }
+function clearLessonPlayer() {
+  state.lessonVideoRequestId += 1;
+  state.lessonVideoController?.abort();
+  state.lessonVideoController = null;
+  const player = $("#lessonPlayer");
+  player.replaceChildren();
+  player.hidden = true;
 }
-$("#lessonGrade").addEventListener("change", () => {
-  $("#globalGrade").value = $("#lessonGrade").value;
-  state.grade = formatGrade($("#lessonGrade").value);
-  sessionStorage.setItem("sharperx_web_grade", String(state.grade));
-  renderSourceLinks();
-  loadLessons();
-});
-async function playLessonVideo(grade, topic, lesson, button) {
-  button.disabled = true;
+
+function lessonSubtopicName(subtopic) {
+  return String(subtopic?.subtopic || subtopic?.name || subtopic?.title || subtopic?.subtopic_id || subtopic?.id || "");
+}
+
+function lessonSubtopicId(subtopic) {
+  return String(subtopic?.video_unit_id || subtopic?.unit_id || subtopic?.lesson_id || subtopic?.video_id || subtopic?.subtopic_id || subtopic?.id || lessonSubtopicName(subtopic));
+}
+
+function lessonSubtopicValue(subtopic) {
+  return String(subtopic?.subtopic_id || subtopic?.id || subtopic?.lesson_id || subtopic?.video_unit_id || subtopic?.unit_id || subtopic?.video_id || lessonSubtopicName(subtopic));
+}
+
+async function loadLessons({ force = false } = {}) {
+  const grade = formatGrade($("#lessonGrade").value || state.grade);
+  const topicSelect = $("#lessonTopic");
+  const subtopicSelect = $("#lessonSubtopic");
+  if (!force && state.lessonTopicGrade === grade && state.lessonTopics.length) return;
+
+  clearLessonPlayer();
+  const selectionRequestId = ++state.lessonSelectionRequestId;
+  state.lessonTopicGrade = grade;
+  state.lessonTopics = [];
+  state.lessonSubtopics = [];
+  replaceOptions(topicSelect, [], "Loading topics…");
+  replaceOptions(subtopicSelect, [], "Choose a topic first");
+  setStatus($("#lessonStatus"), "Loading Grade " + grade + " topics…");
   try {
-    const params = new URLSearchParams({ grade: String(grade), topic: topic.topic || "Mathematics", subtopic: lesson.title || "Lesson", unit_id: lesson.id });
-    const result = await getJson("/api/lesson-videos/mathematics/video?" + params);
+    const topics = await loadTopicCatalog(grade);
+    if (selectionRequestId !== state.lessonSelectionRequestId || grade !== formatGrade($("#lessonGrade").value)) return;
+    state.lessonTopics = topics;
+    replaceOptions(topicSelect, topics.map((topic) => ({ label: topic.name, value: topic.id })), "Select a topic");
+    const savedGrade = formatGrade(sessionStorage.getItem(PRACTICE_SESSION_KEYS.grade) || $("#practiceGrade").value || state.grade);
+    const preferredTopicId = savedGrade === grade
+      ? $("#practiceTopic").value || sessionStorage.getItem(PRACTICE_SESSION_KEYS.topic) || ""
+      : "";
+    if (preferredTopicId && topics.some((topic) => String(topic.id) === String(preferredTopicId))) {
+      topicSelect.value = String(preferredTopicId);
+      const preferredSubtopicId = $("#practiceSubtopic").value || sessionStorage.getItem(PRACTICE_SESSION_KEYS.subtopic) || "";
+      await loadLessonSubtopics(grade, preferredTopicId, { preferredSubtopicId, autoLoad: Boolean(preferredSubtopicId) });
+    } else {
+      setStatus($("#lessonStatus"), topics.length ? "Choose a topic, then a subtopic, to load one lesson video." : "No topics are available for Grade " + grade + ".", topics.length ? "" : "error");
+    }
+  } catch (error) {
+    if (selectionRequestId === state.lessonSelectionRequestId) setStatus($("#lessonStatus"), error.message, "error");
+  }
+}
+
+async function loadLessonSubtopics(grade, topicId, { preferredSubtopicId = "", autoLoad = false } = {}) {
+  clearLessonPlayer();
+  const selectionRequestId = ++state.lessonSelectionRequestId;
+  const topicSelect = $("#lessonTopic");
+  const subtopicSelect = $("#lessonSubtopic");
+  state.lessonSubtopics = [];
+  replaceOptions(subtopicSelect, [], topicId ? "Loading subtopics…" : "Choose a topic first");
+  if (!topicId) {
+    setStatus($("#lessonStatus"), "Choose a topic, then a subtopic, to load one lesson video.");
+    return;
+  }
+  const topic = state.lessonTopics.find((item) => String(item.id) === String(topicId));
+  setStatus($("#lessonStatus"), "Loading subtopics for " + (topic?.name || "this topic") + "…");
+  try {
+    const subtopics = await getJson(`/api/education/math-question-bank/subtopics?grade=${formatGrade(grade)}&topic_id=${encodeURIComponent(topicId)}`);
+    if (selectionRequestId !== state.lessonSelectionRequestId || topicSelect.value !== String(topicId) || grade !== formatGrade($("#lessonGrade").value)) return;
+    state.lessonSubtopics = Array.isArray(subtopics) ? subtopics : [];
+    replaceOptions(subtopicSelect, state.lessonSubtopics.map((item) => ({ label: lessonSubtopicName(item), value: lessonSubtopicValue(item) })), "Select a subtopic");
+    const preferred = String(preferredSubtopicId || "");
+    if (preferred && state.lessonSubtopics.some((item) => lessonSubtopicValue(item) === preferred)) {
+      subtopicSelect.value = preferred;
+      if (autoLoad) {
+        const selected = state.lessonSubtopics.find((item) => lessonSubtopicValue(item) === preferred);
+        await playLessonVideo(grade, topic, selected);
+        return;
+      }
+    }
+    setStatus($("#lessonStatus"), state.lessonSubtopics.length
+      ? "Select a subtopic to load its lesson video. Only that video will be requested."
+      : "No subtopics are available for this topic.", state.lessonSubtopics.length ? "" : "");
+  } catch (error) {
+    if (selectionRequestId === state.lessonSelectionRequestId) {
+      replaceOptions(subtopicSelect, [], "Subtopics could not be loaded");
+      setStatus($("#lessonStatus"), error.message, "error");
+    }
+  }
+}
+
+function lessonPlaybackSource(video) {
+  const playbackUrl = String(video?.playback_url || video?.url || "");
+  if (!playbackUrl) throw new Error("No lesson video is available for this subtopic yet.");
+  const base = playbackUrl.startsWith("/api/") ? API_BASE_URL : window.location.href;
+  const url = new URL(playbackUrl, base);
+  const pathVideoId = url.pathname.match(/\/(?:play|stream)\/([^/]+)\/?$/)?.[1] || "";
+  const videoId = String(video.video_id || video.asset_id || url.searchParams.get("video_id") || pathVideoId || "");
+  const token = String(video.token || video.playback_token || url.searchParams.get("token") || "");
+  if (videoId && token) {
+    const streamUrl = new URL(`/api/lesson-videos/stream/${encodeURIComponent(videoId)}`, API_BASE_URL);
+    streamUrl.searchParams.set("token", token);
+    return { type: "video", url: streamUrl.href };
+  }
+  return { type: "embed", url: url.href };
+}
+
+async function playLessonVideo(grade, topic, lesson, { retryCount = 0, resumeAt = 0, resumePlayback = false } = {}) {
+  if (!topic || !lesson) return;
+  state.lessonVideoController?.abort();
+  const controller = new AbortController();
+  state.lessonVideoController = controller;
+  const requestId = ++state.lessonVideoRequestId;
+  const params = new URLSearchParams({
+    grade: String(grade),
+    topic: topic.name || topic.topic || "Mathematics",
+    subtopic: lessonSubtopicName(lesson) || "Lesson",
+    unit_id: lessonSubtopicId(lesson),
+  });
+  setStatus($("#lessonStatus"), retryCount ? "Refreshing the lesson connection…" : "Loading the selected lesson video…");
+  try {
+    const result = await getJson("/api/lesson-videos/mathematics/video?" + params, { signal: controller.signal });
+    if (requestId !== state.lessonVideoRequestId) return;
     const video = result.video || {};
+    const source = lessonPlaybackSource(video);
     const player = $("#lessonPlayer");
     player.replaceChildren();
     const heading = document.createElement("h2");
-    const videoTitle = video.title || lesson.title;
+    const videoTitle = video.title || lessonSubtopicName(lesson) || "Mathematics lesson";
     renderMath(heading, videoTitle);
-    const frame = document.createElement("iframe");
-    frame.title = videoTitle;
-    frame.src = video.playback_url;
-    frame.allow = "autoplay; fullscreen; picture-in-picture";
-    frame.allowFullscreen = true;
-    player.append(heading, frame);
+    if (source.type === "video") {
+      const media = document.createElement("video");
+      media.controls = true;
+      media.playsInline = true;
+      media.preload = "metadata";
+      media.setAttribute("aria-label", videoTitle);
+      let retryScheduled = false;
+      let stallTimer = 0;
+      const refreshPlayback = () => {
+        if (requestId !== state.lessonVideoRequestId || !player.contains(media)) return;
+        if (retryScheduled || retryCount >= 2) {
+          setStatus($("#lessonStatus"), "The lesson connection was interrupted. Select this subtopic again to retry.", "error");
+          return;
+        }
+        retryScheduled = true;
+        clearTimeout(stallTimer);
+        const currentTime = Number(media.currentTime) || 0;
+        const wasPlaying = !media.paused || media.ended;
+        setStatus($("#lessonStatus"), "The video stream paused. Refreshing its playback link…");
+        window.setTimeout(() => {
+          void playLessonVideo(grade, topic, lesson, { retryCount: retryCount + 1, resumeAt: currentTime, resumePlayback: wasPlaying });
+        }, 500);
+      };
+      media.addEventListener("error", refreshPlayback);
+      media.addEventListener("playing", () => {
+        clearTimeout(stallTimer);
+        stallTimer = 0;
+      });
+      media.addEventListener("waiting", () => {
+        if (!media.currentTime || media.paused) return;
+        clearTimeout(stallTimer);
+        stallTimer = window.setTimeout(() => {
+          if (!media.paused && !media.ended) refreshPlayback();
+        }, 8_000);
+      });
+      media.addEventListener("timeupdate", () => {
+        if (stallTimer && !media.paused) {
+          clearTimeout(stallTimer);
+          stallTimer = 0;
+        }
+      });
+      media.addEventListener("ended", () => {
+        if (Number.isFinite(media.duration) && media.duration > 4 && media.currentTime < media.duration - 1) refreshPlayback();
+      });
+      media.addEventListener("loadedmetadata", () => {
+        if (resumeAt > 0 && Number.isFinite(media.duration)) media.currentTime = Math.min(resumeAt, Math.max(0, media.duration - 0.25));
+        if (resumePlayback) void media.play().catch(() => {});
+      }, { once: true });
+      media.src = source.url;
+      player.append(heading, media);
+    } else {
+      const frame = document.createElement("iframe");
+      frame.title = videoTitle;
+      frame.src = source.url;
+      frame.allow = "autoplay; fullscreen; picture-in-picture; encrypted-media";
+      frame.allowFullscreen = true;
+      frame.loading = "eager";
+      player.append(heading, frame);
+    }
     player.hidden = false;
     player.scrollIntoView({ behavior: "smooth", block: "start" });
-  } catch (error) { showToast(error.message); }
-  finally { button.disabled = false; }
+    setStatus($("#lessonStatus"), "Loaded: " + videoTitle, "success");
+  } catch (error) {
+    if (error?.name !== "AbortError" && requestId === state.lessonVideoRequestId) setStatus($("#lessonStatus"), error.message, "error");
+  }
 }
+
+$("#lessonGrade").addEventListener("change", () => {
+  $("#globalGrade").value = $("#lessonGrade").value;
+  $("#practiceGrade").value = $("#lessonGrade").value;
+  $("#examGrade").value = $("#lessonGrade").value;
+  state.grade = formatGrade($("#lessonGrade").value);
+  sessionStorage.setItem("sharperx_web_grade", String(state.grade));
+  state.lessonTopics = [];
+  state.lessonSubtopics = [];
+  state.lessonTopicGrade = "";
+  renderSourceLinks();
+  void loadLessons({ force: true });
+});
+
+$("#lessonTopic").addEventListener("change", (event) => {
+  void loadLessonSubtopics(formatGrade($("#lessonGrade").value), event.currentTarget.value);
+});
+
+$("#lessonSubtopic").addEventListener("change", (event) => {
+  const topic = state.lessonTopics.find((item) => String(item.id) === $("#lessonTopic").value);
+  const subtopic = state.lessonSubtopics.find((item) => lessonSubtopicValue(item) === event.currentTarget.value);
+  clearLessonPlayer();
+  if (topic && subtopic) void playLessonVideo(formatGrade($("#lessonGrade").value), topic, subtopic);
+  else setStatus($("#lessonStatus"), "Choose a topic and subtopic to load one lesson video.");
+});
 renderSourceLinks();
 
 const deviceRemoteButton = $("#deviceRemoteButton");
@@ -3499,6 +3670,9 @@ let phoneCanvasConnected = false;
 let phoneCanvasSubmissionSentUntil = 0;
 let phoneCanvasHeartbeat = 0;
 let phoneCanvasCloseTimer = 0;
+let phoneCanvasReconnectTimer = 0;
+let phoneCanvasReconnectAttempts = 0;
+let phoneCanvasStableTimer = 0;
 
 function canvasSupportsDirectInput() {
   const touchPoints = Number(navigator.maxTouchPoints || navigator.msMaxTouchPoints || 0);
@@ -3849,6 +4023,11 @@ function applyPhoneCanvasMessage(message) {
 function stopPhoneCanvas({ notify = true } = {}) {
   clearTimeout(phoneCanvasCloseTimer);
   phoneCanvasCloseTimer = 0;
+  clearTimeout(phoneCanvasReconnectTimer);
+  phoneCanvasReconnectTimer = 0;
+  clearTimeout(phoneCanvasStableTimer);
+  phoneCanvasStableTimer = 0;
+  phoneCanvasReconnectAttempts = 0;
   clearInterval(phoneCanvasHeartbeat);
   phoneCanvasHeartbeat = 0;
   if (notify) deviceRemoteSend({ type: "canvas_unavailable" });
@@ -3867,6 +4046,66 @@ function stopPhoneCanvas({ notify = true } = {}) {
   syncCanvasInputMode();
   $("#usePhoneCanvas").disabled = false;
   phoneCanvasSetStatus("Phone connection closed.");
+}
+
+function connectPhoneCanvasSocket(session) {
+  clearTimeout(phoneCanvasReconnectTimer);
+  phoneCanvasReconnectTimer = 0;
+  const button = $("#usePhoneCanvas");
+  const socketUrl = pairingWebSocketUrl("canvas-pairing", session.session_id);
+  socketUrl.searchParams.set("role", "host");
+  const socket = new WebSocket(socketUrl);
+  phoneCanvasSocket = socket;
+  const isCurrentSocket = () => phoneCanvasSession === session && phoneCanvasSocket === socket;
+  socket.addEventListener("open", () => {
+    if (!isCurrentSocket()) return socket.close();
+    socket.send(JSON.stringify({ type: "authenticate", token: session.host_token }));
+    clearTimeout(phoneCanvasStableTimer);
+    phoneCanvasStableTimer = window.setTimeout(() => {
+      if (isCurrentSocket()) phoneCanvasReconnectAttempts = 0;
+      phoneCanvasStableTimer = 0;
+    }, 30_000);
+    clearInterval(phoneCanvasHeartbeat);
+    phoneCanvasHeartbeat = setInterval(() => phoneCanvasSend({ type: "ping" }), 30_000);
+    phoneCanvasSetStatus(isLocalIntranetPage() ? "Waiting for your phone on this Wi-Fi…" : "Waiting for your phone…");
+    button.disabled = false;
+  });
+  socket.addEventListener("message", (event) => {
+    if (!isCurrentSocket()) return;
+    try { applyPhoneCanvasMessage(JSON.parse(event.data)); } catch { /* Ignore malformed remote updates. */ }
+  });
+  socket.addEventListener("close", (event) => {
+    if (!isCurrentSocket()) return;
+    clearInterval(phoneCanvasHeartbeat);
+    phoneCanvasHeartbeat = 0;
+    clearTimeout(phoneCanvasStableTimer);
+    phoneCanvasStableTimer = 0;
+    phoneCanvasSocket = null;
+    setPhoneCanvasConnected(false);
+    button.disabled = false;
+    // These close codes mean the session is invalid or another host socket
+    // replaced this one. Retrying cannot restore it.
+    if ([1008, 4001, 4002].includes(event.code)) {
+      phoneCanvasSession = null;
+      phoneCanvasSetStatus("The phone connection expired. Tap Use phone to create a new code.", "error");
+      return;
+    }
+    if (phoneCanvasReconnectAttempts >= 12) {
+      phoneCanvasSession = null;
+      phoneCanvasSetStatus("Could not restore the phone connection. Tap Use phone to create a new code.", "error");
+      return;
+    }
+    const delay = Math.min(10_000, 750 * (2 ** Math.min(phoneCanvasReconnectAttempts, 4)));
+    phoneCanvasReconnectAttempts += 1;
+    phoneCanvasSetStatus("Connection interrupted. Reconnecting to your phone…");
+    phoneCanvasReconnectTimer = window.setTimeout(() => {
+      phoneCanvasReconnectTimer = 0;
+      if (phoneCanvasSession === session && !phoneCanvasSocket) connectPhoneCanvasSocket(session);
+    }, delay);
+  });
+  socket.addEventListener("error", () => {
+    if (isCurrentSocket()) phoneCanvasSetStatus("Phone connection interrupted. Reconnecting…");
+  });
 }
 
 async function startPhoneCanvas() {
@@ -3896,31 +4135,8 @@ async function startPhoneCanvas() {
     renderPhoneCanvasQr(remoteUrl.href);
     deviceRemoteSend({ type: "canvas_link", href: remoteUrl.href });
 
-    const socketUrl = pairingWebSocketUrl("canvas-pairing", session.session_id);
-    socketUrl.searchParams.set("role", "host");
-    phoneCanvasSocket = new WebSocket(socketUrl);
-    phoneCanvasSocket.addEventListener("open", () => {
-      phoneCanvasSocket.send(JSON.stringify({ type: "authenticate", token: session.host_token }));
-      clearInterval(phoneCanvasHeartbeat);
-      phoneCanvasHeartbeat = setInterval(() => phoneCanvasSend({ type: "ping" }), 30_000);
-      phoneCanvasSetStatus(isLocalIntranetPage() ? "Waiting for your phone on this Wi-Fi…" : "Waiting for your phone…");
-      button.disabled = false;
-    });
-    phoneCanvasSocket.addEventListener("message", (event) => {
-      try { applyPhoneCanvasMessage(JSON.parse(event.data)); } catch { /* Ignore malformed remote updates. */ }
-    });
-    phoneCanvasSocket.addEventListener("close", () => {
-      clearInterval(phoneCanvasHeartbeat);
-      phoneCanvasHeartbeat = 0;
-      if (phoneCanvasSession) {
-        phoneCanvasSetStatus("Connection ended before the phone joined. Your code is still available; tap Use phone to try again.", "error");
-      }
-      phoneCanvasSession = null;
-      setPhoneCanvasConnected(false);
-      phoneCanvasSocket = null;
-      button.disabled = false;
-    });
-    phoneCanvasSocket.addEventListener("error", () => phoneCanvasSetStatus("Could not connect to your phone. Check that both devices are on the same Wi-Fi and try again.", "error"));
+    phoneCanvasReconnectAttempts = 0;
+    connectPhoneCanvasSocket(session);
   } catch (error) {
     phoneCanvasSetStatus(error.message || "Could not start a phone connection.", "error");
     phoneCanvasSession = null;
@@ -4261,17 +4477,19 @@ async function captureCanvasRegionSnapshot(region) {
   const width = right - left;
   const height = bottom - top;
   if (width < 2 || height < 2) throw new Error("The selected area is too small. Draw a larger box around the work.");
+  const scale = Math.min(1, 2200 / Math.max(width, height));
   const crop = document.createElement("canvas");
-  crop.width = width;
-  crop.height = height;
+  crop.width = Math.max(1, Math.round(width * scale));
+  crop.height = Math.max(1, Math.round(height * scale));
   const context = crop.getContext("2d", { alpha: false });
   if (!context) throw new Error("The selected area could not be prepared.");
   context.fillStyle = "#ffffff";
-  context.fillRect(0, 0, width, height);
-  context.drawImage(workingCanvas, left, top, width, height, 0, 0, width, height);
+  context.fillRect(0, 0, crop.width, crop.height);
+  context.drawImage(workingCanvas, left, top, width, height, 0, 0, crop.width, crop.height);
   const snapshotPromise = new Promise((resolve, reject) => crop.toBlob(
     (blob) => blob ? resolve(blob) : reject(new Error("The selected area could not be prepared.")),
-    "image/png",
+    "image/jpeg",
+    0.9,
   ));
   region.snapshotPromise = snapshotPromise;
   try {
@@ -4412,20 +4630,23 @@ async function ensureCanvasPhoto(canvas, revision, onProgress = null) {
     // recognition service receives the same clear paper-like image a learner
     // would upload as a handwriting photo.
     const exportCanvas = document.createElement("canvas");
-    exportCanvas.width = workingCanvas.width;
-    exportCanvas.height = workingCanvas.height;
+    const maxEdge = 2200;
+    const scale = Math.min(1, maxEdge / Math.max(workingCanvas.width, workingCanvas.height));
+    exportCanvas.width = Math.max(1, Math.round(workingCanvas.width * scale));
+    exportCanvas.height = Math.max(1, Math.round(workingCanvas.height * scale));
     const exportContext = exportCanvas.getContext("2d", { alpha: false });
     if (!exportContext) throw new Error("The canvas image could not be created.");
     exportContext.fillStyle = "#ffffff";
     exportContext.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
-    exportContext.drawImage(workingCanvas, 0, 0);
+    exportContext.drawImage(workingCanvas, 0, 0, exportCanvas.width, exportCanvas.height);
     const blob = await new Promise((resolve, reject) => exportCanvas.toBlob(
       (value) => value ? resolve(value) : reject(new Error("The canvas image could not be created.")),
-      "image/png",
+      "image/jpeg",
+      0.9,
     ));
     assertCanvasSnapshotCurrent(canvas, revision);
-    const file = new File([blob], "sharpertime-canvas-" + Date.now() + ".png", { type: "image/png" });
-    const uploadContext = canvas.mode.startsWith("practice") ? "practice" : canvas.mode.startsWith("exam") ? "exam" : "ask";
+    const file = new File([blob], "sharpertime-canvas-" + Date.now() + ".jpg", { type: "image/jpeg" });
+    const uploadContext = (state.canvasContext || "").startsWith("practice") ? "practice" : (state.canvasContext || "").startsWith("exam") ? "exam" : "ask";
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 45_000);
     try {
@@ -4499,7 +4720,7 @@ async function uploadCanvasRegionCrop(photo, region, signal, revision) {
   assertCanvasSnapshotCurrent(state.canvas, revision);
   const blob = region.snapshotBlob || await captureCanvasRegionSnapshot(region);
   if (!blob) throw new Error("The selected image area is no longer available. Please select it again.");
-  const file = new File([blob], `sharpertime-${region.kind}-${Date.now()}.png`, { type: "image/png" });
+  const file = new File([blob], "sharpertime-" + region.kind + "-" + Date.now() + ".jpg", { type: "image/jpeg" });
   const form = new FormData();
   form.set("photo_type", "school_answer_working");
   form.set("photo", file, file.name);

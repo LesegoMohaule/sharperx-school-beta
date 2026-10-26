@@ -12,9 +12,11 @@ The platform is launching soon. Registration and paid access are currently close
 
 Open https://sharperx.co.za/app/ after the website is deployed. The responsive Progressive Web App supports desktop browsers, Android phones and tablets, and iPhone/iPad browsers. Learners can sign in with their existing SharperTime account, use Ask, load question-bank practice for Grades 8–12, generate guided or strict test/exam sessions, browse available lesson videos, upload a paper and select a question, write on the canvas, and save PDF reports on the current device.
 
-The question bank, marking, paper OCR/snapshots, lesson catalog and AI requests stay on the existing SharperTime API. The browser contains no AI key. Offline mode caches the app shell only; authenticated learning features need a network connection. From any writing canvas, choose **Use phone** to pair a signed-in phone with a short-lived code or QR scan; phone strokes appear on the computer canvas live, and **Submit canvas** attaches the work to the current answer. Phone pairing uses the authenticated `/api/canvas-pairing` service and requires the updated backend to be deployed.
+The question bank, marking, paper OCR/snapshots, lesson catalog, speech transcription and tutor requests stay on the existing SharperTime API. The browser contains no AI key. Offline mode caches the app shell only; authenticated learning features need a network connection. From any writing canvas, choose **Use phone** to pair a signed-in phone with a short-lived code or QR scan; phone strokes appear on the computer canvas live, and **Submit canvas** attaches the work to the current answer. Phone pairing uses the authenticated `/api/canvas-pairing` service and requires the updated backend to be deployed.
 
-The API CORS policy must allow https://sharperx.co.za and https://www.sharperx.co.za before the custom-domain app can call it. GitHub Pages hosting must also be enabled for this repository before the updated site is publicly served.
+Ask and Practice now include Pipecat SmallWebRTC live tutoring. Pipecat runs on the Ubuntu server behind `/voice/` on the existing API hostname; the static app contains the browser client. The service forwards audio segments and tutor turns through SharperTime's authenticated API. Tutor replies use the voice installed on each learner's device and remain visible as captions. Math notation is converted to spoken wording. The service does not store audio recordings, add an AI provider key, or mark a spoken Practice answer. Replies are turn-based because the existing tutor API returns complete responses. The deployment guide configures self-hosted coturn with short-lived credentials for networks that block direct WebRTC.
+
+GitHub Pages is disabled for now. The local intranet server serves the learner app on the A013G hotspot at http://192.168.43.13:5501/app/ (the host address can change when it reconnects). On the host PC, use http://localhost:5501/app/ for browser microphone access. Other hotspot devices need trusted HTTPS before browser microphone access is available.
 
 ## Public evidence pages
 
@@ -36,6 +38,10 @@ The account flow retains the PayFast checkout integration for Grade 12 Mathemati
 ## Local preview
 
 ```powershell
+cd app
+npm install
+npm run build
+cd ..
 python -m http.server 5500 --bind 127.0.0.1
 ```
 

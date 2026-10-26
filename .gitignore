@@ -1,0 +1,6 @@
+__pycache__/
+**/__pycache__/
+node_modules/
+**/node_modules/
+voice-service/.env
+voice-service/.venv/

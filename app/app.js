@@ -103,12 +103,14 @@ const state = {
   creditRefreshInterval: 0,
   sessionHeartbeatInterval: 0,
   sessionHeartbeatInFlight: false,
-  sessionHeartbeatFailures: 0,
+  networkMonitorInterval: 0,
+  apiReachabilityFailures: 0,
 };
 
 const dbPromise = openReportsDatabase();
 let paperCatalogPromise = null;
 let activePaperCatalog = { grade: 12, source: "stanmore", entries: [], newestFirst: true };
+let apiReachabilityProbe = null;
 
 function setStatus(element, text, kind = "") {
   if (!element) return;
@@ -172,6 +174,7 @@ function showWorkspace() {
   document.documentElement.classList.remove("checking-session");
   updatePrimarySessionStatus();
   startSessionHeartbeat();
+  startNetworkMonitor();
   $("#accountLabel").textContent = state.user?.full_name || state.user?.email || "";
   void refreshAiCreditBalance();
   if (!state.creditRefreshInterval) {
@@ -278,6 +281,7 @@ function clearPracticeSessionSelection() {
 
 function showAuth() {
   stopSessionHeartbeat();
+  stopNetworkMonitor();
   $("#workspace").hidden = true;
   $("#authScreen").hidden = false;
   document.documentElement.classList.remove("checking-session");
@@ -294,50 +298,80 @@ function updatePrimarySessionStatus(message = "") {
   status.setAttribute("aria-label", message || `Signed in and active on this ${label}`);
 }
 
+function checkApiReachability() {
+  if (!navigator.onLine) return Promise.resolve(false);
+  if (apiReachabilityProbe) return apiReachabilityProbe;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 5_000);
+  apiReachabilityProbe = fetch(`${API_BASE_URL}/api/health`, {
+    method: "GET",
+    cache: "no-store",
+    signal: controller.signal,
+  }).then(() => true).catch(() => false).finally(() => {
+    clearTimeout(timeout);
+    apiReachabilityProbe = null;
+  });
+  return apiReachabilityProbe;
+}
+
+function showConnectionInterrupted() {
+  const message = "Connection interrupted · Check Wi-Fi or mobile data";
+  if (state.user) updatePrimarySessionStatus(message);
+  else if (getAccessToken()) setStatus($("#loginStatus"), message, "error");
+}
+
+function recordApiReachability(reachable) {
+  if (!state.user) return;
+  if (reachable) {
+    state.apiReachabilityFailures = 0;
+    if (($("#primarySessionStatus")?.textContent || "").startsWith("Connection interrupted")) {
+      updatePrimarySessionStatus();
+    }
+    return;
+  }
+  state.apiReachabilityFailures += 1;
+  if (!navigator.onLine || state.apiReachabilityFailures >= 2) showConnectionInterrupted();
+}
+
+function startNetworkMonitor() {
+  if (!state.user) return;
+  clearInterval(state.networkMonitorInterval);
+  const check = async () => recordApiReachability(await checkApiReachability());
+  void check();
+  state.networkMonitorInterval = window.setInterval(check, 30_000);
+}
+
+function stopNetworkMonitor() {
+  clearInterval(state.networkMonitorInterval);
+  state.networkMonitorInterval = 0;
+  state.apiReachabilityFailures = 0;
+}
+
 function startSessionHeartbeat() {
   if (!getAccessToken() || !state.user) return;
-  state.sessionHeartbeatFailures = 0;
   const sendHeartbeat = async () => {
     if (!state.user || !getAccessToken() || state.sessionHeartbeatInFlight) return;
     state.sessionHeartbeatInFlight = true;
     try {
-      let heartbeatError = null;
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-          await postJson("/api/auth/heartbeat", {}, { timeoutMs: 8_000 });
-          heartbeatError = null;
-          break;
-        } catch (error) {
-          heartbeatError = error;
-          if (error?.status === 401 || attempt === 1) break;
-          await new Promise((resolve) => window.setTimeout(resolve, 900));
-          if (!state.user || !getAccessToken()) return;
-        }
-      }
-      if (heartbeatError) throw heartbeatError;
-      state.sessionHeartbeatFailures = 0;
-      updatePrimarySessionStatus();
-    } catch (error) {
-      if (error?.status !== 401) {
-        state.sessionHeartbeatFailures += 1;
-        // A single transient heartbeat failure should not make an active
-        // long-running tutor request look disconnected.
-        if (state.sessionHeartbeatFailures >= 2) updatePrimarySessionStatus("Connection interrupted · reconnecting");
-      }
+      // Heartbeats are advisory. A missed or rate-limited heartbeat does not
+      // mean the learner lost internet access or was signed out. A 401 still
+      // dispatches the normal auth-expired event from api.js.
+      await postJson("/api/auth/heartbeat", {}, { timeoutMs: 8_000 });
+    } catch {
+      // Connectivity is checked independently; heartbeat failures stay quiet.
     } finally {
       state.sessionHeartbeatInFlight = false;
     }
   };
   clearInterval(state.sessionHeartbeatInterval);
   void sendHeartbeat();
-  state.sessionHeartbeatInterval = window.setInterval(sendHeartbeat, 15_000);
+  state.sessionHeartbeatInterval = window.setInterval(sendHeartbeat, 60_000);
 }
 
 function stopSessionHeartbeat() {
   clearInterval(state.sessionHeartbeatInterval);
   state.sessionHeartbeatInterval = 0;
   state.sessionHeartbeatInFlight = false;
-  state.sessionHeartbeatFailures = 0;
 }
 
 async function checkSession() {
@@ -347,9 +381,16 @@ async function checkSession() {
     const welcomeMessage = showWorkspace();
     playTutorWelcome(welcomeMessage);
   } catch (error) {
-    setAccessToken("");
     showAuth();
-    setStatus($("#loginStatus"), error.message || "Could not restore your session. Sign in again.", "error");
+    if (error?.status === 401 || !getAccessToken()) {
+      setAccessToken("");
+      setStatus($("#loginStatus"), error.message || "Your session has ended. Sign in again.", "error");
+      return;
+    }
+    const reachable = await checkApiReachability();
+    setStatus($("#loginStatus"), reachable
+      ? "Could not verify your session. Please try again."
+      : "Connection interrupted · Check Wi-Fi or mobile data", "error");
   }
 }
 
@@ -374,10 +415,18 @@ window.addEventListener("storage", (event) => {
 });
 
 window.addEventListener("offline", () => {
-  if (state.user) updatePrimarySessionStatus("Connection lost · reconnecting");
+  showConnectionInterrupted();
 });
 window.addEventListener("online", () => {
-  if (state.user) startSessionHeartbeat();
+  void checkApiReachability().then((reachable) => {
+    if (state.user) {
+      recordApiReachability(reachable);
+      if (reachable) startSessionHeartbeat();
+    } else if (getAccessToken()) {
+      if (reachable) void checkSession();
+      else showConnectionInterrupted();
+    }
+  });
 });
 
 $("#loginForm").addEventListener("submit", async (event) => {
@@ -2999,7 +3048,7 @@ function lessonSubtopicName(subtopic) {
 }
 
 function lessonSubtopicId(subtopic) {
-  return String(subtopic?.video_unit_id || subtopic?.unit_id || subtopic?.lesson_id || subtopic?.video_id || subtopic?.subtopic_id || subtopic?.id || lessonSubtopicName(subtopic));
+  return String(subtopic?.video_unit_id || subtopic?.unit_id || subtopic?.lesson_video_id || subtopic?.video_lesson_id || subtopic?.lesson_id || subtopic?.video_id || subtopic?.subtopic_id || subtopic?.id || lessonSubtopicName(subtopic));
 }
 
 function lessonSubtopicValue(subtopic) {
@@ -3129,7 +3178,7 @@ async function playLessonVideo(grade, topic, lesson, { retryCount = 0, resumeAt 
       const refreshPlayback = () => {
         if (requestId !== state.lessonVideoRequestId || !player.contains(media)) return;
         if (retryScheduled || retryCount >= 2) {
-          setStatus($("#lessonStatus"), "The lesson connection was interrupted. Select this subtopic again to retry.", "error");
+          setStatus($("#lessonStatus"), "This video could not resume. Select the subtopic to try again.", "error");
           return;
         }
         retryScheduled = true;
@@ -3181,7 +3230,10 @@ async function playLessonVideo(grade, topic, lesson, { retryCount = 0, resumeAt 
     player.scrollIntoView({ behavior: "smooth", block: "start" });
     setStatus($("#lessonStatus"), "Loaded: " + videoTitle, "success");
   } catch (error) {
-    if (error?.name !== "AbortError" && requestId === state.lessonVideoRequestId) setStatus($("#lessonStatus"), error.message, "error");
+    if (error?.name === "AbortError" || requestId !== state.lessonVideoRequestId) return;
+    setStatus($("#lessonStatus"), error?.status === 404
+      ? "No lesson video is linked to this subtopic yet."
+      : error.message, "error");
   }
 }
 

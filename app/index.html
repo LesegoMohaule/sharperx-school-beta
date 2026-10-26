@@ -393,9 +393,9 @@
       var appScript = document.createElement("script");
       if (supportsModules && supportsModernSyntax) {
         appScript.type = "module";
-        appScript.src = "./app.bundle.js?v=62";
+        appScript.src = "./app.bundle.js?v=64";
       } else {
-        appScript.src = "./legacy-app.js?v=68";
+        appScript.src = "./legacy-app.js?v=70";
       }
       appScript.onload = function () {
         loginButton.disabled = false;

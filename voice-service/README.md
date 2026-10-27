@@ -1,28 +1,12 @@
 # SharperTime live tutoring voice service
 
-This FastAPI service runs beside SharperTime's existing API on the Ubuntu server. It keeps Pipecat's SmallWebRTC transport and VAD, sends short in-memory audio segments to language-selected speech recognition, and sends recognized turns to the existing tutor endpoint. English and additional languages supplied by the device continue to use SharperTime's existing transcription endpoint. The nine South African languages listed below use local, open-source recognition models.
+This FastAPI service runs beside SharperTime's existing API on the Ubuntu server. It keeps Pipecat's SmallWebRTC transport and VAD, sends short in-memory audio segments to SharperTime's English transcription endpoint, and sends recognized turns to the English tutor endpoint.
 
-The web app keeps its current device voice selector and adds a tutor-language selector. The language selector contains the existing device voice languages plus the nine local-model languages. Tutor instructions request ordinary explanations in the selected language while keeping mathematical terms, number words inside equations, operators, and spoken equations in English. The browser uses an installed device voice matching the selected language when one is available.
+The web app offers English tutor replies and filters its voice selector to English voices installed on the learner's device. Tutor speech uses the device's English text-to-speech voice.
 
 The browser reads tutor replies with the voice installed on the learner's phone or computer. Pipecat sends reply text and captions over its WebRTC data channel; browser SpeechSynthesis speaks the math-normalized text. The voice service combines consecutive VAD transcript segments and waits for 0.9 seconds without another segment before sending the learner's turn to the tutor, so short thinking pauses do not trigger an early reply. The tutor API returns a completed turn, so the learner hears each reply after that response completes. It is a live, turn-based conversation, not token-by-token streamed speech.
 
-## South African language speech recognition
-
-The local routes are selected by the requested locale:
-
-- Afrikaans uses `digiphyte/fluister-turbo` (MIT), an int8 faster-whisper model.
-- isiZulu, isiXhosa, Sesotho, Setswana, isiNdebele, Tshivenda, and XiTsonga use `digiphyte/swivuriso-turbo` (MIT), an int8 CTranslate2 conversion of DSFSI's MIT `za-anv-multilingual-whisper-v3-turbo` weights. The model uses language auto-detection for this seven-language set.
-- Sepedi uses Meta's `omniASR_CTC_300M` in the int8 Sherpa-ONNX export (Apache-2.0). The CTC model does not take a language hint.
-
-The two Whisper checkpoints are pinned to repository revisions in `local_asr.py`. The Sepedi model is downloaded into `/opt/sharpertime-voice/models/omnilingual-300m-ctc-int8`. The service loads one local recognizer at a time to limit RAM use; its model cache persists on disk. Install dependencies and model files before restarting the service:
-
-```bash
-sudo /opt/sharpertime-voice/.venv/bin/pip install -r /path/to/sharperx-school-beta/voice-service/requirements.txt
-sudo /path/to/sharperx-school-beta/voice-service/download-asr-models.sh
-sudo systemctl restart sharpertime-voice.service
-```
-
-The selected routes cover nine South African official languages beyond English. The selector only offers languages covered by these routes or by an installed device voice.
+The service accepts English locales only. Other locale values are rejected when starting a live tutor session.
 
 Raw audio and full transcripts are not written to disk or logged by this service. A learner's bearer token is validated before a short-lived, single-use WebRTC session token is issued. The verified learner bearer remains in memory only for the active session and is used when forwarding transcription and tutor requests.
 
@@ -47,6 +31,16 @@ source .env
 set +a
 uvicorn server:app --host 127.0.0.1 --port 7860 --workers 1 --no-access-log
 ```
+
+### Remove previously installed language models
+
+After replacing the deployed voice-service files with this English-only version, run the cleanup script as root:
+
+```bash
+sudo bash /opt/sharpertime-voice/remove-non-english-asr.sh
+```
+
+It verifies that the deployed `server.py` no longer imports local ASR, stops the service, removes only the known Fluister, Swivuriso, and Omnilingual model directories plus the service's dedicated Hugging Face cache, uninstalls the ASR runtime packages, then starts the service again. It leaves unrelated files in the model directory untouched.
 
 Add an HTTPS reverse-proxy location on the existing API hostname. The app defaults to `https://api.46.225.173.118.nip.io/voice`, and this configuration strips `/voice/` before forwarding to FastAPI:
 

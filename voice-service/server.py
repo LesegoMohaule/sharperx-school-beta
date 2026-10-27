@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 import httpx
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -43,32 +43,14 @@ from pipecat.transports.smallwebrtc.request_handler import (
 from pipecat.transports.smallwebrtc.transport import SmallWebRTCTransport
 from pipecat.workers.runner import WorkerRunner
 
-from local_asr import supports_language, transcribe_local_audio
-
-
 API_BASE_URL = os.getenv("SHARPERTIME_API_BASE_URL", "https://api.46.225.173.118.nip.io").rstrip("/")
 SESSION_TTL_SECONDS = 180
 MAX_TURNS_PER_SESSION = 40
 MAX_SESSION_STARTS_PER_USER_PER_HOUR = 12
 MAX_TURN_TEXT = 1600
 MAX_HISTORY_TURNS = 8
-MAX_ASR_AUDIO_BYTES = 20 * 1024 * 1024
 TURN_END_DEBOUNCE_SECONDS = 0.9
 TURN_CREDENTIAL_TTL_SECONDS = 3 * 60 * 60
-TUTOR_LANGUAGE_NAMES = {
-    "af": "Afrikaans",
-    "nso": "Sepedi",
-    "nr": "isiNdebele",
-    "st": "Sesotho",
-    "tn": "Setswana",
-    "ve": "Tshivenda",
-    "ts": "XiTsonga",
-    "xh": "isiXhosa",
-    "zu": "isiZulu",
-    "en": "English",
-}
-
-
 def _allowed_origins() -> list[str]:
     configured = os.getenv("VOICE_ALLOWED_ORIGINS", "")
     defaults = [
@@ -103,7 +85,6 @@ class VoiceSessionContext(BaseModel):
     model_config = ConfigDict(extra="ignore")
     context_type: Literal["ask", "practice"]
     response_language: str = Field(default="en-ZA", max_length=24)
-    response_language_name: str | None = Field(default=None, max_length=80)
     grade: int = Field(ge=8, le=12)
     topic: str | None = Field(default=None, max_length=240)
     inspection_id: str | None = Field(default=None, max_length=120)
@@ -116,6 +97,14 @@ class VoiceSessionContext(BaseModel):
     question_paper_document_id: str | None = Field(default=None, max_length=80)
     question_paper_question_number: str | None = Field(default=None, max_length=20)
     conversation_history: list[HistoryTurn] = Field(default_factory=list, max_length=8)
+
+    @field_validator("response_language", mode="before")
+    @classmethod
+    def require_english(cls, value: Any) -> str:
+        language_code = str(value or "en-ZA").strip().replace("_", "-").casefold().split("-", 1)[0]
+        if language_code != "en":
+            raise ValueError("English is the only supported tutor language.")
+        return "en-ZA"
 
     @field_validator("conversation_history")
     @classmethod
@@ -292,22 +281,10 @@ class SharperTimeSTTService(SegmentedSTTService):
         if http_client is None:
             return
         try:
-            response_language = self._session.context.response_language
-            if supports_language(response_language):
-                result = await transcribe_local_audio(audio, response_language)
-                text = result["text"]
-                if text:
-                    yield TranscriptionFrame(
-                        text=text[:MAX_TURN_TEXT],
-                        user_id="learner",
-                        timestamp=datetime.now(timezone.utc).isoformat(),
-                        finalized=True,
-                    )
-                return
             response = await http_client.post(
                 f"{API_BASE_URL}/api/education/speech/transcribe",
                 headers={"Authorization": f"Bearer {self._session.access_token}"},
-                data={"language": response_language},
+                data={"language": "en"},
                 files={"audio": ("speech.wav", audio, "audio/wav")},
                 timeout=25,
             )
@@ -330,11 +307,9 @@ def _tutor_request(session: VoiceSession, latest_text: str) -> dict[str, Any]:
     context = session.context
     prior = list(session.history)[-MAX_HISTORY_TURNS:]
     conversation = "\n".join(f"{turn.role.title()}: {turn.text}" for turn in prior)
-    language_code = context.response_language.strip().replace("_", "-").casefold().split("-", 1)[0]
-    language_name = context.response_language_name or TUTOR_LANGUAGE_NAMES.get(language_code, context.response_language)
     instructions = (
-        f"Continue a live mathematics tutoring conversation. Use short, clear spoken sentences in {language_name} for ordinary explanations and guide the learner one step at a time. "
-        "Keep all mathematical terms, number words used in equations, operators, and spoken equations in English. For example, say ‘x squared plus 3 equals 7’ in English even inside a sentence in the learner's language. "
+        "Continue a live mathematics tutoring conversation in English. Use short, clear spoken sentences and guide the learner one step at a time. "
+        "Say mathematical terms, number words, operators, and equations clearly in English. "
         "Ask one brief question when a step is unclear. This voice turn is for tutoring only: do not mark, grade, submit, or claim to have submitted the learner's work."
     )
     details = []
@@ -516,42 +491,6 @@ async def shutdown() -> None:
 @app.get("/healthz")
 async def healthz() -> dict[str, str]:
     return {"status": "ok"}
-
-
-@app.post("/transcribe")
-async def transcribe_local(request: Request, audio: UploadFile = File(...), language: str = Form("en-ZA")) -> dict[str, Any]:
-    _check_origin(request)
-    token = _bearer_token(request)
-    await _api_user(token)
-    if not supports_language(language):
-        raise HTTPException(status_code=422, detail="Local speech recognition is not available for this language yet.")
-    data = await audio.read(MAX_ASR_AUDIO_BYTES + 1)
-    if not data:
-        raise HTTPException(status_code=400, detail="Uploaded audio file is empty.")
-    if len(data) > MAX_ASR_AUDIO_BYTES:
-        raise HTTPException(status_code=413, detail="Audio file is too large for local speech recognition.")
-    try:
-        result = await transcribe_local_audio(data, language)
-    except (ImportError, FileNotFoundError, RuntimeError) as error:
-        if "not installed" in str(error).lower() or isinstance(error, ImportError):
-            raise HTTPException(status_code=503, detail="The selected language model is not installed on the voice server yet.") from error
-        logger.exception("Local speech recognition failed")
-        raise HTTPException(status_code=502, detail="Local speech recognition failed. Please try again.") from error
-    except Exception as error:
-        logger.exception("Local speech recognition failed")
-        raise HTTPException(status_code=502, detail="Local speech recognition failed. Please try again.") from error
-    transcript = result["text"]
-    return {
-        "file_name": audio.filename,
-        "content_type": audio.content_type,
-        "bytes": len(data),
-        "model": result["model"],
-        "language": result["language"],
-        "requested_locale": language,
-        "raw_transcript": transcript,
-        "transcript": transcript,
-        "normalisation": {"math_symbols_applied": False},
-    }
 
 
 @app.post("/session")

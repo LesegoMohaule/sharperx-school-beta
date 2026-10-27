@@ -12,7 +12,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icon.svg">
-  <link rel="stylesheet" href="./styles.css?v=60">
+  <link rel="stylesheet" href="./styles.css?v=73">
   <script>
     try {
       if (/[?&](email|password)=/i.test(window.location.search) && window.history && window.history.replaceState) {
@@ -113,7 +113,7 @@
                 <section class="live-tutor-panel" data-live-panel="ask" aria-label="Live tutor audio controls" hidden>
                   <div class="live-tutor-session-copy"><strong>Live tutor</strong><span data-live-status role="status" aria-live="polite">Connecting status will appear here.</span></div>
                   <label class="live-tutor-language-label">Tutor language<select data-live-language aria-label="Choose the language for tutor replies"></select></label>
-                  <label class="live-tutor-voice-label">Voice on this device<select data-live-voice aria-label="Choose a voice installed on this device"></select></label>
+                  <label class="live-tutor-voice-label">Voice in selected language<select data-live-voice aria-label="Choose a voice in the selected language"></select><small data-live-voice-status role="status" aria-live="polite"></small></label>
                   <div class="live-tutor-actions">
                     <button class="button subtle" data-live-action="mute" type="button" aria-pressed="false">Mute microphone</button>
                     <button class="button subtle" data-live-action="pause-speaking" type="button" disabled>Pause speaking</button>
@@ -145,6 +145,28 @@
 
         <section class="view" data-view-panel="practice" aria-labelledby="practiceTitle" hidden>
           <header class="view-heading"><div><p class="eyebrow">Practice</p><h1 id="practiceTitle">Choose a topic and subtopic</h1><p class="muted">Choose from the topics, subtopics, and questions available for your grade.</p></div></header>
+          <div class="page-tutor-tools" aria-label="Talk to the Practice page tutor">
+            <div class="page-tutor-copy"><strong>Practice tutor</strong><span>You can ask about the question on this page or how to use Practice.</span></div>
+            <button id="practiceLiveTutorButton" class="button secondary live-tutor-launch" data-live-start="practice" type="button" aria-label="Talk to the tutor about Practice">◖<span>Talk to tutor</span></button>
+            <button id="practiceVoiceButton" class="tool-button" type="button" aria-label="Speak to the Practice tutor or dictate working">🎙<span>Voice</span></button>
+            <span id="practiceVoiceStatus" class="status" role="status" aria-live="polite"></span>
+          </div>
+          <section class="live-tutor-panel practice-live-tutor-panel" data-live-panel="practice" aria-label="Practice page live tutor controls" hidden>
+            <div class="live-tutor-session-copy"><strong>Live tutor</strong><span data-live-status role="status" aria-live="polite">Connecting status will appear here.</span></div>
+            <label class="live-tutor-language-label">Tutor language<select data-live-language aria-label="Choose the language for tutor replies"></select></label>
+            <label class="live-tutor-voice-label">Voice in selected language<select data-live-voice aria-label="Choose a voice in the selected language"></select><small data-live-voice-status role="status" aria-live="polite"></small></label>
+            <div class="live-tutor-actions">
+              <button class="button subtle" data-live-action="mute" type="button" aria-pressed="false">Mute microphone</button>
+              <button class="button subtle" data-live-action="pause-speaking" type="button" disabled>Pause speaking</button>
+              <button class="button subtle" data-live-action="resume-speaking" type="button" disabled>Resume speaking</button>
+              <button class="button subtle" data-live-action="stop-speaking" type="button">Stop speaking</button>
+              <button class="button subtle" data-live-action="repeat" type="button" disabled>Repeat tutor</button>
+              <button class="button subtle" data-live-action="transcripts" type="button" aria-pressed="true">Show transcript: On</button>
+              <button class="button subtle" data-live-action="end" type="button">End session</button>
+            </div>
+            <div class="live-tutor-transcript" data-live-transcript aria-live="polite" aria-label="Live tutoring transcript"></div>
+            <p class="live-tutor-note">Press Voice to speak to the tutor. Speaking does not submit your work for marking.</p>
+          </section>
           <div class="filter-card practice-filters">
             <label>Grade<select id="practiceGrade"><option>8</option><option>9</option><option>10</option><option>11</option><option selected>12</option></select></label>
             <label>Topic<select id="practiceTopic" disabled><option value="">Choose grade first</option></select></label>
@@ -156,35 +178,17 @@
             <div id="practiceQuestionList" class="question-list" aria-label="Questions"></div>
             <article id="practiceQuestionCard" class="question-card" hidden>
               <div class="question-card-top"><span id="practiceQuestionMeta" class="eyebrow"></span><button id="practiceFullScreen" class="button subtle" type="button" hidden>View full screen</button></div>
-              <h2>Question</h2><div id="practiceQuestionText" class="math-content"></div><div id="practiceVisuals" class="question-visuals"></div>
-              <div class="hint-actions"><button id="practiceHintButton" class="button secondary" type="button">Show a hint</button><button id="practiceFormulaButton" class="button subtle" type="button">Show formulae</button><button id="practiceLiveTutorButton" class="button secondary live-tutor-launch" data-live-start="practice" type="button">Talk through this question</button></div>
-              <section class="live-tutor-panel practice-live-tutor-panel" data-live-panel="practice" aria-label="Live tutor audio controls" hidden>
-                <div class="live-tutor-session-copy"><strong>Live tutor</strong><span data-live-status role="status" aria-live="polite">Connecting status will appear here.</span></div>
-                <label class="live-tutor-language-label">Tutor language<select data-live-language aria-label="Choose the language for tutor replies"></select></label>
-                <label class="live-tutor-voice-label">Voice on this device<select data-live-voice aria-label="Choose a voice installed on this device"></select></label>
-                <div class="live-tutor-actions">
-                  <button class="button subtle" data-live-action="mute" type="button" aria-pressed="false">Mute microphone</button>
-                  <button class="button subtle" data-live-action="pause-speaking" type="button" disabled>Pause speaking</button>
-                  <button class="button subtle" data-live-action="resume-speaking" type="button" disabled>Resume speaking</button>
-                  <button class="button subtle" data-live-action="stop-speaking" type="button">Stop speaking</button>
-                  <button class="button subtle" data-live-action="repeat" type="button" disabled>Repeat tutor</button>
-                  <button class="button subtle" data-live-action="transcripts" type="button" aria-pressed="true">Show transcript: On</button>
-                  <button class="button subtle" data-live-action="end" type="button">End session</button>
-                </div>
-                <div class="live-tutor-transcript" data-live-transcript aria-live="polite" aria-label="Live tutoring transcript"></div>
-                <p class="live-tutor-note">The microphone is active only during a recording you start with Voice. Press Voice again to send it; 10 seconds of silence stops the mic and discards the clip without sending it. Speaking never submits your work for marking.</p>
-              </section>
+              <h2>Question</h2><div id="practiceQuestionText" class="math-content"></div><div id="practiceVisuals" class="question-visuals"></div><div id="practiceVideoPreview" class="question-video-preview" aria-live="polite"></div>
+              <div class="hint-actions"><button id="practiceHintButton" class="button secondary" type="button">Show a hint</button><button id="practiceFormulaButton" class="button subtle" type="button">Show formulae</button></div>
               <div id="practiceHints" class="hint-content" hidden></div>
               <section class="practice-response" aria-label="Your working and answer">
                 <div class="practice-response-heading"><strong>Your working and answer</strong><span class="muted">Enter steps on separate lines; keep your final answer last.</span></div>
                 <div class="practice-response-tools">
-                  <button id="practiceVoiceButton" class="tool-button" type="button" aria-label="Record a voice note for this answer">🎙<span>Voice</span></button>
                   <button id="practiceCanvasButton" class="tool-button" type="button" aria-label="Write your working by hand">✎<span>Write / draw</span></button>
                   <button id="practiceGraphCanvasButton" class="tool-button" type="button" aria-label="Draw a graph for this answer">⌁<span>Draw graph</span></button>
                   <button id="practiceHandwritingButton" class="tool-button" type="button" aria-label="Upload a photo of handwritten working">📷<span>Upload work</span></button>
                   <button id="practiceKeyboardToggle" class="tool-button math-editor-keyboard-toggle" data-editor-target="practice" type="button" aria-expanded="false" aria-controls="practiceMathKeyboard">⌨<span>Math keyboard</span></button>
                 </div>
-                <div id="practiceVoiceStatus" class="status" role="status" aria-live="polite"></div>
                 <div id="practiceMathKeyboard" class="math-keyboard" hidden>
                   <div class="math-keyboard-preview" aria-live="polite"><span>Live textbook preview</span><div id="mathKeyboardPreview" class="math-keyboard-preview-content"></div></div>
                   <div class="math-keyboard-tabs" role="tablist" aria-label="Math keyboard sections">
@@ -222,36 +226,58 @@
 
         <section class="view" data-view-panel="exam" aria-labelledby="examTitle" hidden>
           <header class="view-heading"><div><p class="eyebrow">Test / exam prep</p><h1 id="examTitle">Build a practice paper</h1><p class="muted">Choose a grade and topics, then work through the generated assessment at your pace.</p></div></header>
+          <div id="examTutorTools" class="page-tutor-tools" aria-label="Talk to the Test and exam prep page tutor">
+            <div class="page-tutor-copy"><strong>Test / exam prep tutor</strong><span>Ask about the assessment setup, a question, or how to use this page.</span></div>
+            <button id="examLiveTutorButton" class="button secondary live-tutor-launch" data-live-start="exam" type="button" aria-label="Talk to the tutor about Test and exam prep">◖<span>Talk to tutor</span></button>
+            <button id="examVoiceButton" class="tool-button" type="button" aria-label="Speak to the Test and exam prep tutor or dictate an answer">🎙<span>Voice</span></button>
+            <span id="examVoiceStatus" class="status" role="status" aria-live="polite"></span>
+          </div>
+          <section id="examLiveTutorPanel" class="live-tutor-panel practice-live-tutor-panel" data-live-panel="exam" aria-label="Test and exam prep live tutor controls" hidden>
+            <div class="live-tutor-session-copy"><strong>Live tutor</strong><span data-live-status role="status" aria-live="polite">Connecting status will appear here.</span></div>
+            <label class="live-tutor-language-label">Tutor language<select data-live-language aria-label="Choose the language for tutor replies"></select></label>
+            <label class="live-tutor-voice-label">Voice in selected language<select data-live-voice aria-label="Choose a voice in the selected language"></select><small data-live-voice-status role="status" aria-live="polite"></small></label>
+            <div class="live-tutor-actions">
+              <button class="button subtle" data-live-action="mute" type="button" aria-pressed="false">Mute microphone</button>
+              <button class="button subtle" data-live-action="pause-speaking" type="button" disabled>Pause speaking</button>
+              <button class="button subtle" data-live-action="resume-speaking" type="button" disabled>Resume speaking</button>
+              <button class="button subtle" data-live-action="stop-speaking" type="button">Stop speaking</button>
+              <button class="button subtle" data-live-action="repeat" type="button" disabled>Repeat tutor</button>
+              <button class="button subtle" data-live-action="transcripts" type="button" aria-pressed="true">Show transcript: On</button>
+              <button class="button subtle" data-live-action="end" type="button">End session</button>
+            </div>
+            <div class="live-tutor-transcript" data-live-transcript aria-live="polite" aria-label="Live tutoring transcript"></div>
+            <p class="live-tutor-note">Press Voice to speak to the tutor. Speaking does not submit your assessment answer.</p>
+          </section>
           <div id="examSetup" class="exam-setup">
-            <div class="filter-card exam-filters"><label>Grade<select id="examGrade"><option>8</option><option>9</option><option>10</option><option>11</option><option selected>12</option></select></label><label>Assessment<select id="examType"><option value="test">Test</option><option value="exam">Exam</option></select></label><label>Session mode<select id="examSessionMode"><option value="guided">Guided practice</option><option value="strict">Strict mock exam</option></select></label><button id="loadExamTopics" class="button secondary" type="button">Load topics</button><button id="generateExam" class="button primary" type="button" disabled>Generate assessment</button></div>
+            <div class="filter-card exam-filters"><label>Grade<select id="examGrade"><option>8</option><option>9</option><option>10</option><option>11</option><option selected>12</option></select></label><label>Term<select id="examTerm"><option value="1" selected>Term 1</option><option value="2">Term 2</option><option value="3">Term 3</option><option value="4">Term 4</option></select></label><label>Assessment<select id="examType" disabled><option value="test">Control test</option><option value="exam">Examination</option></select></label><label>Session mode<select id="examSessionMode"><option value="guided">Guided practice</option><option value="strict">Strict mock exam</option></select></label><button id="loadExamTopics" class="button secondary" type="button">Load topics</button><button id="generateExam" class="button primary" type="button" disabled>Generate assessment</button></div>
+            <p id="examPlanNote" class="exam-plan-note" role="note">Use the scope your teacher or department gave you for the upcoming assessment. If you do not have the scope, ask your teacher before selecting topics.</p>
+            <p id="examTargetNote" class="exam-target-note" aria-live="polite"></p>
             <p id="examStatus" class="status" role="status" aria-live="polite"></p>
+            <section class="exam-source-section" aria-labelledby="examPaperLinksTitle">
+              <h2 id="examPaperLinksTitle">Past papers by term</h2>
+              <p class="source-note">Open a paper link in your browser, download the PDF, then return here and upload the question paper. A memo is optional for Guided Practice and required for Strict Mock Exam.</p>
+              <div id="examPaperLinks" class="exam-paper-term-groups" aria-live="polite"></div>
+              <div class="exam-upload-panel">
+                <div class="exam-upload-actions">
+                  <button id="examUploadPaperButton" class="button secondary" type="button">Upload question paper PDF</button>
+                  <button id="examUploadMemoButton" class="button subtle" type="button">Upload memo PDF</button>
+                  <input id="examPaperInput" type="file" accept=".pdf,application/pdf" hidden>
+                  <input id="examMemoInput" type="file" accept=".pdf,application/pdf" hidden>
+                </div>
+                <p id="examUploadStatus" class="status" role="status" aria-live="polite">No past paper uploaded yet.</p>
+                <button id="startUploadedExam" class="button primary" type="button" disabled>Start uploaded paper</button>
+              </div>
+            </section>
             <div id="examTopicChoices" class="topic-choice-grid"></div>
             <p id="examPaperSummary" class="paper-summary" hidden></p>
             <button id="startExamSession" class="button primary" type="button" hidden>Start assessment</button>
           </div>
           <article id="examWorkspace" class="question-card exam-workspace" hidden>
             <div class="question-card-top"><span id="examProgress" class="eyebrow"></span><div class="question-top-actions"><button id="examFullScreen" class="button subtle" type="button" hidden>View full screen</button><button id="examCanvasButton" class="button subtle" type="button">Open canvas</button><button id="examGraphCanvasButton" class="button subtle" type="button">Draw graph</button></div></div>
-            <h2 id="examQuestionTitle">Question</h2><div id="examQuestionText" class="math-content"></div><div id="examQuestionVisuals" class="question-visuals"></div>
-            <div class="exam-guidance"><button id="examGuidanceButton" class="button secondary" type="button">Ask for a hint</button><div id="examGuidanceText" class="hint-content" hidden></div></div>
+            <h2 id="examQuestionTitle">Question</h2><figure id="examSourceSnapshot" class="exam-source-snapshot" hidden><img id="examSourceSnapshotImage" alt="Snapshot of the original question paper" loading="lazy"><figcaption id="examSourceSnapshotCaption">Original question paper snapshot</figcaption></figure><div id="examQuestionText" class="math-content"></div><div id="examQuestionVisuals" class="question-visuals"></div><div id="examVideoPreview" class="question-video-preview" aria-live="polite"></div>
+            <div class="exam-guidance"><div class="hint-actions"><button id="examGuidanceButton" class="button secondary" type="button">Ask for a hint</button><button id="examFormulaButton" class="button subtle" type="button">Show relevant formulae</button></div><div id="examGuidanceText" class="hint-content" hidden></div><div id="examFormulaText" class="hint-content" hidden></div></div>
             <div class="answer-label"><span>Your working</span><div class="math-editor-frame exam-math-editor-frame"><iframe id="examAnswer" title="Test and exam working editor" src="./math-editor.html?v=17"></iframe></div></div>
-            <div class="exam-answer-tools"><button id="examVoiceButton" class="tool-button" type="button" aria-label="Record a voice note for this answer">🎙<span>Voice</span></button><button id="examLiveTutorButton" class="button secondary live-tutor-launch" data-live-start="exam" type="button">Talk through this question</button><button id="examKeyboardToggle" class="tool-button math-editor-keyboard-toggle" data-editor-target="exam" type="button" aria-expanded="false" aria-controls="practiceMathKeyboard" aria-label="Open maths keyboard">⌨<span>Math keyboard</span></button></div>
-            <div id="examVoiceStatus" class="status" role="status" aria-live="polite"></div>
-            <section class="live-tutor-panel practice-live-tutor-panel" data-live-panel="exam" aria-label="Live tutor audio controls" hidden>
-              <div class="live-tutor-session-copy"><strong>Live tutor</strong><span data-live-status role="status" aria-live="polite">Connecting status will appear here.</span></div>
-              <label class="live-tutor-language-label">Tutor language<select data-live-language aria-label="Choose the language for tutor replies"></select></label>
-              <label class="live-tutor-voice-label">Voice on this device<select data-live-voice aria-label="Choose a voice installed on this device"></select></label>
-              <div class="live-tutor-actions">
-                <button class="button subtle" data-live-action="mute" type="button" aria-pressed="false">Mute microphone</button>
-                <button class="button subtle" data-live-action="pause-speaking" type="button" disabled>Pause speaking</button>
-                <button class="button subtle" data-live-action="resume-speaking" type="button" disabled>Resume speaking</button>
-                <button class="button subtle" data-live-action="stop-speaking" type="button">Stop speaking</button>
-                <button class="button subtle" data-live-action="repeat" type="button" disabled>Repeat tutor</button>
-                <button class="button subtle" data-live-action="transcripts" type="button" aria-pressed="true">Show transcript: On</button>
-                <button class="button subtle" data-live-action="end" type="button">End session</button>
-              </div>
-              <div class="live-tutor-transcript" data-live-transcript aria-live="polite" aria-label="Live tutoring transcript"></div>
-              <p class="live-tutor-note">The microphone is active only during a recording you start with Voice. Press Voice again to send it; 10 seconds of silence stops the mic and discards the clip without sending it. Speaking does not submit your assessment answer.</p>
-            </section>
+            <div class="exam-answer-tools"><button id="examKeyboardToggle" class="tool-button math-editor-keyboard-toggle" data-editor-target="exam" type="button" aria-expanded="false" aria-controls="practiceMathKeyboard" aria-label="Open maths keyboard">⌨<span>Math keyboard</span></button><button id="examUploadPhotoButton" class="tool-button" type="button" aria-label="Upload a photo of handwritten working">📷<span>Upload photo</span></button><input id="examHandwritingInput" type="file" accept="image/*" capture="environment" hidden><span id="examAnswerAttachments" class="exam-answer-attachments" aria-live="polite"></span><span id="examPhotoStatus" class="status" role="status" aria-live="polite"></span></div>
             <div id="examMathKeyboardMount" class="math-keyboard-mount"></div>
             <div class="answer-actions"><button id="saveExamAnswer" class="button secondary" type="button">Save answer</button><button id="previousExamQuestion" class="button subtle" type="button">Previous</button><button id="nextExamQuestion" class="button subtle" type="button">Next</button><button id="submitExam" class="button primary" type="button">Submit assessment</button></div>
           </article>
@@ -259,11 +285,33 @@
         </section>
 
         <section class="view" data-view-panel="lessons" aria-labelledby="lessonsTitle" hidden>
-          <header class="view-heading"><div><p class="eyebrow">Lesson videos</p><h1 id="lessonsTitle">Learn from a worked example</h1><p class="muted">Choose one topic and subtopic to load its lesson video.</p></div></header>
+          <header class="view-heading"><div><p class="eyebrow">Lesson videos</p><h1 id="lessonsTitle">Learn from a worked example</h1><p class="muted">Choose a topic and a lesson video. Only the selected video will load.</p></div></header>
+          <div class="page-tutor-tools" aria-label="Talk to the Lesson videos page tutor">
+            <div class="page-tutor-copy"><strong>Lesson videos tutor</strong><span>Ask about the selected lesson or how to find and play a video.</span></div>
+            <button id="lessonLiveTutorButton" class="button secondary live-tutor-launch" data-live-start="lessons" type="button" aria-label="Talk to the tutor about Lesson videos">◖<span>Talk to tutor</span></button>
+            <button id="lessonTutorVoiceButton" class="tool-button" data-page-tutor-voice="lessons" type="button" aria-label="Speak to the Lesson videos tutor">🎙<span>Voice</span></button>
+            <span id="lessonTutorVoiceStatus" class="status" role="status" aria-live="polite"></span>
+          </div>
+          <section class="live-tutor-panel page-live-tutor-panel" data-live-panel="lessons" aria-label="Lesson videos live tutor controls" hidden>
+            <div class="live-tutor-session-copy"><strong>Live tutor</strong><span data-live-status role="status" aria-live="polite">Connecting status will appear here.</span></div>
+            <label class="live-tutor-language-label">Tutor language<select data-live-language aria-label="Choose the language for tutor replies"></select></label>
+            <label class="live-tutor-voice-label">Voice in selected language<select data-live-voice aria-label="Choose a voice in the selected language"></select><small data-live-voice-status role="status" aria-live="polite"></small></label>
+            <div class="live-tutor-actions">
+              <button class="button subtle" data-live-action="mute" type="button" aria-pressed="false">Mute microphone</button>
+              <button class="button subtle" data-live-action="pause-speaking" type="button" disabled>Pause speaking</button>
+              <button class="button subtle" data-live-action="resume-speaking" type="button" disabled>Resume speaking</button>
+              <button class="button subtle" data-live-action="stop-speaking" type="button">Stop speaking</button>
+              <button class="button subtle" data-live-action="repeat" type="button" disabled>Repeat tutor</button>
+              <button class="button subtle" data-live-action="transcripts" type="button" aria-pressed="true">Show transcript: On</button>
+              <button class="button subtle" data-live-action="end" type="button">End session</button>
+            </div>
+            <div class="live-tutor-transcript" data-live-transcript aria-live="polite" aria-label="Live tutoring transcript"></div>
+            <p class="live-tutor-note">Press Voice to ask about this page or the selected video.</p>
+          </section>
           <div class="lesson-picker">
             <label>Grade<select id="lessonGrade"><option>8</option><option>9</option><option>10</option><option>11</option><option selected>12</option></select></label>
             <label>Topic<select id="lessonTopic" disabled><option value="">Loading topics…</option></select></label>
-            <label>Subtopic<select id="lessonSubtopic" disabled><option value="">Choose a topic first</option></select></label>
+            <label>Lesson video<select id="lessonSubtopic" disabled><option value="">Choose a topic first</option></select></label>
           </div>
           <p id="lessonStatus" class="status" role="status"></p><div id="lessonPlayer" class="lesson-player" hidden></div>
           <p class="source-note">For free DBE lesson videos, <a href="https://www.education.gov.za/Informationfor/Learners/VideoTutorials.aspx" target="_blank" rel="noopener noreferrer">open the DBE lesson videos page ↗</a></p>
@@ -271,6 +319,28 @@
 
         <section class="view" data-view-panel="reports" aria-labelledby="reportsTitle" hidden>
           <header class="view-heading"><div><p class="eyebrow">Saved reports</p><h1 id="reportsTitle">Your study reports</h1><p class="muted">Reports downloaded in this browser are kept on this device.</p></div></header>
+          <div class="page-tutor-tools" aria-label="Talk to the Saved reports page tutor">
+            <div class="page-tutor-copy"><strong>Saved reports tutor</strong><span>Ask about a report or how to save, find, and open your study reports.</span></div>
+            <button id="reportsLiveTutorButton" class="button secondary live-tutor-launch" data-live-start="reports" type="button" aria-label="Talk to the tutor about Saved reports">◖<span>Talk to tutor</span></button>
+            <button id="reportsTutorVoiceButton" class="tool-button" data-page-tutor-voice="reports" type="button" aria-label="Speak to the Saved reports tutor">🎙<span>Voice</span></button>
+            <span id="reportsTutorVoiceStatus" class="status" role="status" aria-live="polite"></span>
+          </div>
+          <section class="live-tutor-panel page-live-tutor-panel" data-live-panel="reports" aria-label="Saved reports live tutor controls" hidden>
+            <div class="live-tutor-session-copy"><strong>Live tutor</strong><span data-live-status role="status" aria-live="polite">Connecting status will appear here.</span></div>
+            <label class="live-tutor-language-label">Tutor language<select data-live-language aria-label="Choose the language for tutor replies"></select></label>
+            <label class="live-tutor-voice-label">Voice in selected language<select data-live-voice aria-label="Choose a voice in the selected language"></select><small data-live-voice-status role="status" aria-live="polite"></small></label>
+            <div class="live-tutor-actions">
+              <button class="button subtle" data-live-action="mute" type="button" aria-pressed="false">Mute microphone</button>
+              <button class="button subtle" data-live-action="pause-speaking" type="button" disabled>Pause speaking</button>
+              <button class="button subtle" data-live-action="resume-speaking" type="button" disabled>Resume speaking</button>
+              <button class="button subtle" data-live-action="stop-speaking" type="button">Stop speaking</button>
+              <button class="button subtle" data-live-action="repeat" type="button" disabled>Repeat tutor</button>
+              <button class="button subtle" data-live-action="transcripts" type="button" aria-pressed="true">Show transcript: On</button>
+              <button class="button subtle" data-live-action="end" type="button">End session</button>
+            </div>
+            <div class="live-tutor-transcript" data-live-transcript aria-live="polite" aria-label="Live tutoring transcript"></div>
+            <p class="live-tutor-note">Press Voice to ask about this page or one of your reports.</p>
+          </section>
           <div id="savedReports" class="saved-reports"></div>
         </section>
       </main>
@@ -393,9 +463,9 @@
       var appScript = document.createElement("script");
       if (supportsModules && supportsModernSyntax) {
         appScript.type = "module";
-        appScript.src = "./app.bundle.js?v=64";
+        appScript.src = "./app.bundle.js?v=77";
       } else {
-        appScript.src = "./legacy-app.js?v=70";
+        appScript.src = "./legacy-app.js?v=83";
       }
       appScript.onload = function () {
         loginButton.disabled = false;

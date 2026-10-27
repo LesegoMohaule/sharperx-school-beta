@@ -8,6 +8,7 @@ let processingTimer = null;
 
 function processingMessage(path) {
   const route = String(path || "").toLowerCase();
+  if (route.includes("/math-question-bank/questions/") && route.includes("/visuals/prepare")) return "Checking the question diagram…";
   if (route.includes("speech/transcribe") || route.includes("voice-note")) return "Transcribing your speech…";
   if (route.includes("question-snapshot")) return "Reading the selected question and its diagrams…";
   if (route.includes("/education/tutor/ask")) return "Preparing your response…";
@@ -159,6 +160,7 @@ export async function apiRequest(path, options = {}) {
         : formatApiError(body.detail ?? body.message, response.status));
       error.status = response.status;
       error.data = body;
+      error.retryAfterSeconds = parseRetryAfter(response.headers.get("Retry-After"));
       error.retryable = response.status === 408 || response.status === 429 || response.status >= 500;
       if (response.status === 401 && auth) {
         setAccessToken("");
@@ -186,12 +188,21 @@ async function responseError(response, auth = true) {
     : formatApiError(body.detail ?? body.message, response.status));
   error.status = response.status;
   error.data = body;
+  error.retryAfterSeconds = parseRetryAfter(response.headers.get("Retry-After"));
   error.retryable = response.status === 408 || response.status === 429 || response.status >= 500;
   if (response.status === 401 && auth) {
     setAccessToken("");
     window.dispatchEvent(new CustomEvent("sharperx:auth-expired", { detail: { message: error.message } }));
   }
   return error;
+}
+
+function parseRetryAfter(value) {
+  if (!value) return 0;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds > 0) return Math.ceil(seconds);
+  const retryAt = Date.parse(value);
+  return Number.isFinite(retryAt) ? Math.max(0, Math.ceil((retryAt - Date.now()) / 1000)) : 0;
 }
 
 function formatApiError(detail, status) {

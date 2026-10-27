@@ -456,6 +456,7 @@ export function installRealtimeTutor({ ensureInspection, getContext, transcribeA
   let turnQueue = Promise.resolve();
   let lastSpeechText = "";
   let lastTutorReplyText = "";
+  let lastTutorResponse = "";
   let learnerTurnPendingReply = true;
   let isSpeaking = false;
   let isSpeechPaused = false;
@@ -467,12 +468,13 @@ export function installRealtimeTutor({ ensureInspection, getContext, transcribeA
   let continueSpeechQueue = null;
   let currentChunkSpeaking = false;
   let pushToTalkStarting = false;
+  let availableVoices = [];
+  let responseLanguageGeneration = 0;
 
   const panels = [...document.querySelectorAll("[data-live-panel]")];
   const launchButtons = [...document.querySelectorAll("[data-live-start]")];
   const voiceSelects = [...document.querySelectorAll("[data-live-voice]")];
   const languageSelects = [...document.querySelectorAll("[data-live-language]")];
-  const savedVoice = localStorage.getItem(VOICE_KEY) || "";
   const savedLanguage = localStorage.getItem(LANGUAGE_KEY) || "en-ZA";
 
   function panel(context) { return panels.find((item) => item.dataset.livePanel === context); }
@@ -491,7 +493,7 @@ export function installRealtimeTutor({ ensureInspection, getContext, transcribeA
       const isActive = sessionActive && button.dataset.liveStart === context;
       button.setAttribute("aria-pressed", String(isActive));
       button.disabled = starting || (sessionActive && button.dataset.liveStart !== context);
-      const label = button.dataset.liveStart === "ask" ? "Talk to tutor" : "Talk through this question";
+      const label = "Talk to tutor";
       button.querySelector("span")?.replaceChildren(document.createTextNode(isActive ? "Session active" : label));
     });
     document.querySelectorAll("[data-live-action='mute']").forEach((button) => {
@@ -510,36 +512,54 @@ export function installRealtimeTutor({ ensureInspection, getContext, transcribeA
     });
   }
 
-  function readAvailableVoices() {
-    const voices = window.speechSynthesis?.getVoices() || [];
+  function voiceMatchesLanguage(voice, language) {
+    const voiceCode = String(voice?.lang || "").replace(/_/g, "-").split("-", 1)[0].toLowerCase();
+    return Boolean(voiceCode && voiceCode === String(language?.code || "").toLowerCase());
+  }
+
+  function renderVoiceSelects({ resetSelection = false } = {}) {
+    const language = selectedLanguage();
+    const matchingVoices = availableVoices.filter((voice) => voiceMatchesLanguage(voice, language));
     voiceSelects.forEach((select) => {
-      const selected = select.value || savedVoice;
+      const selected = resetSelection ? "" : (select.value || localStorage.getItem(VOICE_KEY) || "");
+      const status = select.closest("label")?.querySelector("[data-live-voice-status]");
       select.replaceChildren();
+      if (!matchingVoices.length) {
+        const unavailable = document.createElement("option");
+        unavailable.value = "";
+        unavailable.textContent = `No ${language.label} voice installed`;
+        unavailable.disabled = true;
+        select.append(unavailable);
+        select.value = "";
+        select.disabled = true;
+        select.setAttribute("aria-label", `No ${language.label} speech voice is installed on this device`);
+        if (status) status.textContent = `The tutor can reply in ${language.label}, but this device needs a ${language.label} speech voice to play it aloud. Add one in the device's speech or text-to-speech settings.`;
+        return;
+      }
+
       const automatic = document.createElement("option");
       automatic.value = "";
-      automatic.textContent = "Device default voice";
+      automatic.textContent = `Automatic ${language.label} voice`;
       select.append(automatic);
-      voices.forEach((voice) => {
+      matchingVoices.forEach((voice) => {
         const option = document.createElement("option");
         option.value = voice.voiceURI;
         option.textContent = `${voice.name} (${voice.lang})`;
         select.append(option);
       });
-      select.value = voices.some((voice) => voice.voiceURI === selected) ? selected : "";
-      select.disabled = voices.length === 0;
+      select.value = matchingVoices.some((voice) => voice.voiceURI === selected) ? selected : "";
+      select.disabled = false;
+      select.setAttribute("aria-label", `Choose a voice for ${language.label}`);
+      if (status) status.textContent = `${matchingVoices.length} ${language.label} voice${matchingVoices.length === 1 ? "" : "s"} available on this device.`;
     });
+  }
 
-    const options = TUTOR_LANGUAGES.map((language) => ({ ...language }));
-    const knownCodes = new Set(options.map((language) => language.code));
-    voices.forEach((voice) => {
-      const locale = String(voice.lang || "").replace(/_/g, "-");
-      const code = locale.split("-", 1)[0].toLowerCase();
-      if (!locale || knownCodes.has(code)) return;
-      knownCodes.add(code);
-      options.push(languageForValue(locale));
-    });
+  function readAvailableVoices() {
+    availableVoices = window.speechSynthesis?.getVoices() || [];
+    const options = TUTOR_LANGUAGES;
+    localStorage.setItem(LANGUAGE_KEY, "en-ZA");
     languageSelects.forEach((select) => {
-      const selected = select.value || savedLanguage;
+      const selected = select.value || localStorage.getItem(LANGUAGE_KEY) || savedLanguage;
       select.replaceChildren();
       options.forEach((language) => {
         const option = document.createElement("option");
@@ -552,6 +572,7 @@ export function installRealtimeTutor({ ensureInspection, getContext, transcribeA
       const fallback = [...select.options].find((option) => option.value === "en-ZA");
       select.value = selectedOption?.value || fallback?.value || "en-ZA";
     });
+    renderVoiceSelects();
   }
 
   function selectedLanguage() {
@@ -563,13 +584,13 @@ export function installRealtimeTutor({ ensureInspection, getContext, transcribeA
   }
 
   function selectedVoice(context = activeContext || lastSpeechContext) {
-    const uri = voiceSelects.find((select) => select.closest("[data-live-panel]")?.dataset.livePanel === context)?.value
-      || voiceSelects.find((select) => select.value)?.value || localStorage.getItem(VOICE_KEY) || "";
-    const voices = window.speechSynthesis?.getVoices() || [];
-    if (uri) return voices.find((voice) => voice.voiceURI === uri) || null;
     const language = selectedLanguage();
-    return voices.find((voice) => voice.lang?.toLowerCase() === language.locale.toLowerCase())
-      || voices.find((voice) => voice.lang?.split(/[-_]/, 1)[0].toLowerCase() === language.code)
+    const select = voiceSelects.find((item) => item.closest("[data-live-panel]")?.dataset.livePanel === context);
+    const uri = select ? select.value : (localStorage.getItem(VOICE_KEY) || "");
+    const explicit = uri ? availableVoices.find((voice) => voice.voiceURI === uri) : null;
+    if (explicit && voiceMatchesLanguage(explicit, language)) return explicit;
+    return availableVoices.find((voice) => voice.lang?.toLowerCase() === language.locale.toLowerCase())
+      || availableVoices.find((voice) => voiceMatchesLanguage(voice, language))
       || null;
   }
 
@@ -633,7 +654,13 @@ export function installRealtimeTutor({ ensureInspection, getContext, transcribeA
     }
     stopSpeaking();
     const utteranceId = currentUtteranceId;
+    const language = selectedLanguage();
     const voice = selectedVoice(context);
+    if (!voice) {
+      if (context) setStatus(context, `The tutor reply is in ${language.label}, but no matching speech voice is installed on this device. The reply remains available in the transcript.`);
+      callbacks.onError?.("voice-unavailable");
+      return;
+    }
     const chunks = splitSpeechChunks(speechText);
     isSpeaking = true;
     isSpeechPaused = false;
@@ -660,7 +687,7 @@ export function installRealtimeTutor({ ensureInspection, getContext, transcribeA
         return;
       }
       const utterance = new SpeechSynthesisUtterance(chunk);
-      utterance.lang = voice?.lang || selectedLanguage().locale;
+      utterance.lang = language.locale;
       utterance.rate = 0.84;
       if (voice) utterance.voice = voice;
       currentChunkSpeaking = true;
@@ -695,6 +722,18 @@ export function installRealtimeTutor({ ensureInspection, getContext, transcribeA
     window.speechSynthesis.resume();
   }
 
+  function handleLanguageChange(event) {
+    const language = languageForValue(event.currentTarget.value);
+    localStorage.setItem(LANGUAGE_KEY, language.value);
+    languageSelects.forEach((select) => { select.value = "en-ZA"; });
+    localStorage.removeItem(VOICE_KEY);
+    voiceSelects.forEach((select) => { select.value = ""; });
+    renderVoiceSelects({ resetSelection: true });
+    responseLanguageGeneration += 1;
+    if (isSpeaking) stopSpeaking();
+    if (activeContext) setStatus(activeContext, `Tutor language: ${language.label}.`);
+  }
+
   function showSessionMessage(kind, text) {
     if (!text) return;
     if (kind === "transcript") {
@@ -707,6 +746,7 @@ export function installRealtimeTutor({ ensureInspection, getContext, transcribeA
       const replyKey = safeText.normalize("NFKC").replace(/\s+/g, " ").trim().toLocaleLowerCase();
       if (!replyKey || (replyKey === lastTutorReplyText && !learnerTurnPendingReply)) return;
       lastTutorReplyText = replyKey;
+      lastTutorResponse = safeText;
       learnerTurnPendingReply = false;
       if (transcriptsEnabled) onTutorReply(activeContext, safeText);
       speak(safeText);
@@ -729,17 +769,24 @@ export function installRealtimeTutor({ ensureInspection, getContext, transcribeA
       setStatus(contextType, "I couldn't hear clear words. Please speak a little closer to the microphone and try again.", "error");
       return;
     }
-    const context = {
-      ...await getContext(contextType, inspectionId),
-      response_language: language.value,
-      response_language_name: language.label,
-    };
-    if (generation !== startGeneration || activeContext !== contextType) return;
     learnerTurnPendingReply = true;
     if (transcriptsEnabled) onTranscript?.(contextType, transcript);
     setStatus(contextType, "I heard you. Thinking through your question…", "success");
-    const reply = String(await askTutorTurn(context, transcript) || "").trim();
-    if (generation !== startGeneration || activeContext !== contextType) return;
+    let reply = "";
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const responseLanguage = selectedLanguage();
+      const languageGeneration = responseLanguageGeneration;
+      const context = {
+        ...await getContext(contextType, inspectionId),
+        response_language: responseLanguage.value,
+        response_language_name: responseLanguage.label,
+      };
+      if (generation !== startGeneration || activeContext !== contextType) return;
+      reply = String(await askTutorTurn(context, transcript) || "").trim();
+      if (generation !== startGeneration || activeContext !== contextType) return;
+      if (languageGeneration === responseLanguageGeneration) break;
+      reply = "";
+    }
     if (!reply) throw new Error("The tutor did not return a reply. Please try speaking again.");
     showSessionMessage("tutor_reply", reply);
   }
@@ -869,32 +916,17 @@ export function installRealtimeTutor({ ensureInspection, getContext, transcribeA
       if (!isCurrentStart()) return;
       sessionInspectionId = inspectionId;
       const context = await getContext(contextType, inspectionId);
+      if (!isCurrentStart()) return;
+      setStatus(activeContext, "Microphone stays off until you press Voice. Press it again when you have finished speaking.", "success");
+      const pageGreeting = String(getLoginGreeting?.(contextType, context) || "").trim();
       const language = selectedLanguage();
       context.response_language = language.value;
       context.response_language_name = language.label;
-      if (!isCurrentStart()) return;
-      setStatus(activeContext, "Microphone stays off until you press Voice. Press it again when you have finished speaking.", "success");
-      const loginGreeting = getLoginGreeting?.() || "";
-      const englishGreeting = loginGreeting === "first"
-        ? "Welcome to SharperTime! I can help with maths and show you how to use the app. Press Voice to ask a question, then press Voice again when you have finished."
-        : loginGreeting === "returning"
-          ? "Hi, welcome back! I'm here for maths help and app guidance. Press Voice to ask a question, then press Voice again when you have finished."
-          : contextType === "ask"
-            ? "I'm ready to help whenever you are. Press Voice to speak, then press it again when you have finished."
-            : "Let's work through this question together. Press Voice to speak, then press it again when you have finished.";
-      const greetingByLanguage = {
-        af: "Hallo.",
-        nso: "Dumela.",
-        st: "Lumela.",
-        tn: "Dumela.",
-        ve: "Ndaa.",
-        ts: "Avuxeni.",
-        nr: "Lotjhani.",
-        xh: "Molo.",
-        zu: "Sawubona.",
-      };
-      const greeting = language.code === "en" ? englishGreeting : greetingByLanguage[language.code] || "Hello.";
+      const greeting = pageGreeting || (contextType === "ask"
+        ? "I'm ready to help with the question on this page. Press Voice to speak, then press it again when you have finished."
+        : "Let's work through the question on this page. Press Voice to speak, then press it again when you have finished.");
       lastTutorReplyText = greeting.normalize("NFKC").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+      lastTutorResponse = greeting;
       learnerTurnPendingReply = false;
       if (transcriptsEnabled) onTutorReply?.(contextType, greeting);
       speak(greeting, contextType);
@@ -968,13 +1000,7 @@ export function installRealtimeTutor({ ensureInspection, getContext, transcribeA
       voiceSelects.forEach((select) => { if (select !== event.currentTarget) select.value = event.currentTarget.value; });
     });
     item.querySelector("[data-live-language]")?.addEventListener("change", (event) => {
-      const language = languageForValue(event.currentTarget.value);
-      if (language.disabled) {
-        event.currentTarget.value = localStorage.getItem(LANGUAGE_KEY) || "en-ZA";
-        return;
-      }
-      localStorage.setItem(LANGUAGE_KEY, language.value);
-      languageSelects.forEach((select) => { select.value = language.value; });
+      handleLanguageChange(event);
     });
   });
   readAvailableVoices();
@@ -985,7 +1011,9 @@ export function installRealtimeTutor({ ensureInspection, getContext, transcribeA
   setPanels("");
 
   return {
+    start,
     stop,
+    stopSpeaking,
     isActive(contextType) { return Boolean(activeContext && activeContext === contextType); },
     togglePushToTalk,
     prepareSpeechFromGesture() { primeSpeechFromGesture(); },

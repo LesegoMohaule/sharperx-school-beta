@@ -12,7 +12,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icon.svg">
-  <link rel="stylesheet" href="./styles.css?v=77">
+  <link rel="stylesheet" href="./styles.css?v=78">
   <script>
     try {
       if (/[?&](email|password)=/i.test(window.location.search) && window.history && window.history.replaceState) {
@@ -101,7 +101,8 @@
               <div id="sourceLinks" class="paper-source-links" aria-live="polite"></div>
               <form id="askForm" class="composer">
                 <div class="composer-tools">
-                  <button class="tool-button" type="button" data-file-trigger="photoInput" aria-label="Attach a photo">＋<span>Photo</span></button>
+                  <button class="tool-button" type="button" data-file-trigger="photoInput" aria-label="Choose photos from this device">＋<span>Choose photos</span></button>
+                  <button class="tool-button" type="button" data-file-trigger="askCameraInput" aria-label="Take a photo to attach">📷<span>Take photo</span></button>
                   <button class="tool-button" type="button" data-file-trigger="paperInput" aria-label="Upload a question paper">▤<span>Paper</span></button>
                   <button class="tool-button" type="button" data-file-trigger="memoInput" aria-label="Upload a marking memo">▧<span>Memo</span></button>
                   <button id="voiceButton" class="tool-button" type="button" aria-label="Record a voice note">🎙<span>Voice</span></button>
@@ -129,7 +130,8 @@
                 <div class="math-editor-frame ask-math-editor-frame"><iframe id="askMathEditor" title="Question and maths editor" src="./math-editor.html?v=17"></iframe></div>
                 <div id="askMathKeyboardMount" class="math-keyboard-mount"></div>
                 <div class="composer-footer"><span id="voiceStatus" class="muted" role="status"></span><button id="sendAskButton" class="button primary send-button" type="submit">Send <span aria-hidden="true">➤</span></button></div>
-                <input id="photoInput" type="file" accept="image/*" capture="environment" hidden>
+                <input id="photoInput" type="file" accept="image/*" multiple hidden>
+                <input id="askCameraInput" type="file" accept="image/*" capture="environment" hidden>
                 <input id="paperInput" type="file" accept=".pdf,application/pdf" hidden>
                 <input id="memoInput" type="file" accept=".pdf,application/pdf" hidden>
               </form>
@@ -186,7 +188,8 @@
                 <div class="practice-response-tools">
                   <button id="practiceCanvasButton" class="tool-button" type="button" aria-label="Write your working by hand">✎<span>Write / draw</span></button>
                   <button id="practiceGraphCanvasButton" class="tool-button" type="button" aria-label="Draw a graph for this answer">⌁<span>Draw graph</span></button>
-                  <button id="practiceHandwritingButton" class="tool-button" type="button" aria-label="Upload a photo of handwritten working">📷<span>Upload work</span></button>
+                  <button id="practiceHandwritingButton" class="tool-button" type="button" aria-label="Choose handwritten work photos from this device">▧<span>Choose photos</span></button>
+                  <button id="practiceCameraButton" class="tool-button" type="button" aria-label="Take a photo of handwritten work">📷<span>Take photo</span></button>
                   <button id="practiceKeyboardToggle" class="tool-button math-editor-keyboard-toggle" data-editor-target="practice" type="button" aria-expanded="false" aria-controls="practiceMathKeyboard">⌨<span>Math keyboard</span></button>
                 </div>
                 <div id="practiceMathKeyboard" class="math-keyboard" hidden>
@@ -216,7 +219,8 @@
                 <div class="math-editor-frame"><iframe id="practiceMathEditor" title="Structured textbook maths editor" src="./math-editor.html?v=17"></iframe></div>
                 <div id="practiceMathKeyboardMount" class="math-keyboard-mount"></div>
                 <div id="practiceAnswerAttachments" class="practice-answer-attachments" aria-live="polite"></div>
-                <input id="practiceHandwritingInput" type="file" accept="image/*" capture="environment" hidden>
+                <input id="practiceHandwritingInput" type="file" accept="image/*" multiple hidden>
+                <input id="practiceHandwritingCameraInput" type="file" accept="image/*" capture="environment" hidden>
               </section>
               <div class="answer-actions"><button id="markPracticeAnswer" class="button primary" type="button">Send for marking</button><span id="practiceMarkStatus" class="status" role="status"></span></div>
               <div id="practiceFeedback" class="feedback-card" hidden></div>
@@ -289,8 +293,8 @@
             <section id="strictMockActive" class="strict-mock-active" aria-label="Strict mock exam timer and answer script" hidden>
               <div class="strict-mock-timer-card"><span class="eyebrow">Time remaining</span><output id="strictMockTimer" class="strict-mock-timer" aria-live="off">--:--:--</output><p id="strictMockTimerStatus" class="status" role="status" aria-live="polite">Start the timer when your paper and writing materials are ready.</p></div>
               <h3>Upload your handwritten answer script</h3>
-              <p class="source-note">Write your answers on paper during the timed exam. When you have finished, upload clear images of every answer page (up to 12 images). Marking and feedback begin only after you submit the complete script.</p>
-              <div class="exam-upload-actions"><button id="strictMockUploadAnswers" class="button secondary" type="button">Upload answer page images</button><input id="strictMockAnswerInput" type="file" accept="image/*" multiple hidden></div>
+              <p class="source-note">Write your answers on paper during the timed exam. When you have finished, choose images from your device or take photos of every answer page (up to 20 images). Marking and feedback begin only after you submit the complete script.</p>
+              <div class="exam-upload-actions"><button id="strictMockUploadAnswers" class="button secondary" type="button">Choose answer photos</button><button id="strictMockTakeAnswerPhoto" class="button subtle" type="button">Take photo</button><input id="strictMockAnswerInput" type="file" accept="image/*" multiple hidden><input id="strictMockAnswerCameraInput" type="file" accept="image/*" capture="environment" hidden></div>
               <div id="strictMockAnswerFiles" class="strict-mock-answer-files" aria-live="polite"></div>
               <p id="strictMockAnswerStatus" class="status" role="status" aria-live="polite">No answer pages uploaded.</p>
               <button id="submitStrictMockScript" class="button primary" type="button" disabled>Submit complete script for marking</button>
@@ -302,7 +306,7 @@
             <h2 id="examQuestionTitle">Question</h2><figure id="examSourceSnapshot" class="exam-source-snapshot" hidden><img id="examSourceSnapshotImage" alt="Snapshot of the original question paper" loading="lazy"><figcaption id="examSourceSnapshotCaption">Original question paper snapshot</figcaption></figure><div id="examQuestionText" class="math-content"></div><div id="examQuestionVisuals" class="question-visuals"></div><div id="examVideoPreview" class="question-video-preview" aria-live="polite"></div>
             <div class="exam-guidance"><div class="hint-actions"><button id="examGuidanceButton" class="button secondary" type="button">Ask for a hint</button><button id="examFormulaButton" class="button subtle" type="button">Show relevant formulae</button></div><div id="examGuidanceText" class="hint-content" hidden></div><div id="examFormulaText" class="hint-content" hidden></div></div>
             <div class="answer-label"><span>Your working</span><div class="math-editor-frame exam-math-editor-frame"><iframe id="examAnswer" title="Test and exam working editor" src="./math-editor.html?v=17"></iframe></div></div>
-            <div class="exam-answer-tools"><button id="examKeyboardToggle" class="tool-button math-editor-keyboard-toggle" data-editor-target="exam" type="button" aria-expanded="false" aria-controls="practiceMathKeyboard" aria-label="Open maths keyboard">⌨<span>Math keyboard</span></button><button id="examUploadPhotoButton" class="tool-button" type="button" aria-label="Upload a photo of handwritten working">📷<span>Upload photo</span></button><input id="examHandwritingInput" type="file" accept="image/*" capture="environment" hidden><span id="examAnswerAttachments" class="exam-answer-attachments" aria-live="polite"></span><span id="examPhotoStatus" class="status" role="status" aria-live="polite"></span></div>
+            <div class="exam-answer-tools"><button id="examKeyboardToggle" class="tool-button math-editor-keyboard-toggle" data-editor-target="exam" type="button" aria-expanded="false" aria-controls="practiceMathKeyboard" aria-label="Open maths keyboard">⌨<span>Math keyboard</span></button><button id="examUploadPhotoButton" class="tool-button" type="button" aria-label="Choose handwritten working photos from this device">▧<span>Choose photos</span></button><button id="examTakePhotoButton" class="tool-button" type="button" aria-label="Take a photo of handwritten working">📷<span>Take photo</span></button><input id="examHandwritingInput" type="file" accept="image/*" multiple hidden><input id="examHandwritingCameraInput" type="file" accept="image/*" capture="environment" hidden><span id="examAnswerAttachments" class="exam-answer-attachments" aria-live="polite"></span><span id="examPhotoStatus" class="status" role="status" aria-live="polite"></span></div>
             <div id="examMathKeyboardMount" class="math-keyboard-mount"></div>
             <div class="answer-actions"><button id="saveExamAnswer" class="button secondary" type="button">Save answer</button><button id="previousExamQuestion" class="button subtle" type="button">Previous</button><button id="nextExamQuestion" class="button subtle" type="button">Next</button><button id="submitExam" class="button primary" type="button" hidden>Submit assessment</button><span id="examSaveStatus" class="status" role="status" aria-live="polite">Answers save automatically.</span></div>
           </article>
@@ -500,9 +504,9 @@
       var appScript = document.createElement("script");
       if (supportsModules && supportsModernSyntax) {
         appScript.type = "module";
-        appScript.src = "./app.bundle.js?v=81";
+        appScript.src = "./app.bundle.js?v=82";
       } else {
-        appScript.src = "./legacy-app.js?v=87";
+        appScript.src = "./legacy-app.js?v=88";
       }
       appScript.onload = function () {
         loginButton.disabled = false;

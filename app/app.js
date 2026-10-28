@@ -29,6 +29,11 @@ const SUPPORTED_OFFICE_MIME_TYPES = new Set([
 ]);
 const ASK_PHOTO_STORAGE_KEY = "sharperx_web_ask_photos_v1";
 const ASK_DOCUMENT_STORAGE_KEY = "sharperx_web_ask_documents_v1";
+const ASK_CONVERSATION_STORAGE_KEY = "sharperx_web_ask_conversation_v1";
+const UI_STATE_STORAGE_KEY = "sharperx_web_ui_state_v1";
+const WORKSPACE_SCROLL_STORAGE_KEY = "sharperx_web_workspace_scroll_v1";
+const PAPER_SNAPSHOT_RECORD_KEY = "current-paper-snapshot";
+const CANVAS_DRAFT_RECORD_KEY = "current-canvas-draft";
 function isImageUploadFile(file) {
   return ["image/jpeg", "image/png", "image/webp"].includes(String(file?.type || "").toLowerCase())
     || /\.(jpe?g|png|webp)$/i.test(String(file?.name || ""));
@@ -429,8 +434,9 @@ function currentPageTutorContext(viewName = state.view) {
   const learnerMessages = $$(".message.user-message", $("#chatMessages")).length;
   context.topic = selected ? "Question paper" : "";
   context.current_question = selected?.text || askText.slice(0, 900);
-  context.question_number = selected ? String(selected.number || "") : "";
-  context.page_status = selected ? `Question ${selected.number || "from the selected paper"} is open in Ask.` : "The Ask page is open for a maths question.";
+  context.question_number = selected ? String(selected.contextNumber || selected.number || "") : "";
+  context.selected_subquestion = selected ? String(selected.number || "") : "";
+  context.page_status = selected ? `Full Question ${selected.contextNumber || selected.number || "from the selected paper"} is open in Ask; ${selected.number ? `the learner selected ${selected.number}.` : ""}` : "The Ask page is open for a maths question.";
   context.page_activity = `${learnerMessages} learner message${learnerMessages === 1 ? "" : "s"} in this Ask conversation${askText ? "; an unsent question is in the editor" : ""}.`;
   context.page_progress = askText ? "A question is drafted and ready to send." : learnerMessages ? "Continue the current Ask conversation." : "Ready for a maths question.";
   context.page_visible_support = "";
@@ -482,7 +488,9 @@ function showWorkspace() {
   ["#globalGrade", "#practiceGrade", "#examGrade", "#lessonGrade"].forEach((selector) => {
     $(selector).value = String(state.grade);
   });
-  restorePaperSession();
+  restoreUiState();
+  restoreAskConversation();
+  void restorePaperSession().then(() => restoreCanvasDraft());
   registerServiceWorker();
   renderSourceLinks();
   void renderExamPaperLinks();
@@ -824,6 +832,8 @@ $("#logoutButton").addEventListener("click", async () => {
 function activateView(viewName) {
   if (!APP_VIEWS.has(viewName)) return;
   const previousView = state.view;
+  const visibleView = $(".view[data-view-panel]:not([hidden])")?.dataset.viewPanel;
+  if (visibleView === previousView) persistWorkspaceScroll();
   if (previousView !== viewName) realtimeTutor.stopSpeaking();
   if (realtimeTutor.activeContext && realtimeTutor.activeContext !== viewName) void realtimeTutor.stop();
   state.view = viewName;
@@ -834,6 +844,7 @@ function activateView(viewName) {
     panel.hidden = !active;
     panel.classList.toggle("is-visible", active);
   });
+  restoreWorkspaceScroll(viewName);
   highlightPageVoiceButton(viewName);
   refreshTutorWelcomeForPage();
   if (viewName === "practice" && !state.practiceTopics.length) {
@@ -842,7 +853,6 @@ function activateView(viewName) {
   }
   if (viewName === "exam") {
     void renderExamPaperLinks();
-    clearExamTopicSelections();
     if (!state.examSessionId && !state.examTopics.length) loadExamTopics().catch((error) => setStatus($("#examStatus"), error.message, "error"));
   }
   if (viewName === "lessons") loadLessons().catch((error) => setStatus($("#lessonStatus"), error.message, "error"));
@@ -901,8 +911,119 @@ function appendMessage(text, { mine = false, kind = "", imageUrl = "", actions =
   }
   $("#chatMessages").append(article);
   $("#chatMessages").scrollTop = $("#chatMessages").scrollHeight;
+  persistAskConversation();
   return article;
 }
+
+function persistAskConversation() {
+  const conversation = $$(".message", $("#chatMessages"))
+    .filter((message) => !message.classList.contains("welcome-message"))
+    .slice(-80).map((message) => ({
+    mine: message.classList.contains("user-message"),
+    kind: $(".message-kind", message)?.textContent || "",
+    text: $("p", message)?.textContent || "",
+  }));
+  try { sessionStorage.setItem(ASK_CONVERSATION_STORAGE_KEY, JSON.stringify(conversation)); }
+  catch { /* The visible conversation remains available in the current page. */ }
+}
+
+function parentPaperQuestionNumber(value) {
+  return String(value || "").trim().match(/^(?:question|q)?\s*(\d{1,2})/i)?.[1] || String(value || "").trim();
+}
+
+function restoreAskConversation() {
+  const host = $("#chatMessages");
+  if (host.dataset.restored === "true") return;
+  host.dataset.restored = "true";
+  let conversation = [];
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(ASK_CONVERSATION_STORAGE_KEY) || "[]");
+    if (Array.isArray(saved)) conversation = saved.slice(-80);
+  } catch { /* Ignore a damaged per-tab conversation snapshot. */ }
+  if (!conversation.length) return;
+  host.replaceChildren();
+  for (const item of conversation) {
+    if (!item || typeof item.text !== "string") continue;
+    const article = document.createElement("article");
+    article.className = `message ${item.mine ? "user-message" : "assistant-message"}`;
+    if (item.kind) {
+      const label = document.createElement("span");
+      label.className = "message-kind";
+      label.textContent = String(item.kind);
+      article.append(label);
+    }
+    const body = document.createElement("p");
+    renderMath(body, item.text);
+    article.append(body);
+    host.append(article);
+  }
+  host.scrollTop = host.scrollHeight;
+}
+
+function persistUiState() {
+  const fields = {};
+  $$("#workspace input[id], #workspace textarea[id], #workspace select[id]").forEach((field) => {
+    if (field.type === "file" || field.type === "password" || field.disabled) return;
+    if (["globalGrade", "practiceGrade", "examGrade", "lessonGrade"].includes(field.id)) return;
+    fields[field.id] = field.type === "checkbox" || field.type === "radio" ? { checked: field.checked } : { value: field.value };
+  });
+  try { sessionStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify(fields)); }
+  catch { /* The active page remains usable when storage is full or disabled. */ }
+}
+
+function restoreUiState() {
+  let fields = {};
+  try { fields = JSON.parse(sessionStorage.getItem(UI_STATE_STORAGE_KEY) || "{}"); }
+  catch { return; }
+  if (!fields || typeof fields !== "object") return;
+  for (const [id, saved] of Object.entries(fields)) {
+    const field = document.getElementById(id);
+    if (!field || field.type === "file" || field.type === "password") continue;
+    if (Object.hasOwn(saved || {}, "checked")) field.checked = Boolean(saved.checked);
+    else if (typeof saved?.value === "string") field.value = saved.value;
+  }
+}
+
+let workspaceScrollRestorePending = false;
+let workspaceScrollSaveTimer = 0;
+
+function readWorkspaceScrollPositions() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(WORKSPACE_SCROLL_STORAGE_KEY) || "{}");
+    return saved && typeof saved === "object" ? saved : {};
+  } catch { return {}; }
+}
+
+function persistWorkspaceScroll() {
+  const mainPanel = $("#mainPanel");
+  if (!mainPanel || !state.view) return;
+  const positions = readWorkspaceScrollPositions();
+  positions[state.view] = Math.max(0, Number(mainPanel.scrollTop) || 0);
+  try { sessionStorage.setItem(WORKSPACE_SCROLL_STORAGE_KEY, JSON.stringify(positions)); }
+  catch { /* Scroll restoration is optional when session storage is full. */ }
+}
+
+function restoreWorkspaceScroll(viewName = state.view) {
+  const position = Number(readWorkspaceScrollPositions()[viewName]);
+  workspaceScrollRestorePending = true;
+  requestAnimationFrame(() => {
+    $("#mainPanel").scrollTop = Number.isFinite(position) ? Math.max(0, position) : 0;
+    requestAnimationFrame(() => { workspaceScrollRestorePending = false; });
+  });
+}
+
+$("#mainPanel").addEventListener("scroll", () => {
+  if (workspaceScrollRestorePending) return;
+  clearTimeout(workspaceScrollSaveTimer);
+  workspaceScrollSaveTimer = window.setTimeout(persistWorkspaceScroll, 120);
+}, { passive: true });
+
+document.addEventListener("input", (event) => {
+  if (event.target.matches("#workspace input[id], #workspace textarea[id], #workspace select[id]")) persistUiState();
+}, true);
+document.addEventListener("change", (event) => {
+  if (event.target.matches("#workspace input[id], #workspace textarea[id], #workspace select[id]")) persistUiState();
+}, true);
 
 function askConversationHistory(limit = 12) {
   return $$(".message", $("#chatMessages")).slice(-limit).map((message) => ({
@@ -980,14 +1101,24 @@ function updateAskPhotoUploadControls() {
   $("[data-file-trigger=askCameraInput]").disabled = disabled;
 }
 
-function restorePaperSession() {
+async function restorePaperSession() {
   const hasPaper = Boolean(state.paperDocumentId && state.inspectionId);
   $("#paperTools").hidden = !hasPaper;
-  if (hasPaper) {
-    $("#paperFileName").textContent = state.paperFileName || "Question paper uploaded in this session";
-    $("#paperStatus").textContent = "Choose another question number to use the same uploaded paper.";
-    $("#paperQuestionNumber").value = "";
-  }
+  if (!hasPaper) return;
+  $("#paperFileName").textContent = state.paperFileName || "Question paper uploaded in this session";
+  $("#paperStatus").textContent = "Choose another question number to use the same uploaded paper.";
+  try {
+    const saved = await workspaceRecord(PAPER_SNAPSHOT_RECORD_KEY);
+    if (!saved || saved.paper_document_id !== state.paperDocumentId || !saved.image || !saved.question) return;
+    state.selectedPaperQuestion = saved.question;
+    state.paperPageImage = saved.image;
+    $("#paperQuestionNumber").value = saved.entered_question || saved.question.number || "";
+    $("#paperSnapshotTitle").textContent = `Question ${saved.question.number}`;
+    $("#paperSnapshotImage").src = saved.image;
+    $("#paperQuestionText").hidden = true;
+    $("#paperSnapshotCard").hidden = false;
+    setStatus($("#paperStatus"), "Your selected question and full source page have been restored.", "success");
+  } catch { /* Keep the uploaded paper available if local page caching is unavailable. */ }
 }
 
 function clearPaperSessionLocal() {
@@ -999,6 +1130,9 @@ function clearPaperSessionLocal() {
   sessionStorage.removeItem("sharperx_web_paper_id");
   sessionStorage.removeItem("sharperx_web_memo_id");
   sessionStorage.removeItem("sharperx_web_paper_name");
+  void deleteWorkspaceRecord(PAPER_SNAPSHOT_RECORD_KEY).catch(() => {});
+  $("#paperSnapshotCard").hidden = true;
+  $("#paperSnapshotImage").removeAttribute("src");
   $("#paperTools").hidden = true;
 }
 
@@ -1026,18 +1160,12 @@ async function discardSessionPaperUploads({ keepalive = false } = {}) {
   clearPaperSessionLocal();
 }
 
-window.addEventListener("pagehide", (event) => {
-  if (event.persisted) return;
-  const inspectionId = state.inspectionId || sessionStorage.getItem("sharperx_web_inspection_id") || "";
-  const documentIds = [...new Set([
-    state.paperDocumentId || sessionStorage.getItem("sharperx_web_paper_id") || "",
-    state.memoDocumentId || sessionStorage.getItem("sharperx_web_memo_id") || "",
-  ].filter(Boolean))];
-  if (inspectionId && documentIds.length) {
-    void Promise.allSettled(documentIds.map((id) => deleteSessionPaperDocument(id, inspectionId, true)));
-  }
-  clearPaperSessionLocal();
-}, { once: true });
+window.addEventListener("pagehide", () => {
+  persistUiState();
+  persistWorkspaceScroll();
+  persistAskConversation();
+  persistCanvasDraft();
+});
 
 async function uploadPaper(file, kind) {
   if (!file) return;
@@ -1099,21 +1227,26 @@ $("#showPaperQuestionButton").addEventListener("click", async () => {
   button.disabled = true;
   setStatus($("#paperStatus"), `Finding question ${questionNumber} and its page…`);
   try {
+    const contextNumber = parentPaperQuestionNumber(questionNumber);
     const result = await postJson(`/api/inspections/${encodeURIComponent(state.inspectionId)}/question-snapshot`, {
       document_id: state.paperDocumentId,
-      question_number: questionNumber,
+      question_number: contextNumber,
       memo_document_id: state.memoDocumentId || null,
     });
     const pageBase64 = result.image_png_base64 || result.question_png_base64 || result.full_page_png_base64 || result.page_png_base64 || "";
     if (!pageBase64) throw new Error("The full page containing that question could not be prepared.");
-    const questionNumberShown = result.question_number || result.extracted_question_number || questionNumber;
+    const questionNumberShown = questionNumber;
+    const contextQuestionNumber = parentPaperQuestionNumber(result.question_number || result.extracted_question_number || contextNumber);
     state.paperPageImage = `data:image/png;base64,${pageBase64}`;
     state.selectedPaperQuestion = {
       number: questionNumberShown,
-      text: `Read Question ${questionNumberShown} from the original uploaded page snapshot. Treat the page image as the authoritative source.`,
+      contextNumber: contextQuestionNumber,
+      contextText: String(result.question_text || "").slice(0, 24000),
+      text: `Read all of Question ${contextQuestionNumber}, including its instructions and subquestions. Focus guidance on selected subquestion ${questionNumberShown}. Treat the original page snapshot as authoritative.`,
       memoText: result.memo_text || "",
       focus: result.question_focus || null,
     };
+    void saveWorkspaceRecord({ id: PAPER_SNAPSHOT_RECORD_KEY, paper_document_id: state.paperDocumentId, entered_question: questionNumber, question: state.selectedPaperQuestion, image: state.paperPageImage, saved_at: Date.now() }).catch(() => {});
     $("#paperSnapshotTitle").textContent = `Question ${state.selectedPaperQuestion.number}`;
     $("#paperSnapshotImage").src = state.paperPageImage;
     $("#paperQuestionText").hidden = true;
@@ -1129,13 +1262,13 @@ $("#showPaperQuestionButton").addEventListener("click", async () => {
       subject: "Mathematics",
       grade: state.grade,
       topic: "Question paper",
-      question: `Read Question ${state.selectedPaperQuestion.number} directly from the attached original paper page. Treat the page snapshot as authoritative and give question-specific hints without reproducing the question text.`,
+      question: `Read all of Question ${state.selectedPaperQuestion.contextNumber}, including every subquestion and the instructions on the source page. The learner selected ${state.selectedPaperQuestion.number}; focus the hints on that part while considering the full question context. Treat the attached page snapshot as authoritative and do not reproduce its text.`,
       mode: "question_hints",
       inspection_id: state.inspectionId,
       ai_tier: "luna",
       allow_web_search: false,
       question_paper_document_id: state.paperDocumentId,
-      question_paper_question_number: String(state.selectedPaperQuestion.number),
+      question_paper_question_number: String(state.selectedPaperQuestion.contextNumber),
       conversation_history: askConversationHistory(),
       app_context: {
         page: "Ask",
@@ -1143,8 +1276,9 @@ $("#showPaperQuestionButton").addEventListener("click", async () => {
         grade: state.grade,
         subject: "Mathematics",
         topic: "Question paper",
-        current_question: `Question ${state.selectedPaperQuestion.number} from the attached original paper page snapshot.`,
-        question_number: String(state.selectedPaperQuestion.number),
+        current_question: `Full Question ${state.selectedPaperQuestion.contextNumber} and its subquestions from the attached source page. The selected focus is Question ${state.selectedPaperQuestion.number}.`,
+        question_number: String(state.selectedPaperQuestion.contextNumber),
+        selected_subquestion: String(state.selectedPaperQuestion.number),
       },
     });
     requireTutorCompletion(hintResult, "Paper hints");
@@ -1217,7 +1351,7 @@ async function sendAsk(event) {
       confirmed_photo_transcription: null,
       photo_reading_confirmed: false,
       question_paper_document_id: selected ? state.paperDocumentId : null,
-      question_paper_question_number: selected ? selected.number : null,
+      question_paper_question_number: selected ? String(selected.contextNumber || selected.number || "") : null,
       marking_memo_reference: selected && selected.memoText ? selected.memoText.slice(0, 30000) : null,
       conversation_history: conversationHistory,
       app_context: {
@@ -1227,7 +1361,8 @@ async function sendAsk(event) {
         subject: "Mathematics",
         topic: selected ? "Question paper" : "",
         current_question: selected?.text || text,
-        question_number: selected ? String(selected.number || "") : "",
+        question_number: selected ? String(selected.contextNumber || selected.number || "") : "",
+        selected_subquestion: selected ? String(selected.number || "") : "",
       },
     };
     setStatus($("#voiceStatus"), "Preparing your response…");
@@ -1434,7 +1569,7 @@ const realtimeTutor = installRealtimeTutor({
       inspection_id: inspectionId,
       question_text: selected?.text || getMathEditorLatex("ask").trim() || null,
       question_paper_document_id: selected ? state.paperDocumentId : null,
-      question_paper_question_number: selected ? String(selected.number || "") : null,
+      question_paper_question_number: selected ? String(selected.contextNumber || selected.number || "") : null,
       app_context: currentPageTutorContext(),
       conversation_history: history,
     };
@@ -2650,7 +2785,6 @@ $("#practiceFormulaButton").addEventListener("click", () => {
 });
 
 $("#practiceCanvasButton").addEventListener("click", () => openCanvas("practice", state.currentPracticeQuestion));
-$("#practiceGraphCanvasButton").addEventListener("click", () => openCanvas("practice-graph", state.currentPracticeQuestion));
 
 const mathEditorFrames = {
   ask: $("#askMathEditor"),
@@ -2725,6 +2859,12 @@ function initializeMathEditor(name) {
     api.execute({ name: "loadLatex", value: settings.pendingLatex });
     delete settings.pendingLatex;
   }
+  if (name === "ask") {
+    try {
+      const savedLatex = sessionStorage.getItem("sharperx_web_ask_editor_v1");
+      if (savedLatex) api.execute({ name: "loadLatex", value: savedLatex });
+    } catch { /* The editor works normally if per-tab storage is unavailable. */ }
+  }
   if (name === "practice") state.practiceEditorReady = true;
   return true;
 }
@@ -2743,6 +2883,10 @@ window.addEventListener("message", (event) => {
   const name = getMathEditorNameForWindow(event.source);
   if (!name) return;
   mathEditorStates.set(name, event.data.state || null);
+  if (name === "ask" && event.data.state?.event === "change") {
+    try { sessionStorage.setItem("sharperx_web_ask_editor_v1", String(event.data.state?.latex || "")); }
+    catch { /* Keep the active editor usable when storage is unavailable. */ }
+  }
   if (name === "practice") state.practiceEditorState = event.data.state || null;
   if (name === activeMathEditorName) updateMathKeyboardPreview(event.data.state?.latex || "");
   if (event.data.state?.event === "ready") initializeMathEditor(name);
@@ -3127,7 +3271,7 @@ async function uploadPracticePhotoFiles(files) {
   markButton.disabled = true;
   const lockedControls = [
     $("#practiceGrade"), $("#practiceTopic"), $("#practiceSubtopic"),
-    $("#practiceCanvasButton"), $("#practiceGraphCanvasButton"),
+    $("#practiceCanvasButton"),
     ...$$("button", $("#practiceQuestionList")),
   ].filter(Boolean).map((button) => [button, button.disabled]);
   lockedControls.forEach(([button]) => { button.disabled = true; });
@@ -3295,13 +3439,41 @@ function readMarkingText(result) {
 function openReportsDatabase() {
   if (!("indexedDB" in window)) return Promise.reject(new Error("This browser does not support local saved reports."));
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open("sharperx-web-reports", 1);
+    const request = indexedDB.open("sharperx-web-reports", 2);
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains("reports")) request.result.createObjectStore("reports", { keyPath: "id" });
+      if (!request.result.objectStoreNames.contains("workspace")) request.result.createObjectStore("workspace", { keyPath: "id" });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error("Saved reports could not be opened."));
   });
+}
+
+function workspaceRecord(id) {
+  return dbPromise.then((database) => new Promise((resolve, reject) => {
+    const request = database.transaction("workspace", "readonly").objectStore("workspace").get(id);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error || new Error("The saved workspace could not be read."));
+  }));
+}
+
+function saveWorkspaceRecord(record) {
+  return dbPromise.then((database) => new Promise((resolve, reject) => {
+    const transaction = database.transaction("workspace", "readwrite");
+    transaction.objectStore("workspace").put(record);
+    transaction.oncomplete = () => resolve(true);
+    transaction.onerror = () => reject(transaction.error || new Error("The workspace could not be saved."));
+    transaction.onabort = () => reject(transaction.error || new Error("The workspace could not be saved."));
+  }));
+}
+
+function deleteWorkspaceRecord(id) {
+  return dbPromise.then((database) => new Promise((resolve, reject) => {
+    const transaction = database.transaction("workspace", "readwrite");
+    transaction.objectStore("workspace").delete(id);
+    transaction.oncomplete = () => resolve(true);
+    transaction.onerror = () => reject(transaction.error || new Error("The saved workspace could not be cleared."));
+  }));
 }
 
 function reportTransaction(mode, operation) {
@@ -3875,9 +4047,36 @@ function updateExamTermControls() {
   updateExamGenerateButton();
 }
 
-function clearExamTopicSelections() {
-  $("#examTopicChoices").querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = false; });
-  updateExamGenerateButton();
+function examTopicScopeStorageKey(grade = $("#examGrade").value) {
+  return `sharperx_web_exam_topic_scope_${formatGrade(grade)}`;
+}
+
+function persistExamTopicSelections() {
+  const host = $("#examTopicChoices");
+  const saved = {
+    topics: [...host.querySelectorAll("[data-topic-choice]:checked")].map((input) => input.dataset.topicChoice),
+    subtopics: [...host.querySelectorAll("[data-subtopic-choice]:checked")].map((input) => input.dataset.subtopicChoice),
+    openTopics: [...host.querySelectorAll("details[data-topic-subtopics][open]")].map((details) => details.dataset.topicSubtopics),
+  };
+  try { sessionStorage.setItem(examTopicScopeStorageKey(), JSON.stringify(saved)); }
+  catch { /* Keep the current topic selection if session storage is unavailable. */ }
+}
+
+function restoreExamTopicSelections() {
+  let saved;
+  try { saved = JSON.parse(sessionStorage.getItem(examTopicScopeStorageKey()) || "null"); }
+  catch { return; }
+  if (!saved || typeof saved !== "object") return;
+  const topics = new Set(Array.isArray(saved.topics) ? saved.topics.map(String) : []);
+  const subtopics = new Set(Array.isArray(saved.subtopics) ? saved.subtopics.map(String) : []);
+  const openTopics = new Set(Array.isArray(saved.openTopics) ? saved.openTopics.map(String) : []);
+  const host = $("#examTopicChoices");
+  host.querySelectorAll("[data-subtopic-choice]").forEach((input) => { input.checked = subtopics.has(String(input.dataset.subtopicChoice)); });
+  host.querySelectorAll("[data-topic-choice]").forEach((input) => {
+    const children = [...host.querySelectorAll('[data-parent-topic="' + CSS.escape(input.dataset.topicChoice) + '"]')];
+    input.checked = children.length ? children.some((child) => child.checked) : topics.has(String(input.dataset.topicChoice));
+  });
+  host.querySelectorAll("details[data-topic-subtopics]").forEach((details) => { details.open = openTopics.has(String(details.dataset.topicSubtopics)); });
 }
 
 async function loadExamTopics() {
@@ -3927,6 +4126,7 @@ async function loadExamTopics() {
       if (choices.childElementCount) {
         const details = document.createElement("details");
         details.className = "topic-subtopic-details";
+        details.dataset.topicSubtopics = topic.id;
         const summary = document.createElement("summary");
         summary.textContent = `Subtopics · ${choices.childElementCount}`;
         details.append(summary, choices);
@@ -3945,7 +4145,11 @@ async function loadExamTopics() {
       const parent = host.querySelector(topicSelector);
       parent.checked = [...host.querySelectorAll(childrenSelector)].some((child) => child.checked);
       updateExamGenerateButton();
+        persistExamTopicSelections();
     }));
+    host.querySelectorAll("[data-topic-choice]").forEach((input) => input.addEventListener("change", persistExamTopicSelections));
+    host.querySelectorAll("details[data-topic-subtopics]").forEach((details) => details.addEventListener("toggle", persistExamTopicSelections));
+    restoreExamTopicSelections();
     updateExamGenerateButton();
     setStatus($("#examStatus"), state.examTopics.length + " Grade " + grade + " topics loaded. Choose topics and subtopics, then generate a paper.", "success");
   } catch (error) {
@@ -5123,7 +5327,6 @@ $("#examGuidanceButton").addEventListener("click", async () => {
 });
 $("#examFormulaButton").addEventListener("click", () => { void requestExamFormulae(); });
 $("#examCanvasButton").addEventListener("click", () => openCanvas("exam", state.examCurrentQuestion));
-$("#examGraphCanvasButton").addEventListener("click", () => openCanvas("exam-graph", state.examCurrentQuestion));
 $("#examUploadPhotoButton").addEventListener("click", () => $("#examHandwritingInput").click());
 $("#examTakePhotoButton").addEventListener("click", () => $("#examHandwritingCameraInput").click());
 async function reviewExamHandwriting(file, result) {
@@ -5176,7 +5379,7 @@ async function uploadExamHandwritingFiles(files) {
   }
   if (examPhotoBatchUploading) return;
   examPhotoBatchUploading = true;
-  const lockedButtons = ["#saveExamAnswer", "#previousExamQuestion", "#nextExamQuestion", "#submitExam", "#examCanvasButton", "#examGraphCanvasButton", "#examUploadPhotoButton", "#examTakePhotoButton"]
+  const lockedButtons = ["#saveExamAnswer", "#previousExamQuestion", "#nextExamQuestion", "#submitExam", "#examCanvasButton", "#examUploadPhotoButton", "#examTakePhotoButton"]
     .map((selector) => $(selector))
     .filter(Boolean)
     .map((button) => [button, button.disabled]);
@@ -6155,21 +6358,27 @@ function setPhoneCanvasConnected(connected) {
 }
 
 function phoneCanvasSnapshot() {
-  const source = state.canvas.strokes.filter((stroke) => stroke.source === "phone").reverse();
+  const rect = workingCanvas.getBoundingClientRect();
+  const frame = { width: Math.max(1, rect.width), height: Math.max(1, rect.height) };
+  const source = state.canvas.strokes.slice().reverse();
   let remaining = 4000;
   const result = [];
   for (const stroke of source) {
     if (remaining <= 0 || result.length >= 250) break;
-    const points = Array.isArray(stroke.remotePoints) ? stroke.remotePoints : [];
+    const points = Array.isArray(stroke.points) ? stroke.points : [];
     const count = Math.min(points.length, remaining);
     if (!count) continue;
-    const selected = count === points.length
+    const selected = (count === points.length
       ? points
-      : Array.from({ length: count }, (_, index) => points[Math.round(index * (points.length - 1) / Math.max(1, count - 1))]);
+      : Array.from({ length: count }, (_, index) => points[Math.round(index * (points.length - 1) / Math.max(1, count - 1))]))
+      .map((point) => ({
+        x: ((point.x - frame.width / 2) * state.canvas.scale + frame.width / 2 + state.canvas.offsetX) / frame.width,
+        y: ((point.y - frame.height / 2) * state.canvas.scale + frame.height / 2 + state.canvas.offsetY) / frame.height,
+      }));
     result.push({
       id: stroke.id,
-      frame: stroke.remoteFrame,
-      width: stroke.remoteWidth,
+      frame,
+      width: (Number(stroke.width) || 2.2) * state.canvas.scale,
       color: stroke.color,
       tool: stroke.tool || "pen",
       points: selected,
@@ -6219,6 +6428,9 @@ function applyPhoneCanvasMessage(message) {
       title: $("#canvasTitle").textContent,
       question: String(questionText || "").slice(0, 12_000),
       mode: state.canvas.mode,
+      canvas_frame: { width: workingCanvas.clientWidth || 1, height: workingCanvas.clientHeight || 1 },
+      graph_layout: state.canvas.graphLayout || null,
+      graph_functions_reviewed: state.canvas.graphWorkflow?.functions?.length || 0,
       strokes: phoneCanvasSnapshot(),
       stage: state.canvas.stage,
       region_kind: state.canvas.regionKind,
@@ -6256,6 +6468,7 @@ function applyPhoneCanvasMessage(message) {
     invalidateCanvasTranscription();
     const firstScreen = phoneCanvasMapPoint(message.point, message.frame);
     const first = canvasRegionScreenToWorld(firstScreen);
+    const partition = canvasPartitionIndex(first.y);
     state.canvas.strokes.push({
       id: String(message.id || ""),
       source: "phone",
@@ -6266,6 +6479,7 @@ function applyPhoneCanvasMessage(message) {
       color: message.tool === "eraser" ? "#fff" : "#162a29",
       tool: message.tool === "eraser" ? "eraser" : "pen",
       width: (Number(message.width) || 2.2) * firstScreen.scale,
+      partition,
     });
     drawCanvas();
   } else if (message.type === "stroke_points") {
@@ -6284,8 +6498,11 @@ function applyPhoneCanvasMessage(message) {
     if (!stroke || !Array.isArray(message.points)) return;
     message.points.forEach((point) => {
       const mapped = phoneCanvasMapPoint(point, message.frame);
+      const world = canvasRegionScreenToWorld(mapped);
+      const bounds = canvasPartitionBounds(stroke.partition);
+      world.y = Math.max(bounds.top, Math.min(bounds.bottom, world.y));
       stroke.remotePoints.push(point);
-      stroke.points.push(canvasRegionScreenToWorld(mapped));
+      stroke.points.push(world);
     });
     drawCanvas();
   } else if (message.type === "stroke_end") {
@@ -6296,6 +6513,7 @@ function applyPhoneCanvasMessage(message) {
       drawCanvasRegionOverlay();
       syncPhoneCanvasSetup();
     } else state.canvas.active = null;
+    persistCanvasDraft();
   } else if (message.type === "undo") {
     const targetId = String(message.id || "");
     if (state.canvas.stage === "regions") {
@@ -6334,7 +6552,18 @@ function applyPhoneCanvasMessage(message) {
     invalidateCanvasTranscription();
     state.canvas.strokes = state.canvas.strokes.filter((stroke) => stroke.source !== "phone");
     drawCanvas();
+  } else if (message.type === "graph_count") {
+    const count = Number(message.count);
+    if (!["graph-setup", "writing"].includes(state.canvas.stage) || state.canvas.mode === "graph" || state.canvas.graphLayout || !Number.isSafeInteger(count) || count < 1 || count > 12) {
+      phoneCanvasSend({ type: "submission_error", message: "Choose between 1 and 12 graph functions." });
+      return;
+    }
+    configureCanvasCompositeLayout(count);
   } else if (message.type === "submit") {
+    if (state.canvas.stage === "writing" && state.canvas.mode === "composite") {
+      $("#canvasReadWritingButton").click();
+      return;
+    }
     if (state.canvas.stage === "writing" && state.canvas.mode === "graph") {
       if (!state.canvas.strokes.length) {
         const messageText = "Draw the graph before asking for a review.";
@@ -6507,7 +6736,7 @@ function openCanvas(mode, question) {
   state.canvasQuestion = question || null;
   state.canvasReturnFocus = document.activeElement;
   const graphMode = mode.endsWith("graph");
-  state.canvas = { mode: graphMode ? "graph" : "write", stage: graphMode ? "graph-setup" : "writing", graphFunctionCount: 0, regions: [], regionKind: "words", draftRegion: null, strokes: [], scale: 1, offsetX: 0, offsetY: 0, pan: false, zoom: false, eraser: false, revision: 0, transcribedPhoto: null, photoPromise: null, active: null, drag: null, pointers: new Map(), pinch: null, size: { width: 0, height: 0 }, writingViewport: null, readingConfirmed: false, readingApplied: false, confirmedReading: null, readingAlternatives: [], graphWorkflow: null, questionAwareGraph: Boolean(question) || mode.startsWith("practice") || mode.startsWith("exam") || (mode === "ask-graph" && Boolean(state.selectedPaperQuestion)) };
+  state.canvas = { mode: graphMode ? "graph" : "write", stage: graphMode ? "graph-setup" : "writing", graphFunctionCount: 0, graphLayout: null, graphSketchIndex: 0, reviewingGraph: false, regions: [], regionKind: "words", draftRegion: null, strokes: [], scale: 1, offsetX: 0, offsetY: 0, pan: false, zoom: false, eraser: false, revision: 0, transcribedPhoto: null, photoPromise: null, active: null, drag: null, pointers: new Map(), pinch: null, size: { width: 0, height: 0 }, writingViewport: null, readingConfirmed: false, readingApplied: false, confirmedReading: null, readingAlternatives: [], graphWorkflow: null, questionAwareGraph: Boolean(question) || mode.startsWith("practice") || mode.startsWith("exam") || (mode === "ask-graph" && Boolean(state.selectedPaperQuestion)) };
   $("#canvasTitle").textContent = mode.endsWith("graph") ? "Draw a graph" : mode === "ask-write" ? "Write words / maths" : "Write or draw your answer";
   $("#canvasPanButton").setAttribute("aria-pressed", "false");
   $("#canvasPanButton").setAttribute("aria-label", "Enable pan mode");
@@ -6519,8 +6748,10 @@ function openCanvas(mode, question) {
   $("#canvasEraserButton").setAttribute("aria-label", "Enable eraser");
   $("#canvasEraserButton").textContent = "Eraser";
   $("#canvasReadWritingButton").textContent = graphMode ? "Review graph" : "Next";
+  $("#canvasDrawGraphsButton").hidden = graphMode;
   $("#canvasGraphCountPanel").hidden = !graphMode;
   $("#canvasGraphFunctionCount").value = "";
+  $("#canvasDrawGraphsButton").hidden = graphMode;
   setStatus($("#canvasGraphCountStatus"), "");
   $(".canvas-layout").hidden = graphMode;
   $("#canvasHelpText").hidden = graphMode;
@@ -6548,7 +6779,7 @@ function openCanvas(mode, question) {
   $("#canvasGraphDetails").disabled = false;
   $("#canvasGraphDetails").hidden = false;
   $("#canvasGraphEquationLabel").hidden = false;
-  $("#canvasGraphReviewFields").hidden = !mode.endsWith("graph");
+  $("#canvasGraphReviewFields").hidden = !graphMode;
   $("#canvasGraphGuidedPanel").hidden = true;
   $("#canvasGraphPreviewPanel").hidden = true;
   $("#canvasGraphPreview").replaceChildren();
@@ -6587,6 +6818,7 @@ function openCanvas(mode, question) {
   requestAnimationFrame(() => {
     resizeCanvas();
     drawCanvas();
+    updateCanvasStage();
     $("#workingCanvas").focus({ preventScroll: true });
   });
 }
@@ -6596,19 +6828,25 @@ function updateCanvasStage() {
   const selecting = canvas.stage === "regions";
   const graphSetup = canvas.stage === "graph-setup";
   const reviewPending = ["transcribing", "review"].includes(canvas.stage);
+  const waitingForGraph = canvas.mode === "composite" && canvas.graphLayout && (canvas.graphWorkflow?.functions?.length || 0) < canvas.graphLayout.count;
   $("#canvasDialog").classList.toggle("canvas-selecting-regions", selecting);
+  $("#canvasDialog").classList.toggle("canvas-composite-layout", Boolean(canvas.graphLayout));
   $("#canvasGraphCountPanel").hidden = !graphSetup;
-  $(".canvas-layout").hidden = graphSetup;
+  $(".canvas-layout").hidden = graphSetup && canvas.mode === "graph";
   $("#canvasHelpText").hidden = graphSetup || selecting || reviewPending;
   $$(".canvas-region-tool").forEach((button) => {
     button.hidden = !selecting;
     button.setAttribute("aria-pressed", String(button.dataset.canvasRegionKind === canvas.regionKind));
   });
   $("#canvasBackWritingButton").hidden = !selecting;
+  $("#canvasDrawGraphsButton").hidden = selecting || reviewPending || graphSetup || canvas.mode === "graph" || Boolean(canvas.graphLayout);
   $("#canvasReadWritingButton").hidden = selecting || ["graph-setup", "transcribing", "review"].includes(canvas.stage);
-  $("#canvasReadWritingButton").textContent = canvas.mode === "graph" ? "Review graph" : "Next";
+  $("#canvasReadWritingButton").textContent = canvas.mode === "graph" ? "Review graph"
+    : waitingForGraph ? `Review function ${(canvas.graphWorkflow?.functions?.length || 0) + 1}`
+      : canvas.mode === "composite" ? (canvas.graphWorkflow?.stage === "all-ready" ? "Select writing areas" : "Next") : "Next";
   if (selecting) $("#canvasHelpText").textContent = "Choose Words, Maths, or Drawings, then mark each area on the canvas. Select all the work you want reviewed.";
   else if (canvas.mode === "graph") $("#canvasHelpText").textContent = `Draw the graph with your phone or touch screen. The graph should contain ${canvas.graphFunctionCount} function${canvas.graphFunctionCount === 1 ? "" : "s"}.`;
+  else if (canvas.graphLayout) $("#canvasHelpText").textContent = `Write words and maths in the top area. Sketch each function in its own separated graph area below. Review each sketch to make its clean graph.`;
   else $("#canvasHelpText").textContent = "Write or draw, select Next, then mark Words, Maths, or Drawings on this canvas before transcribing. On other devices, pair your phone.";
   const finishButton = $("#finishCanvas");
   finishButton.textContent = canvas.stage === "regions" ? "Transcribe"
@@ -6636,10 +6874,170 @@ function enterCanvasRegionSelection() {
   updateCanvasStage();
 }
 
+function configureCanvasCompositeLayout(count) {
+  const canvas = state.canvas;
+  const surface = workingCanvas.parentElement;
+  const viewport = workingCanvas.getBoundingClientRect();
+  const writingHeight = Math.max(320, viewport.height || surface?.clientHeight || 480);
+  const graphHeight = Math.max(320, Math.round(writingHeight * 0.82));
+  canvas.mode = "composite";
+  canvas.graphFunctionCount = count;
+  canvas.graphSketchIndex = 0;
+  canvas.graphLayout = { writingHeight, graphHeight, count, totalHeight: writingHeight + graphHeight * count };
+  canvas.graphWorkflow = { stage: "sketches", functionCount: count, functionIndex: 1, functions: [], points: [], promptQueue: [], extraPointCount: 0 };
+  canvas.stage = "writing";
+  canvas.resizePreserveTop = true;
+  workingCanvas.style.height = `${canvas.graphLayout.totalHeight}px`;
+  $("#canvasRegionOverlay").style.height = `${canvas.graphLayout.totalHeight}px`;
+  if (surface) surface.scrollTop = 0;
+  requestAnimationFrame(() => {
+    resizeCanvas();
+    drawCanvas();
+    updateCanvasStage();
+    syncPhoneCanvasSetup();
+    persistCanvasDraft();
+  });
+  setStatus($("#canvasGraphCountStatus"), "");
+  $("#canvasGraphCountPanel").hidden = true;
+}
+
+function canvasPartitionIndex(y, layout = state.canvas?.graphLayout) {
+  if (!layout || y < layout.writingHeight) return 0;
+  return Math.max(1, Math.min(layout.count, Math.floor((y - layout.writingHeight) / layout.graphHeight) + 1));
+}
+
+function canvasPartitionBounds(index, layout = state.canvas?.graphLayout) {
+  if (!layout || index <= 0) return { top: 0, bottom: layout?.writingHeight || workingCanvas.clientHeight };
+  const top = layout.writingHeight + (index - 1) * layout.graphHeight;
+  return { top, bottom: top + layout.graphHeight };
+}
+
+function clampCanvasPointToPartition(point, index) {
+  const bounds = canvasPartitionBounds(index);
+  return {
+    x: Math.max(0, Math.min(state.canvas?.size?.width || workingCanvas.clientWidth || 1, point.x)),
+    y: Math.max(bounds.top, Math.min(bounds.bottom, point.y)),
+  };
+}
+
+function beginCompositeGraphReview() {
+  const canvas = state.canvas;
+  const functionIndex = (canvas.graphWorkflow?.functions?.length || 0) + 1;
+  if (functionIndex > canvas.graphLayout.count) {
+    enterCanvasRegionSelection();
+    return;
+  }
+  const strokes = canvas.strokes.filter((stroke) => stroke.partition === functionIndex);
+  if (!strokes.length) {
+    setCanvasReadingStatus(`Sketch function ${functionIndex} in its graph area before reviewing it.`, "error");
+    const bounds = canvasPartitionBounds(functionIndex);
+    const surface = workingCanvas.parentElement;
+    if (surface) surface.scrollTop = Math.max(0, bounds.top - 24);
+    return;
+  }
+  canvas.graphSketchIndex = functionIndex - 1;
+  canvas.reviewingGraph = true;
+  canvas.scale = 1;
+  canvas.offsetX = 0;
+  canvas.offsetY = 0;
+  canvas.pan = false;
+  canvas.zoom = false;
+  $("#canvasPanButton").setAttribute("aria-pressed", "false");
+  $("#canvasPanButton").setAttribute("aria-label", "Enable pan mode");
+  $("#canvasPanLabel").textContent = "Pan";
+  $("#canvasZoomButton").setAttribute("aria-pressed", "false");
+  $("#canvasZoomButton").setAttribute("aria-label", "Enable zoom");
+  $("#canvasZoomButton").textContent = "Zoom off";
+  canvas.stage = "transcribing";
+  updateCanvasStage();
+  void reviewCanvasReading();
+}
+
+function canvasDraftSnapshot() {
+  const canvas = state.canvas;
+  if (!canvas || !$("#canvasDialog").open || !state.canvasContext) return null;
+  return {
+    id: CANVAS_DRAFT_RECORD_KEY,
+    saved_at: Date.now(),
+    context: state.canvasContext,
+    question: state.canvasQuestion || null,
+    mode: canvas.mode,
+    stage: ["graph-setup", "regions"].includes(canvas.stage) ? canvas.stage : "writing",
+    canvasScrollTop: Number(workingCanvas.parentElement?.scrollTop) || 0,
+    graphFunctionCount: canvas.graphFunctionCount || 0,
+    graphLayout: canvas.graphLayout || null,
+    graphSketchIndex: canvas.graphSketchIndex || 0,
+    graphWorkflow: canvas.graphWorkflow || null,
+    strokes: (canvas.strokes || []).slice(-500).map((stroke) => ({
+      id: stroke.id || "",
+      source: stroke.source || "local",
+      color: stroke.color || "#162a29",
+      tool: stroke.tool || "pen",
+      width: Number(stroke.width) || 2.2,
+      partition: Number(stroke.partition) || 0,
+      remoteFrame: stroke.remoteFrame || null,
+      remoteWidth: Number(stroke.remoteWidth) || 0,
+      remotePoints: (stroke.remotePoints || []).slice(-2000).map((point) => ({ x: Number(point.x) || 0, y: Number(point.y) || 0 })),
+      points: (stroke.points || []).slice(-2000).map(({ x, y }) => ({ x: Number(x) || 0, y: Number(y) || 0 })),
+    })).filter((stroke) => stroke.points.length),
+    regions: (canvas.regions || []).slice(-20).map((region) => ({
+      id: region.id, kind: region.kind, x: region.x, y: region.y, width: region.width, height: region.height,
+    })),
+  };
+}
+
+function persistCanvasDraft() {
+  const draft = canvasDraftSnapshot();
+  if (draft) void saveWorkspaceRecord(draft).catch(() => {});
+}
+
+async function restoreCanvasDraft() {
+  let saved;
+  try { saved = await workspaceRecord(CANVAS_DRAFT_RECORD_KEY); }
+  catch { return; }
+  if (!saved || !saved.context || Date.now() - Number(saved.saved_at || 0) > 48 * 60 * 60 * 1000 || $("#canvasDialog").open) return;
+  const question = saved.question || (String(saved.context).startsWith("ask-") ? state.selectedPaperQuestion : null);
+  openCanvas(saved.context, question);
+  const canvas = state.canvas;
+  canvas.mode = ["composite", "graph"].includes(saved.mode) ? saved.mode : "write";
+  canvas.stage = ["graph-setup", "regions"].includes(saved.stage) ? saved.stage : "writing";
+  canvas.graphFunctionCount = Number(saved.graphFunctionCount) || 0;
+  canvas.graphLayout = saved.graphLayout && Number(saved.graphLayout.count) > 0 ? saved.graphLayout : null;
+  canvas.graphSketchIndex = Number(saved.graphSketchIndex) || 0;
+  canvas.graphWorkflow = saved.graphWorkflow && typeof saved.graphWorkflow === "object" ? saved.graphWorkflow : null;
+  canvas.strokes = Array.isArray(saved.strokes) ? saved.strokes : [];
+  canvas.regions = Array.isArray(saved.regions) ? saved.regions.map((region) => ({ ...region, snapshotUrl: "", snapshotBlob: null, snapshotPromise: null })) : [];
+  canvas.reviewingGraph = false;
+  canvas.readingConfirmed = false;
+  canvas.confirmedReading = null;
+  canvas.revision = 1;
+  if (canvas.graphLayout) {
+    workingCanvas.style.height = `${canvas.graphLayout.totalHeight}px`;
+    $("#canvasRegionOverlay").style.height = `${canvas.graphLayout.totalHeight}px`;
+    $("#canvasGraphCountPanel").hidden = true;
+  }
+  renderCanvasRegionSnapshots();
+  canvas.regions.forEach((region) => void captureCanvasRegionSnapshot(region).catch(() => {}));
+  if (canvas.stage === "regions") enterCanvasRegionSelection();
+  requestAnimationFrame(() => {
+    resizeCanvas(); drawCanvas(); updateCanvasStage();
+    if (workingCanvas.parentElement && canvas.graphLayout && canvas.stage !== "regions") {
+      workingCanvas.parentElement.scrollTop = Math.max(0, Number(saved.canvasScrollTop) || 0);
+    }
+  });
+  setCanvasReadingStatus("Your unfinished canvas and graph work have been restored.");
+}
+
 function syncPhoneCanvasSetup() {
   if (!phoneCanvasConnected) return;
   const regions = (state.canvas.regions || []).map((region) => canvasRegionSetupPayload(region));
-  phoneCanvasSend({ type: "setup", stage: state.canvas.stage, mode: state.canvas.mode, region_kind: state.canvas.regionKind, strokes: phoneCanvasSnapshot(), regions });
+  phoneCanvasSend({
+    type: "setup", stage: state.canvas.stage, mode: state.canvas.mode, region_kind: state.canvas.regionKind,
+    canvas_frame: { width: workingCanvas.clientWidth || 1, height: workingCanvas.clientHeight || 1 },
+    graph_layout: state.canvas.graphLayout || null,
+    graph_functions_reviewed: state.canvas.graphWorkflow?.functions?.length || 0,
+    strokes: phoneCanvasSnapshot(), regions,
+  });
 }
 
 function canvasRegionSetupPayload(region) {
@@ -6846,7 +7244,7 @@ async function captureCanvasRegionSnapshot(region) {
   region.snapshotPromise = snapshotPromise;
   try {
     const blob = await snapshotPromise;
-    if (!(state.canvas?.regions || []).includes(region)) return null;
+    if (!region.transient && !(state.canvas?.regions || []).includes(region)) return null;
     region.snapshotBlob = blob;
     region.snapshotUrl = URL.createObjectURL(blob);
     renderCanvasRegionSnapshots();
@@ -6886,7 +7284,10 @@ function resizeCanvas() {
     const uniformScale = Math.min(rect.width / old.width, rect.height / old.height);
     const nextScale = state.canvas.scale * uniformScale;
     state.canvas.offsetX = uniformScale * state.canvas.offsetX + nextScale * (rect.width - old.width) / 2;
-    state.canvas.offsetY = uniformScale * state.canvas.offsetY + nextScale * (rect.height - old.height) / 2;
+    const heightDelta = rect.height - old.height;
+    state.canvas.offsetY = uniformScale * state.canvas.offsetY + nextScale * heightDelta / 2
+      - (state.canvas.resizePreserveTop ? heightDelta / 2 : 0);
+    state.canvas.resizePreserveTop = false;
     state.canvas.scale = nextScale;
   }
   state.canvas.size = { width: rect.width, height: rect.height };
@@ -6914,6 +7315,30 @@ function drawCanvas() {
   context.translate(-rect.width / 2, -rect.height / 2);
   context.lineCap = "round";
   context.lineJoin = "round";
+  if (state.canvas.graphLayout) {
+    const layout = state.canvas.graphLayout;
+    context.save();
+    context.strokeStyle = "#c7d7e9";
+    context.fillStyle = "#5a6f89";
+    context.lineWidth = 1;
+    context.font = "600 14px system-ui, sans-serif";
+    context.setLineDash([]);
+    context.fillText("Words / maths", 14, 22);
+    context.setLineDash([8, 6]);
+    for (let index = 0; index <= layout.count; index += 1) {
+      const y = layout.writingHeight + index * layout.graphHeight;
+      context.beginPath();
+      context.moveTo(0, y);
+      context.lineTo(rect.width, y);
+      context.stroke();
+      if (index < layout.count) {
+        context.setLineDash([]);
+        context.fillText(`Function ${index + 1}`, 14, layout.writingHeight + index * layout.graphHeight + 24);
+        context.setLineDash([8, 6]);
+      }
+    }
+    context.restore();
+  }
   state.canvas.strokes.forEach((stroke) => {
     if (!stroke.points.length) return;
     context.beginPath();
@@ -6931,12 +7356,14 @@ function drawCanvas() {
 function fitCanvasToWriting() {
   const rect = workingCanvas.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
+  const writeHeight = state.canvas.graphLayout?.writingHeight || rect.height;
+  const strokes = state.canvas.graphLayout ? state.canvas.strokes.filter((stroke) => stroke.partition === 0) : state.canvas.strokes;
   let hasPoints = false;
   let minX = Infinity;
   let maxX = -Infinity;
   let minY = Infinity;
   let maxY = -Infinity;
-  state.canvas.strokes.forEach((stroke) => stroke.points.forEach((point) => {
+  strokes.forEach((stroke) => stroke.points.forEach((point) => {
     hasPoints = true;
     minX = Math.min(minX, point.x);
     maxX = Math.max(maxX, point.x);
@@ -6953,10 +7380,14 @@ function fitCanvasToWriting() {
   const padding = 28;
   const width = Math.max(8, maxX - minX);
   const height = Math.max(8, maxY - minY);
-  const fitScale = Math.min((rect.width - padding * 2) / width, (rect.height - padding * 2) / height);
+  const fitScale = Math.min((rect.width - padding * 2) / width, (writeHeight - padding * 2) / height);
   state.canvas.scale = Math.min(50, Math.max(.0001, fitScale));
   state.canvas.offsetX = (rect.width / 2 - (minX + maxX) / 2) * state.canvas.scale;
-  state.canvas.offsetY = (rect.height / 2 - (minY + maxY) / 2) * state.canvas.scale;
+  const centerY = (minY + maxY) / 2;
+  state.canvas.offsetY = state.canvas.graphLayout
+    ? (writeHeight - rect.height) / 2 + (rect.height / 2 - centerY) * state.canvas.scale
+    : (rect.height / 2 - centerY) * state.canvas.scale;
+  if (state.canvas.graphLayout && workingCanvas.parentElement) workingCanvas.parentElement.scrollTop = 0;
   drawCanvas();
 }
 
@@ -6990,7 +7421,36 @@ async function ensureCanvasPhoto(canvas, revision, onProgress = null) {
     if (!exportContext) throw new Error("The canvas image could not be created.");
     exportContext.fillStyle = "#ffffff";
     exportContext.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
-    exportContext.drawImage(workingCanvas, 0, 0, exportCanvas.width, exportCanvas.height);
+    const graphFunctions = canvas.mode === "composite" && canvas.graphWorkflow?.functions?.length === canvas.graphLayout?.count
+      ? canvas.graphWorkflow.functions
+      : [];
+    if (!graphFunctions.length || !canvas.graphLayout) {
+      exportContext.drawImage(workingCanvas, 0, 0, exportCanvas.width, exportCanvas.height);
+    } else {
+      const sourceScale = workingCanvas.width / Math.max(1, workingCanvas.clientWidth);
+      const writeHeight = Math.min(workingCanvas.height, Math.round(canvas.graphLayout.writingHeight * sourceScale));
+      const graphHeight = Math.round(canvas.graphLayout.graphHeight * sourceScale);
+      const destWriteHeight = Math.round(writeHeight * scale);
+      const destGraphHeight = Math.max(1, Math.round(graphHeight * scale));
+      exportContext.drawImage(workingCanvas, 0, 0, workingCanvas.width, writeHeight, 0, 0, exportCanvas.width, destWriteHeight);
+      for (let index = 0; index < graphFunctions.length; index += 1) {
+        const svg = renderCanvasGraphPreview([graphFunctions[index]]);
+        if (!svg) throw new Error(`The clean graph for function ${index + 1} could not be prepared.`);
+        const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
+        try {
+          const image = new Image();
+          await new Promise((resolve, reject) => {
+            image.onload = resolve;
+            image.onerror = () => reject(new Error(`The clean graph for function ${index + 1} could not be rendered.`));
+            image.src = url;
+          });
+          const top = destWriteHeight + index * destGraphHeight;
+          exportContext.drawImage(image, 0, top, exportCanvas.width, destGraphHeight);
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      }
+    }
     const blob = await new Promise((resolve, reject) => exportCanvas.toBlob(
       (value) => value ? resolve(value) : reject(new Error("The canvas image could not be created.")),
       "image/jpeg",
@@ -7109,9 +7569,15 @@ async function reviewCanvasReading() {
     setCanvasReadingStatus("Write or draw something on the canvas first.", "error");
     return;
   }
-  const graphMode = canvas.mode === "graph";
+  const graphMode = canvas.mode === "graph" || canvas.reviewingGraph;
+  const graphRegion = canvas.reviewingGraph && canvas.graphLayout
+    ? (() => {
+      const bounds = canvasPartitionBounds(canvas.graphSketchIndex + 1);
+      return { id: `graph-sketch-${canvas.graphSketchIndex + 1}`, kind: "drawings", x: 0, y: bounds.top, width: workingCanvas.clientWidth, height: bounds.bottom - bounds.top, transient: true };
+    })()
+    : null;
   const regions = graphMode
-    ? [{ id: "graph-sketch", kind: "drawings", x: 0, y: 0, width: workingCanvas.clientWidth, height: workingCanvas.clientHeight }]
+    ? [graphRegion || { id: "graph-sketch", kind: "drawings", x: 0, y: 0, width: workingCanvas.clientWidth, height: workingCanvas.clientHeight, transient: true }]
     : canvas.regions.slice();
   if (!graphMode && !regions.length) {
     setCanvasReadingStatus("Mark at least one area first. Choose Words, Maths, or Drawings.", "error");
@@ -7151,20 +7617,23 @@ async function reviewCanvasReading() {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 180_000);
     const collected = { words: [], formulas: [], drawings: [], uncertainties: [], wordAlternatives: [], hasUncertainty: false };
+    let graphPhotoId = "";
     try {
       for (let index = 0; index < regions.length; index += 1) {
         const region = regions[index];
         const label = region.kind === "maths" ? "maths" : region.kind === "drawings" ? "drawing" : "words";
         setCanvasReadingStatus(`Reading ${label} area ${index + 1} of ${regions.length}…`, "", true);
-        const bounds = graphMode
+        const graphCrop = Boolean(canvas.reviewingGraph && canvas.graphLayout);
+        const bounds = graphMode && !graphCrop
           ? { x: 0, y: 0, width: 1, height: 1 }
           : canvasRegionNormalizedBounds(region);
-        if (!graphMode && (bounds.width < 0.002 || bounds.height < 0.002)) {
+        if ((!graphMode || graphCrop) && (bounds.width < 0.002 || bounds.height < 0.002)) {
           throw new Error("A selected box is outside the visible canvas. Redraw it around the writing you want transcribed.");
         }
-        const photoId = graphMode
+        const photoId = graphMode && !graphCrop
           ? photo.photoId
           : await uploadCanvasRegionCrop(photo, region, controller.signal, revision);
+        if (graphCrop) graphPhotoId = photoId;
         const requestBounds = { x: 0, y: 0, width: 1, height: 1 };
         assertCanvasSnapshotCurrent(canvas, revision);
         const result = await postJson("/api/education/photo/transcribe-math", {
@@ -7219,6 +7688,7 @@ async function reviewCanvasReading() {
     } finally {
       clearTimeout(timeout);
     }
+    if (canvas.reviewingGraph && graphPhotoId) canvas.readingPhoto = { ...photo, photoId: graphPhotoId };
     assertCanvasSnapshotCurrent(canvas, revision);
     const recognizedText = collected.words.join("\n");
     $("#canvasReadingWords").value = recognizedText;
@@ -7247,19 +7717,23 @@ async function reviewCanvasReading() {
     }
     canvas.readingResult = collected;
     if (graphMode) {
+      const priorWorkflow = canvas.graphWorkflow || {};
+      const graphFunctionCount = canvas.graphLayout?.count || canvas.graphFunctionCount || 1;
+      const functionIndex = canvas.graphLayout ? canvas.graphSketchIndex + 1 : 1;
       canvas.graphWorkflow = {
+        ...priorWorkflow,
         stage: "confirm-type",
-        functionCount: canvas.graphFunctionCount,
-        functionIndex: 1,
+        functionCount: graphFunctionCount,
+        functionIndex,
         currentType: "",
         points: [],
         promptQueue: [],
         activePrompt: null,
         extraPointCount: 0,
         currentResult: null,
-        functions: [],
+        functions: Array.isArray(priorWorkflow.functions) ? priorWorkflow.functions : [],
       };
-      $("#canvasGraphFunctionHeading").textContent = `Function 1 of ${canvas.graphFunctionCount}: confirm its type`;
+      $("#canvasGraphFunctionHeading").textContent = `Function ${functionIndex} of ${graphFunctionCount}: confirm its type`;
       $("#canvasGraphGuidedStatus").textContent = "Confirm or correct the type for this function. You will then enter exact key values.";
       $("#canvasGraphPointPrompt").textContent = "Confirm the graph type above to begin collecting key points.";
       $("#canvasGraphPointHistory").replaceChildren();
@@ -7653,7 +8127,7 @@ function parseCanvasGraphCoordinate(value) {
 function placeCanvasGraphConfirmButton(canvas = state.canvas) {
   const button = $("#canvasReadingConfirm");
   const home = $("#canvasReadingConfirmHome");
-  const workflow = canvas?.mode === "graph" ? canvas.graphWorkflow : null;
+  const workflow = canvas && (canvas.mode === "graph" || canvas.reviewingGraph) ? canvas.graphWorkflow : null;
   let target = home;
   if (workflow?.stage === "confirm-type") target = $("#canvasGraphTypeAction");
   else if (["collecting", "retry"].includes(workflow?.stage)) target = $("#canvasGraphPointAction");
@@ -7906,6 +8380,27 @@ async function advanceCanvasGraphWorkflow() {
   if (workflow.stage === "preview") {
     workflow.functions.push({ graphType: workflow.currentType, points: workflow.points.slice(), result: workflow.currentResult });
     if (workflow.functionIndex < workflow.functionCount) {
+      if (canvas.mode === "composite" && canvas.graphLayout) {
+        workflow.functionIndex += 1;
+        workflow.stage = "sketches";
+        workflow.currentType = "";
+        workflow.currentResult = null;
+        workflow.points = [];
+        workflow.promptQueue = [];
+        workflow.activePrompt = null;
+        canvas.graphSketchIndex = workflow.functionIndex - 1;
+        canvas.reviewingGraph = false;
+        canvas.stage = "writing";
+        $("#canvasReadingReview").hidden = true;
+        const bounds = canvasPartitionBounds(workflow.functionIndex);
+        const surface = workingCanvas.parentElement;
+        if (surface) surface.scrollTop = Math.max(0, bounds.top - 20);
+        setCanvasReadingStatus(`Function ${workflow.functionIndex - 1} is confirmed. Sketch function ${workflow.functionIndex} in its own area, then review it.`);
+        updateCanvasStage();
+        syncPhoneCanvasSetup();
+        persistCanvasDraft();
+        return;
+      }
       workflow.functionIndex += 1;
       workflow.stage = "confirm-type";
       workflow.currentType = "";
@@ -7940,9 +8435,25 @@ async function advanceCanvasGraphWorkflow() {
       graphType: workflow.functions.map((item) => item.graphType).join("; "),
       graphDetails: summary,
     };
+    workflow.stage = "all-ready";
+    if (canvas.mode === "composite" && canvas.graphLayout) {
+      canvas.reviewingGraph = false;
+      canvas.readingConfirmed = false;
+      canvas.transcribedPhoto = null;
+      canvas.photoPromise = null;
+      const hasWrittenWork = canvas.strokes.some((stroke) => stroke.partition === 0 && stroke.points?.length);
+      if (hasWrittenWork) {
+        enterCanvasRegionSelection();
+        setCanvasReadingStatus("All clean graph previews are confirmed. Now box any words or maths in the top writing area to transcribe them.", "success");
+      } else {
+        canvas.readingConfirmed = true;
+        $("#finishCanvas").click();
+      }
+      persistCanvasDraft();
+      return;
+    }
     canvas.readingConfirmed = true;
     $("#canvasReadingConfirm").textContent = "Use graph";
-    workflow.stage = "all-ready";
     placeCanvasGraphConfirmButton(canvas);
     updateCanvasStage();
     setCanvasReadingStatus("All function previews are confirmed. Use the graph to attach it to your work.", "success");
@@ -7994,8 +8505,13 @@ $("#canvasReadWritingButton").addEventListener("click", (event) => {
   const canvas = state.canvas;
   if (!canvas || canvas.readingConfirmed) return;
   if (canvas.stage === "graph-setup") {
-    setStatus($("#canvasGraphCountStatus"), "Enter a whole number greater than 0 before drawing the graph.", "error");
+    setStatus($("#canvasGraphCountStatus"), "Enter a whole number from 1 to 12 before continuing.", "error");
     $("#canvasGraphFunctionCount").focus({ preventScroll: true });
+    event.stopImmediatePropagation();
+    return;
+  }
+  if (canvas.stage === "writing" && canvas.mode === "composite") {
+    beginCompositeGraphReview();
     event.stopImmediatePropagation();
     return;
   }
@@ -8008,7 +8524,7 @@ $("#canvasReadWritingButton").addEventListener("click", (event) => {
     event.stopImmediatePropagation();
     return;
   }
-  if (canvas.stage === "regions" && !canvas.regions.length) {
+  if (canvas.stage === "regions" && !canvas.regions.length && canvas.mode !== "composite") {
     setCanvasReadingStatus("Mark at least one area first. Choose Words, Maths, or Drawings.", "error");
     event.stopImmediatePropagation();
     return;
@@ -8026,6 +8542,15 @@ $("#canvasReadWritingButton").addEventListener("click", (event) => {
   event.stopImmediatePropagation();
   void reviewCanvasReading();
 });
+$("#canvasDrawGraphsButton").addEventListener("click", () => {
+  const canvas = state.canvas;
+  if (!canvas || canvas.graphLayout) return;
+  canvas.stage = "graph-setup";
+  $("#canvasGraphCountPanel").hidden = false;
+  updateCanvasStage();
+  requestAnimationFrame(() => $("#canvasGraphFunctionCount").focus({ preventScroll: true }));
+});
+
 $$('.canvas-region-tool').forEach((button) => button.addEventListener("click", () => {
   state.canvas.regionKind = button.dataset.canvasRegionKind;
   setStatus($("#canvasReadingStatus"), `Mark the ${state.canvas.regionKind} area on the canvas.`);
@@ -8045,19 +8570,16 @@ $("#canvasBackWritingButton").addEventListener("click", () => {
 $("#canvasGraphStartButton").addEventListener("click", () => {
   const input = $("#canvasGraphFunctionCount");
   const count = input.valueAsNumber;
-  if (!Number.isSafeInteger(count) || count < 1) {
-    setStatus($("#canvasGraphCountStatus"), "Enter a whole number greater than 0.", "error");
+  if (!Number.isSafeInteger(count) || count < 1 || count > 12) {
+    setStatus($("#canvasGraphCountStatus"), "Enter a whole number from 1 to 12.", "error");
     input.focus({ preventScroll: true });
     return;
   }
-  setStatus($("#canvasGraphCountStatus"), "");
-  state.canvas.graphFunctionCount = count;
-  state.canvas.stage = "writing";
-  updateCanvasStage();
+  configureCanvasCompositeLayout(count);
 });
 
 $("#canvasReadingConfirm").addEventListener("click", async () => {
-  if (state.canvas?.mode === "graph" && state.canvas.graphWorkflow) {
+  if ((state.canvas?.mode === "graph" || state.canvas?.reviewingGraph) && state.canvas.graphWorkflow) {
     await advanceCanvasGraphWorkflowSafely();
     return;
   }
@@ -8069,6 +8591,14 @@ $("#canvasReadingConfirm").addEventListener("click", async () => {
     graphType: $("#canvasGraphType").value.trim(),
     graphDetails: $("#canvasGraphDetails").value.trim(),
   };
+  if (state.canvas?.mode === "composite" && state.canvas.graphWorkflow?.functions?.length) {
+    const functions = state.canvas.graphWorkflow.functions;
+    reading.graphType = functions.map((item) => item.graphType).join("; ");
+    reading.graphDetails = functions.map((item, index) => {
+      const details = (item.points || []).map((point) => `${point.label}: ${point.value}`).join(", ");
+      return `Function ${index + 1}: ${item.graphType}${details ? `; confirmed details: ${details}` : ""}`;
+    }).join("\n");
+  }
   if (!reading.words && !reading.formula && !reading.drawing && !reading.comment) {
     setStatus($("#canvasReadingStatus"), "There is no confirmed reading to use. Edit a field or choose Use image as drawn.", "error");
     return;
@@ -8131,6 +8661,10 @@ workingCanvas.addEventListener("pointerdown", (event) => {
   }
   if (current.stage === "regions") {
     const point = canvasPoint(event);
+    if (current.graphLayout && point.y > current.graphLayout.writingHeight) {
+      setCanvasReadingStatus("Words and maths boxes must stay in the top writing area. The graph areas are already separated below.", "warning");
+      return;
+    }
     const rect = workingCanvas.getBoundingClientRect();
     const screenPoint = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     current.draftRegion = { id: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`, kind: current.regionKind, start: point, end: point, screenStart: screenPoint, screenEnd: screenPoint };
@@ -8139,7 +8673,9 @@ workingCanvas.addEventListener("pointerdown", (event) => {
   }
   invalidateCanvasTranscription();
   const eraser = current.eraser;
-  const stroke = { points: [canvasPoint(event)], color: eraser ? "#fff" : "#162a29", tool: eraser ? "eraser" : "pen", width: eraser ? 24 : (event.pointerType === "pen" ? 2.5 : 2.2) };
+  const firstPoint = canvasPoint(event);
+  const partition = canvasPartitionIndex(firstPoint.y);
+  const stroke = { points: [clampCanvasPointToPartition(firstPoint, partition)], partition, color: eraser ? "#fff" : "#162a29", tool: eraser ? "eraser" : "pen", width: eraser ? 24 : (event.pointerType === "pen" ? 2.5 : 2.2) };
   current.strokes.push(stroke);
   current.active = stroke;
   drawCanvas();
@@ -8165,12 +8701,14 @@ workingCanvas.addEventListener("pointermove", (event) => {
     current.offsetY = current.drag.offsetY + event.clientY - current.drag.y;
     drawCanvas();
   } else if (current.draftRegion && pair.length === 1) {
-    current.draftRegion.end = canvasPoint(event);
+    current.draftRegion.end = current.graphLayout
+      ? clampCanvasPointToPartition(canvasPoint(event), 0)
+      : canvasPoint(event);
     const rect = workingCanvas.getBoundingClientRect();
     current.draftRegion.screenEnd = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     drawCanvasRegionOverlay();
   } else if (current.active && pair.length === 1) {
-    current.active.points.push(canvasPoint(event));
+    current.active.points.push(clampCanvasPointToPartition(canvasPoint(event), current.active.partition || 0));
     drawCanvas();
   }
 });
@@ -8197,6 +8735,7 @@ workingCanvas.addEventListener("pointermove", (event) => {
       drawCanvasRegionOverlay();
       syncPhoneCanvasSetup();
     }
+      persistCanvasDraft();
   }
 }));
 workingCanvas.addEventListener("wheel", (event) => {
@@ -8252,6 +8791,7 @@ $("#undoCanvas").addEventListener("click", () => {
   if (state.canvas.strokes.length) invalidateCanvasTranscription();
   state.canvas.strokes.pop();
   drawCanvas();
+  persistCanvasDraft();
   if (phoneCanvasSession) phoneCanvasSend({ type: "setup", strokes: phoneCanvasSnapshot() });
 });
 $("#clearCanvas").addEventListener("click", () => {
@@ -8268,6 +8808,7 @@ $("#clearCanvas").addEventListener("click", () => {
   if (state.canvas.strokes.length) invalidateCanvasTranscription();
   state.canvas.strokes = [];
   drawCanvas();
+  persistCanvasDraft();
   if (phoneCanvasSession) phoneCanvasSend({ type: "setup", strokes: [] });
 });
 $("#toggleQuestionSidebar").addEventListener("click", () => {
@@ -8427,6 +8968,7 @@ $("#finishCanvas").addEventListener("click", async () => {
       phoneCanvasSend({ type: "submitted" });
     }
     $("#canvasDialog").close();
+    void deleteWorkspaceRecord(CANVAS_DRAFT_RECORD_KEY).catch(() => {});
   } catch {
     canvas.readingConfirmed = true;
     $("#canvasReadingConfirm").disabled = false;

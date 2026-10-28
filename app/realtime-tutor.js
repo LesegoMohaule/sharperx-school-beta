@@ -2,6 +2,12 @@ import { TUTOR_LANGUAGES, languageForValue } from "./tutor-languages.mjs";
 
 const VOICE_KEY = "sharperx_device_voice_uri";
 const TRANSCRIPTS_KEY = "sharperx_live_auto_transcription";
+const LETTER_NAMES = {
+  a: "ay", b: "bee", c: "see", d: "dee", e: "ee", f: "eff", g: "jee", h: "aitch",
+  i: "eye", j: "jay", k: "kay", l: "ell", m: "em", n: "en", o: "oh", p: "pee",
+  q: "cue", r: "ar", s: "ess", t: "tee", u: "you", v: "vee", w: "double you",
+  x: "ex", y: "why", z: "zed",
+};
 
 function sanitizeTutorText(value) {
   return String(value || "")
@@ -137,6 +143,27 @@ function normalizeSpeechNumbers(value) {
   return separatedCoefficients.replace(/(^|[^A-Za-z0-9.])(-?\d+(?:\.\d+)?)(?![A-Za-z0-9])/g, (_, prefix, number) => `${prefix}${numberToSpeechWords(number)}`);
 }
 
+function normalizeRecurringDecimals(value) {
+  return String(value || "").replace(
+    /(?<![\d.])(-?\d+)\.(\d*)((?:(?:\\(?:overline|bar|dot)\s*\{\d+\})|(?:\d[\u0305\u0307]))+)(?!\d)/g,
+    (_, whole, nonRecurring, markedDigits) => {
+      const recurring = markedDigits
+        .replace(/\\(?:overline|bar|dot)\s*\{(\d+)\}/g, "$1")
+        .replace(/[\u0305\u0307]/g, "");
+      return `${whole}.${nonRecurring}${nonRecurring ? ", " : ""}${recurring} recurring`;
+    },
+  );
+}
+
+function normalizeAlgebraLetterNames(value) {
+  return value
+    .replace(/\bax\b/gi, "ay times ex")
+    .replace(/\ba\s+x\b/gi, "ay times ex")
+    .replace(/(^|\b(?:equals|plus|minus|times|over|divided by)\s+)a(?=\s+(?:squared|cubed|to the power|plus|minus|times|over|equals)\b|\s*[,.;!?]|$)/gi, "$1ay")
+    .replace(/\bthe point\s+a\b/gi, "the point ay")
+    .replace(/\b([xyq])\b/gi, (letter) => LETTER_NAMES[letter.toLowerCase()]);
+}
+
 function normalizeEquationCalls(value) {
   const pattern = /\bEq\s*\(/g;
   let output = "";
@@ -167,14 +194,18 @@ function normalizeEquationCalls(value) {
 }
 
 export function mathTextForSpeech(value) {
-  let text = String(value || "")
+  let text = normalizeRecurringDecimals(String(value || "")
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/`([^`]*)`/g, "$1")
     .replace(/\[([^\]]+)\]\((?:https?:\/\/)[^)]+\)/g, "$1")
     .replace(/https?:\/\/\S+/g, " ")
-    .replace(/\\\(|\\\)|\\\[|\\\]|\$\$?/g, " ")
     .replace(/\\begin\{(?:aligned|align\*?|array|matrix|cases)\}|\\end\{(?:aligned|align\*?|array|matrix|cases)\}/g, " ")
-    .replace(/\\\\/g, ". ");
+    .replace(/\\\\/g, ". "))
+    .replace(/\\\(|\\\)|\\\[|\\\]|\$\$?/g, " ")
+    .replace(/\bsection\s+([a-z])\b/gi, (_, letter) => `Section ${LETTER_NAMES[letter.toLowerCase()] || letter}`)
+    .replace(/(^|\n)\s*([a-z])\.\s*(?=(?:solve|find|calculate|determine|simplify|factorise|factorize|show|prove)\b)/gi,
+      (_, prefix, letter) => `${prefix}Part ${LETTER_NAMES[letter.toLowerCase()] || letter}. `)
+    .replace(/\bheads\s*\/\s*tails\b/gi, "heads or tails");
   text = normalizeEquationCalls(text);
   text = speakLatex(text)
     .replace(/\*\*(.*?)\*\*/g, "$1")
@@ -223,9 +254,13 @@ export function mathTextForSpeech(value) {
 
   const lines = text.split(/\r?\n/).map((line) => {
     line = line.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, "");
-    const isMath = /(?:=|<|>|\^|_|\b(?:squared|cubed|over|times|divided by|plus|minus|equals|is less than|is greater than|is not equal|is approximately|sine|cosine|tangent|square root|to the power of)\b|\\(?:sin|cos|tan|frac|sqrt|int|sum)\b|\d\s*[+\-*/]\s*\d|[A-Za-z)]\s*=\s*[A-Za-z0-9(]|\b[A-Za-z]\s+[+\-*/]\s+[A-Za-z0-9(]|\b[A-Za-z]\s*[+*/]\s*[A-Za-z0-9(]|\b[A-Za-z]\s*-\s*\d)/.test(line);
+    const isMath = /(?:=|<|>|\^|_|\b(?:squared|cubed|over|times|divided by|plus|minus|equals|is less than|is greater than|is not equal|is approximately|sine|cosine|tangent|square root|to the power of)\b|\\(?:sin|cos|tan|frac|sqrt|int|sum)\b|\b(?:sin|cos|tan)\s*\(|\(\s*[+-]?\d+(?:\.\d+)?\s*[;,]\s*[+-]?\d+(?:\.\d+)?\s*\)|\d\s*[+\-*/]\s*\d|[A-Za-z)]\s*=\s*[A-Za-z0-9(]|\b[A-Za-z]\s+[+\-*/]\s+[A-Za-z0-9(]|\b[A-Za-z]\s*[+*/]\s*[A-Za-z0-9(]|\b[A-Za-z]\s*-\s*\d)/.test(line);
     if (!isMath) return normalizeSpeechNumbers(line.replace(/[()[\]{}]/g, " "));
-    const spoken = speakGroups(line
+    const spokenMath = speakLatex(line)
+      .replace(/\b(sin|cos|tan)\s*\(([^()]*)\)/gi, (_, fn, argument) => `${({ sin: "sine", cos: "cosine", tan: "tangent" })[fn.toLowerCase()]} of ${argument}`)
+      .replace(/\b(sine|cosine|tangent)\s*\(([^()]*)\)/gi, "$1 of $2")
+      .replace(/\(\s*([+-]?\d+(?:\.\d+)?)\s*[;,]\s*([+-]?\d+(?:\.\d+)?)\s*\)/g, "the point $1, $2");
+    const spoken = speakGroups(spokenMath
       .replace(/([\w)])\s*\+\s*([\w(])/g, "$1 plus $2")
       .replace(/([\w)])\s*-\s*([\w(])/g, "$1 minus $2")
       .replace(/([\w)])\s*[×*]\s*([\w(])/g, "$1 times $2")
@@ -236,7 +271,7 @@ export function mathTextForSpeech(value) {
       .replace(/([\w)])\s*>\s*([\w(])/g, "$1 is greater than $2")
       .replace(/²/g, " squared")
       .replace(/³/g, " cubed"));
-    return normalizeSpeechNumbers(spoken.replace(/([A-Za-z0-9])\s+(?=the quantity|the fraction|square root of)/g, "$1 times "));
+    return normalizeSpeechNumbers(normalizeAlgebraLetterNames(spoken.replace(/([A-Za-z0-9])\s+(?=the quantity|the fraction|square root of)/g, "$1 times ")));
   });
   return lines.join("\n").replace(/[{}$#&]/g, " ").replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n").trim();
 }

@@ -1,10 +1,10 @@
-const CACHE_NAME = "sharperx-web-shell-v129";
+const CACHE_NAME = "sharperx-web-shell-v131";
 const APP_SHELL = [
   "./",
   "./index.html",
-  "./styles.css?v=79",
-  "./app.bundle.js?v=84",
-  "./legacy-app.js?v=90",
+  "./styles.css?v=80",
+  "./app.bundle.js?v=87",
+  "./legacy-app.js?v=92",
   "./api.js?v=26",
   "./math-display.js",
   "./paper-catalog.json",

@@ -15,6 +15,18 @@ function sanitizeLearnerFacingText(value) {
 }
 const APP_VIEWS = new Set(["ask", "practice", "exam", "lessons", "reports"]);
 const MAX_UPLOAD_ITEMS = 20;
+const SUPPORTED_OFFICE_EXTENSIONS = new Set([".doc", ".docx", ".docm", ".xls", ".xlsx", ".xlsm", ".ppt", ".pptx", ".pptm"]);
+const SUPPORTED_OFFICE_MIME_TYPES = new Set([
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.ms-word.document.macroenabled.12",
+  "application/vnd.ms-excel",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel.sheet.macroenabled.12",
+  "application/vnd.ms-powerpoint",
+  "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  "application/vnd.ms-powerpoint.presentation.macroenabled.12",
+]);
 const ASK_PHOTO_STORAGE_KEY = "sharperx_web_ask_photos_v1";
 const ASK_DOCUMENT_STORAGE_KEY = "sharperx_web_ask_documents_v1";
 function isImageUploadFile(file) {
@@ -23,8 +35,8 @@ function isImageUploadFile(file) {
 }
 function isSupportedDocumentFile(file) {
   const extension = String(file?.name || "").toLowerCase().match(/\.[^.]+$/)?.[0] || "";
-  return [".pdf", ".doc", ".docx"].includes(extension)
-    || ["application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"].includes(String(file?.type || "").toLowerCase());
+  return extension === ".pdf" || SUPPORTED_OFFICE_EXTENSIONS.has(extension)
+    || ["application/pdf", ...SUPPORTED_OFFICE_MIME_TYPES].includes(String(file?.type || "").toLowerCase());
 }
 function selectImageBatch(files, attachedCount) {
   const candidates = [...(files || [])];
@@ -51,7 +63,7 @@ function selectUploadBatch(files, attachedCount) {
 function uploadBatchNotice(selection) {
   const notes = [];
   if (selection.overLimit) notes.push(`${selection.overLimit} file${selection.overLimit === 1 ? " was" : "s were"} not added; the limit is ${MAX_UPLOAD_ITEMS}.`);
-  if (selection.unsupported) notes.push(`${selection.unsupported} unsupported file${selection.unsupported === 1 ? " was" : "s were"} skipped. Choose a PDF, Word document, or image.`);
+  if (selection.unsupported) notes.push(`${selection.unsupported} unsupported file${selection.unsupported === 1 ? " was" : "s were"} skipped. Choose a PDF, Word, Excel, PowerPoint, or image file.`);
   return notes.join(" ");
 }
 async function uploadLearnerFile(inspectionId, file, photoType = "school_answer_working") {
@@ -64,7 +76,7 @@ async function uploadLearnerFile(inspectionId, file, photoType = "school_answer_
     if (!id) throw new Error("The server did not return an image ID.");
     return { id, kind: "image" };
   }
-  if (!isSupportedDocumentFile(file)) throw new Error("Choose a PDF, .doc, .docx or image file.");
+  if (!isSupportedDocumentFile(file)) throw new Error("Choose a PDF, Word, Excel, PowerPoint, or image file.");
   form.set("document_type", "learner_answer");
   form.set("document", file, file.name);
   const uploaded = await uploadForm(`/api/inspections/${encodeURIComponent(inspectionId)}/upload-document`, form);
@@ -76,7 +88,7 @@ async function uploadLearnerFile(inspectionId, file, photoType = "school_answer_
     ? ""
     : /\.pdf$/i.test(file.name)
       ? "No searchable text was extracted; the original PDF will be sent for visual reading."
-      : "No searchable text was extracted; the server will try to inspect the original Word pages. If page content is missing, upload a searchable PDF or clear page photos.";
+      : "No searchable text was extracted; the server will render and inspect the original Office pages. If page content is missing, upload a PDF or clear page photos.";
   return { id, kind: "document", readabilityWarning };
 }
 function imageBatchNotice(selection) {
@@ -899,27 +911,6 @@ function askConversationHistory(limit = 12) {
   })).filter((turn) => turn.text);
 }
 
-function repairFourTermSequenceOcr(value) {
-  let text = String(value || "");
-  const context = [
-    /\bfour\s+terms\b/i,
-    /\bfirst\s+three\s+terms\b/i,
-    /\blast\s+three\s+terms\b/i,
-    /\barithmetic\s+sequence\b/i,
-    /\bgeometric\s+sequence\b/i,
-  ];
-  if (!context.every((pattern) => pattern.test(text))) return text;
-
-  text = text.replace(
-    /(first\s+three\s+terms\s*,?)(.*?)(\s+form\s+an\s+arithmetic\s+sequence)/is,
-    (_match, lead, _ocrTerms, tail) => `${lead.replace(/\s+$/, "")} T_1; T_2 and T_3${tail}`,
-  );
-  return text.replace(
-    /(last\s+three\s+terms\s*,?)(.*?)(\s+form\s+a\s+geometric\s+sequence)/is,
-    (_match, lead, _ocrTerms, tail) => `${lead.replace(/\s+$/, "")} T_2; T_3 and T_4${tail}`,
-  );
-}
-
 function ensureInspection(context = "ask", options = {}) {
   const stateKey = context === "practice" ? "practiceInspectionId" : context === "exam" ? "examInspectionId" : "inspectionId";
   const storageKey = context === "practice"
@@ -972,8 +963,17 @@ function persistAskDocumentState() {
   } catch { /* The active session still retains its selected documents in memory. */ }
 }
 
+function askUploadedItemCount() {
+  return new Set([
+    ...state.askPhotos.map((item) => item.id),
+    ...state.askDocuments.map((item) => item.id),
+    state.paperDocumentId,
+    state.memoDocumentId,
+  ].filter(Boolean).map(String)).size;
+}
+
 function updateAskPhotoUploadControls() {
-  const disabled = askPhotoUploadBusy || state.askPhotos.length + state.askDocuments.length >= MAX_UPLOAD_ITEMS;
+  const disabled = askPhotoUploadBusy || askUploadedItemCount() >= MAX_UPLOAD_ITEMS;
   $("#photoInput").disabled = disabled;
   $("#askCameraInput").disabled = disabled;
   $("[data-file-trigger=photoInput]").disabled = disabled;
@@ -1041,9 +1041,9 @@ window.addEventListener("pagehide", (event) => {
 
 async function uploadPaper(file, kind) {
   if (!file) return;
-  const hasExtension = /\.[^.]+$/.test(file.name);
-  const isPdf = /\.pdf$/i.test(file.name) || (!hasExtension && String(file.type || "").toLowerCase() === "application/pdf");
-  if ((kind === "memo" || !isPdf) && state.askPhotos.length + state.askDocuments.length >= MAX_UPLOAD_ITEMS) {
+  if (!isSupportedDocumentFile(file)) return setStatus($("#paperStatus"), "Choose a PDF, Word, Excel, or PowerPoint document.", "error");
+  const replacingDocument = Boolean(kind === "memo" ? state.memoDocumentId : state.paperDocumentId);
+  if (!replacingDocument && askUploadedItemCount() >= MAX_UPLOAD_ITEMS) {
     return setStatus($("#paperStatus"), `The limit is ${MAX_UPLOAD_ITEMS} files per Ask question.`, "error");
   }
   const status = $("#paperStatus");
@@ -1051,7 +1051,7 @@ async function uploadPaper(file, kind) {
   try {
     const inspectionId = await ensureInspection();
     const form = new FormData();
-    form.set("document_type", kind === "memo" ? "ask_marking_memo" : isPdf ? "ask_question_paper" : "general");
+    form.set("document_type", kind === "memo" ? "ask_marking_memo" : "ask_question_paper");
     form.set("document", file, file.name);
     const result = await uploadForm(`/api/inspections/${encodeURIComponent(inspectionId)}/upload-document`, form);
     const documentId = result.id || result.document_id;
@@ -1066,11 +1066,6 @@ async function uploadPaper(file, kind) {
       if (previousMemo && previousMemo !== documentId) void deleteSessionPaperDocument(previousMemo, inspectionId).catch(() => {});
       setStatus(status, `Memo uploaded: ${file.name}. It will be used when marking a selected paper question.`, "success");
       appendMessage(`Marking memo uploaded: ${file.name}.`, { kind: "Uploaded memo" });
-    } else if (!isPdf) {
-      if (!state.askDocuments.some((item) => item.id === documentId)) state.askDocuments.push({ id: documentId, filename: file.name });
-      persistAskDocumentState();
-      setStatus(status, `Word document attached: ${file.name}. Type your question in the editor and its readable text will be included.`, "success");
-      appendMessage(`Word document attached: ${file.name}. Ask about its contents in the question editor.`, { kind: "Uploaded document" });
     } else {
       const previousPaper = state.paperDocumentId;
       state.paperDocumentId = documentId;
@@ -1111,31 +1106,30 @@ $("#showPaperQuestionButton").addEventListener("click", async () => {
     });
     const pageBase64 = result.image_png_base64 || result.question_png_base64 || result.full_page_png_base64 || result.page_png_base64 || "";
     if (!pageBase64) throw new Error("The full page containing that question could not be prepared.");
-    const questionText = repairFourTermSequenceOcr(result.question_text || result.extracted_question_text || "");
-    if (!questionText.trim()) throw new Error("The selected question text could not be read. Try a clearer paper scan or a different question number.");
+    const questionNumberShown = result.question_number || result.extracted_question_number || questionNumber;
     state.paperPageImage = `data:image/png;base64,${pageBase64}`;
     state.selectedPaperQuestion = {
-      number: result.question_number || result.extracted_question_number || questionNumber,
-      text: questionText,
+      number: questionNumberShown,
+      text: `Read Question ${questionNumberShown} from the original uploaded page snapshot. Treat the page image as the authoritative source.`,
       memoText: result.memo_text || "",
       focus: result.question_focus || null,
     };
     $("#paperSnapshotTitle").textContent = `Question ${state.selectedPaperQuestion.number}`;
     $("#paperSnapshotImage").src = state.paperPageImage;
-    renderMath($("#paperQuestionText"), questionText);
+    $("#paperQuestionText").hidden = true;
     $("#paperSnapshotCard").hidden = false;
-    setStatus($("#paperStatus"), "Full source page loaded. The question text is scoped to the selected question.", "success");
-    appendMessage(`Question ${state.selectedPaperQuestion.number}\n\n${questionText}\n\nYou can now attempt it or ask for hints. Submit your working when you want it marked.`, {
+    setStatus($("#paperStatus"), "Original source page loaded. Use the snapshot as the exact question; reconstructed text is hidden.", "success");
+    appendMessage(`Question ${state.selectedPaperQuestion.number} is shown in the original page snapshot below. Use that page as the exact source. You can now attempt it or ask for hints.`, {
       kind: "Selected question",
       imageUrl: state.paperPageImage,
       actions: [{ label: "View full page", onClick: () => openImageViewer(state.paperPageImage, `Question ${state.selectedPaperQuestion.number} · full page`) }],
     });
-    setStatus($("#paperStatus"), "Preparing question-specific hints from the question and its diagram…");
+    setStatus($("#paperStatus"), "Preparing question-specific hints from the original page snapshot…");
     const hintResult = await postJson("/api/education/tutor/ask", {
       subject: "Mathematics",
       grade: state.grade,
       topic: "Question paper",
-      question: questionText,
+      question: `Read Question ${state.selectedPaperQuestion.number} directly from the attached original paper page. Treat the page snapshot as authoritative and give question-specific hints without reproducing the question text.`,
       mode: "question_hints",
       inspection_id: state.inspectionId,
       ai_tier: "luna",
@@ -1149,7 +1143,7 @@ $("#showPaperQuestionButton").addEventListener("click", async () => {
         grade: state.grade,
         subject: "Mathematics",
         topic: "Question paper",
-        current_question: questionText,
+        current_question: `Question ${state.selectedPaperQuestion.number} from the attached original paper page snapshot.`,
         question_number: String(state.selectedPaperQuestion.number),
       },
     });
@@ -1504,10 +1498,10 @@ $$('[data-file-trigger]').forEach((button) => button.addEventListener("click", (
 
 let askPhotoUploadBusy = false;
 async function uploadAskPhotoFiles(files) {
-  const selection = selectUploadBatch(files, state.askPhotos.length + state.askDocuments.length);
+  const selection = selectUploadBatch(files, askUploadedItemCount());
   if (!selection.files.length) {
     const message = selection.remaining === 0 ? `The limit is ${MAX_UPLOAD_ITEMS} files for this Ask session.`
-      : selection.unsupported ? "Choose PDF, Word, or image files to attach." : "No files were selected.";
+      : selection.unsupported ? "Choose PDF, Word, Excel, PowerPoint, or image files to attach." : "No files were selected.";
     return setStatus($("#voiceStatus"), [message, uploadBatchNotice(selection)].filter(Boolean).join(" "), "error");
   }
   askPhotoUploadBusy = true;
@@ -1542,7 +1536,7 @@ async function uploadAskPhotoFiles(files) {
       } catch (error) { failures.push(`${file.name}: ${error.message || "upload failed"}`); }
     }
     const notices = [uploadBatchNotice(selection), ...failures, ...readabilityWarnings].filter(Boolean);
-    const total = state.askPhotos.length + state.askDocuments.length;
+    const total = askUploadedItemCount();
     const message = `${uploadedCount} of ${selection.files.length} file${selection.files.length === 1 ? "" : "s"} attached (${total}/${MAX_UPLOAD_ITEMS} for this Ask session).`;
     setStatus($("#voiceStatus"), [message, ...notices].join(" "), failures.length || readabilityWarnings.length || selection.overLimit || selection.unsupported ? "warning" : "success");
   } catch (error) {
@@ -3124,7 +3118,7 @@ async function uploadPracticePhotoFiles(files) {
   const selection = selectUploadBatch(files, state.practiceAnswerPhotoIds.length + state.practiceAnswerDocumentIds.length);
   if (!selection.files.length) {
     const message = selection.remaining === 0 ? `The limit is ${MAX_UPLOAD_ITEMS} files per practice answer.`
-      : selection.unsupported ? "Choose PDF, Word, or image files for this answer." : "No files were selected.";
+      : selection.unsupported ? "Choose PDF, Word, Excel, PowerPoint, or image files for this answer." : "No files were selected.";
     return setStatus($("#practiceMarkStatus"), [message, uploadBatchNotice(selection)].filter(Boolean).join(" "), "error");
   }
   practicePhotoUploadBusy = true;
@@ -3193,7 +3187,7 @@ $("#markPracticeAnswer").addEventListener("click", async () => {
   const working = getPracticeEditorLatex().trim();
   if (!question) return;
   const hasUploadedAnswer = state.practiceAnswerPhotoIds.length + state.practiceAnswerDocumentIds.length > 0;
-  if (!working && !hasUploadedAnswer) return setStatus($("#practiceMarkStatus"), "Enter your working, write on the canvas, or upload your answer as a PDF, Word document, or image.", "error");
+  if (!working && !hasUploadedAnswer) return setStatus($("#practiceMarkStatus"), "Enter your working, write on the canvas, or upload your answer as a PDF, Word, Excel, PowerPoint, or image file.", "error");
   const button = $("#markPracticeAnswer");
   realtimeTutor.prepareSpeechFromGesture();
   button.disabled = true;
@@ -3581,7 +3575,7 @@ function renderSourceLinks() {
   host.replaceChildren();
   const intro = document.createElement("p");
   intro.className = "source-note";
-  intro.textContent = "Choose a paper filename to search for a downloadable copy. Upload the PDF or Word document (.doc or .docx) here.";
+  intro.textContent = "Choose a paper filename to search for a downloadable copy. Upload a PDF, Word, Excel, or PowerPoint file here.";
   const links = document.createElement("div");
   links.className = "source-link-list";
   function addLink(label, source) {
@@ -3702,7 +3696,7 @@ async function renderExamPaperLinks(hostId = "examPaperLinks", selectedGrade = $
     if (!entries.length) {
       const empty = document.createElement("p");
       empty.className = "status";
-      empty.textContent = `No past-paper links are listed for Grade ${grade}. You can still upload a PDF or Word document from your device.`;
+      empty.textContent = `No past-paper links are listed for Grade ${grade}. You can still upload a PDF, Word, Excel, or PowerPoint document from your device.`;
       host.append(empty);
     }
   } catch (error) {
@@ -3720,7 +3714,7 @@ function updateUploadedExamStatus() {
   const hasPaper = Boolean(state.examPaperDocumentId || state.examPaperPhotoIds.length);
   const hasMemo = Boolean(state.examMemoDocumentId || state.examMemoPhotoIds.length);
   if (!hasPaper) {
-    setStatus(status, "No past paper uploaded yet. Choose a PDF, Word document, or clear page photo(s).");
+    setStatus(status, "No past paper uploaded yet. Choose a PDF, Word, Excel, PowerPoint, or clear page photo(s).");
   } else {
     const paperImages = state.examPaperPhotoIds.length ? ` ${state.examPaperPhotoIds.length} page photo(s).` : "";
     const memo = hasMemo ? ` Memo: ${state.examMemoFileName || "uploaded"}.` : " No memo uploaded; Guided Practice will use question-only support.";
@@ -3734,7 +3728,7 @@ async function uploadExamSource(files, kind) {
   if (!selected.length) return;
   const supported = selected.filter((file) => isImageUploadFile(file) || isSupportedDocumentFile(file));
   if (!supported.length || supported.length !== selected.length) {
-    setStatus($("#examUploadStatus"), "Choose PDF, .doc, .docx, JPG, PNG, or WEBP files.", "error");
+    setStatus($("#examUploadStatus"), "Choose PDF, Word, Excel, PowerPoint, JPG, PNG, or WEBP files.", "error");
     return;
   }
   const count = state.examPaperPhotoIds.length + state.examMemoPhotoIds.length
@@ -3744,7 +3738,7 @@ async function uploadExamSource(files, kind) {
     return;
   }
   if (supported.filter(isSupportedDocumentFile).length > 1) {
-    setStatus($("#examUploadStatus"), "Choose one PDF or Word document at a time, or select up to 20 page photos.", "error");
+    setStatus($("#examUploadStatus"), "Choose one PDF or Office document at a time, or select up to 20 page photos.", "error");
     return;
   }
   const button = kind === "memo" ? $("#examUploadMemoButton") : $("#examUploadPaperButton");
@@ -3780,7 +3774,7 @@ async function uploadExamSource(files, kind) {
       if (!Number(result.extracted_characters || 0) || String(result.text_preview || "").toLowerCase().startsWith("document text could not be extracted:")) {
         readabilityWarnings.push(/\.pdf$/i.test(file.name)
           ? `${file.name}: no searchable text was extracted; the original PDF will be read visually during paper preparation.`
-          : `${file.name}: no searchable text was extracted; the server will try to inspect the original Word pages. If page content is missing, upload a searchable PDF or clear page photos.`);
+          : `${file.name}: no searchable text was extracted; the server will render and inspect its original Office pages. If page content is missing, upload a PDF or clear page photos.`);
       }
       if (kind === "memo") {
         const previousId = state.examMemoDocumentId;
@@ -4274,7 +4268,7 @@ async function uploadStrictMockSource(files, kind) {
   if (!selected.length) return;
   const supported = selected.filter((file) => isImageUploadFile(file) || isSupportedDocumentFile(file));
   if (!supported.length || supported.length !== selected.length) {
-    setStatus($("#strictMockPaperStatus"), "Choose PDF, .doc, .docx, JPG, PNG, or WEBP files.", "error");
+    setStatus($("#strictMockPaperStatus"), "Choose PDF, Word, Excel, PowerPoint, JPG, PNG, or WEBP files.", "error");
     return;
   }
   const count = state.strictMockPaperPhotoIds.length + state.strictMockMemoPhotoIds.length
@@ -4284,7 +4278,7 @@ async function uploadStrictMockSource(files, kind) {
     return;
   }
   if (supported.filter(isSupportedDocumentFile).length > 1) {
-    setStatus($("#strictMockPaperStatus"), "Choose one PDF or Word document at a time, or select up to 20 page photos.", "error");
+    setStatus($("#strictMockPaperStatus"), "Choose one PDF or Office document at a time, or select up to 20 page photos.", "error");
     return;
   }
   try {
@@ -4320,7 +4314,7 @@ async function uploadStrictMockSource(files, kind) {
       if (!Number(result.extracted_characters || 0) || String(result.text_preview || "").toLowerCase().startsWith("document text could not be extracted:")) {
         readabilityWarnings.push(/\.pdf$/i.test(file.name)
           ? `${file.name}: no searchable text was extracted; the original PDF will be read visually during paper preparation.`
-          : `${file.name}: no searchable text was extracted; the server will try to inspect the original Word pages. If page content is missing, upload a searchable PDF or clear page photos.`);
+          : `${file.name}: no searchable text was extracted; the server will render and inspect its original Office pages. If page content is missing, upload a PDF or clear page photos.`);
       }
       if (kind === "memo") {
         const old = state.strictMockMemoDocumentId;
@@ -4616,7 +4610,7 @@ async function uploadStrictMockAnswerFiles(files) {
   const selection = selectUploadBatch(files, state.strictMockAnswerPhotoIds.length + state.strictMockAnswerDocumentIds.length);
   if (!selection.files.length) {
     const message = selection.remaining === 0 ? `The limit is ${MAX_UPLOAD_ITEMS} answer files.`
-      : selection.unsupported ? "Choose PDF, Word, or image files of your answers." : "No files were selected.";
+      : selection.unsupported ? "Choose PDF, Word, Excel, PowerPoint, or image files of your answers." : "No files were selected.";
     return setStatus($("#strictMockAnswerStatus"), [message, uploadBatchNotice(selection)].filter(Boolean).join(" "), "error");
   }
   if (strictMockPhotoUploadBusy) return;
@@ -5177,7 +5171,7 @@ async function uploadExamHandwritingFiles(files) {
   const selection = selectUploadBatch(files, attached.length + attachedDocuments.length);
   if (!selection.files.length) {
     const message = selection.remaining === 0 ? `The limit is ${MAX_UPLOAD_ITEMS} files for one answer.`
-      : selection.unsupported ? "Choose PDF, Word, or image files of your answer." : "No files were selected.";
+      : selection.unsupported ? "Choose PDF, Word, Excel, PowerPoint, or image files of your answer." : "No files were selected.";
     return setStatus($("#examPhotoStatus"), [message, uploadBatchNotice(selection)].filter(Boolean).join(" "), "error");
   }
   if (examPhotoBatchUploading) return;
@@ -8345,7 +8339,7 @@ $("#finishCanvas").addEventListener("click", async () => {
     if (phoneCanvasSession) phoneCanvasSend({ type: "submission_error", message: "This attempt already has the maximum number of handwritten images." });
     return;
   }
-  if ((state.canvasContext === "ask-write" || state.canvasContext === "ask-graph") && state.askPhotos.length + state.askDocuments.length >= MAX_UPLOAD_ITEMS) {
+  if ((state.canvasContext === "ask-write" || state.canvasContext === "ask-graph") && askUploadedItemCount() >= MAX_UPLOAD_ITEMS) {
     showToast(`The limit is ${MAX_UPLOAD_ITEMS} uploaded files for this Ask session.`);
     if (phoneCanvasSession) phoneCanvasSend({ type: "submission_error", message: `This Ask session already has ${MAX_UPLOAD_ITEMS} files attached.` });
     return;

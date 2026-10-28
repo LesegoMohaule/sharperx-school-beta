@@ -101,7 +101,7 @@
               <div id="sourceLinks" class="paper-source-links" aria-live="polite"></div>
               <form id="askForm" class="composer">
                 <div class="composer-tools">
-                  <button class="tool-button" type="button" data-file-trigger="photoInput" aria-label="Choose PDF, Word, or image files from this device">＋<span>Choose files / photos</span></button>
+                  <button class="tool-button" type="button" data-file-trigger="photoInput" aria-label="Choose PDF, Word, Excel, PowerPoint, or image files from this device">＋<span>Choose files / photos</span></button>
                   <button class="tool-button" type="button" data-file-trigger="askCameraInput" aria-label="Take a photo to attach">📷<span>Take photo</span></button>
                   <button class="tool-button" type="button" data-file-trigger="paperInput" aria-label="Upload a question paper">▤<span>Paper</span></button>
                   <button class="tool-button" type="button" data-file-trigger="memoInput" aria-label="Upload a marking memo">▧<span>Memo</span></button>
@@ -130,10 +130,10 @@
                 <div class="math-editor-frame ask-math-editor-frame"><iframe id="askMathEditor" title="Question and maths editor" src="./math-editor.html?v=17"></iframe></div>
                 <div id="askMathKeyboardMount" class="math-keyboard-mount"></div>
                 <div class="composer-footer"><span id="voiceStatus" class="muted" role="status"></span><button id="sendAskButton" class="button primary send-button" type="submit">Send <span aria-hidden="true">➤</span></button></div>
-                <input id="photoInput" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" multiple hidden>
+                <input id="photoInput" type="file" accept=".pdf,.doc,.docx,.docm,.xls,.xlsx,.xlsm,.ppt,.pptx,.pptm,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" multiple hidden>
                 <input id="askCameraInput" type="file" accept="image/*" capture="environment" hidden>
-                <input id="paperInput" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
-                <input id="memoInput" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+                <input id="paperInput" type="file" accept=".pdf,.doc,.docx,.docm,.xls,.xlsx,.xlsm,.ppt,.pptx,.pptm,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation" hidden>
+                <input id="memoInput" type="file" accept=".pdf,.doc,.docx,.docm,.xls,.xlsx,.xlsm,.ppt,.pptx,.pptm,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation" hidden>
               </form>
             </div>
             <aside class="ask-help-panel">
@@ -188,7 +188,7 @@
                 <div class="practice-response-tools">
                   <button id="practiceCanvasButton" class="tool-button" type="button" aria-label="Write your working by hand">✎<span>Write / draw</span></button>
                   <button id="practiceGraphCanvasButton" class="tool-button" type="button" aria-label="Draw a graph for this answer">⌁<span>Draw graph</span></button>
-                  <button id="practiceHandwritingButton" class="tool-button" type="button" aria-label="Choose PDF, Word, or image answer files from this device">▧<span>Choose files / photos</span></button>
+                  <button id="practiceHandwritingButton" class="tool-button" type="button" aria-label="Choose PDF, Word, Excel, PowerPoint, or image answer files from this device">▧<span>Choose files / photos</span></button>
                   <button id="practiceCameraButton" class="tool-button" type="button" aria-label="Take a photo of handwritten work">📷<span>Take photo</span></button>
                   <button id="practiceKeyboardToggle" class="tool-button math-editor-keyboard-toggle" data-editor-target="practice" type="button" aria-expanded="false" aria-controls="practiceMathKeyboard">⌨<span>Math keyboard</span></button>
                 </div>
@@ -219,7 +219,7 @@
                 <div class="math-editor-frame"><iframe id="practiceMathEditor" title="Structured textbook maths editor" src="./math-editor.html?v=17"></iframe></div>
                 <div id="practiceMathKeyboardMount" class="math-keyboard-mount"></div>
                 <div id="practiceAnswerAttachments" class="practice-answer-attachments" aria-live="polite"></div>
-                <input id="practiceHandwritingInput" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" multiple hidden>
+                <input id="practiceHandwritingInput" type="file" accept=".pdf,.doc,.docx,.docm,.xls,.xlsx,.xlsm,.ppt,.pptx,.pptm,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" multiple hidden>
                 <input id="practiceHandwritingCameraInput" type="file" accept="image/*" capture="environment" hidden>
               </section>
               <div class="answer-actions"><button id="markPracticeAnswer" class="button primary" type="button">Send for marking</button><span id="practiceMarkStatus" class="status" role="status"></span></div>
@@ -259,14 +259,14 @@
             <p id="examStatus" class="status" role="status" aria-live="polite"></p>
             <section class="exam-source-section" aria-labelledby="examPaperLinksTitle">
               <h2 id="examPaperLinksTitle">Past papers by term</h2>
-              <p class="source-note">Open a paper link in your browser, download it, then return here and upload its PDF, Word document (.doc or .docx), or clear page photos. Upload up to 20 source files/photos. To write on paper with a timer, open Strict Mock Exam; upload the memo there if it is available.</p>
+              <p class="source-note">Open a paper link in your browser, download it, then return here and upload its PDF, Word (.doc/.docx/.docm), Excel (.xls/.xlsx/.xlsm), PowerPoint (.ppt/.pptx/.pptm), or clear page photos. Upload up to 20 source files/photos. To write on paper with a timer, open Strict Mock Exam; upload the memo there if it is available.</p>
               <div id="examPaperLinks" class="exam-paper-term-groups" aria-live="polite"></div>
               <div class="exam-upload-panel">
                 <div class="exam-upload-actions">
                   <button id="examUploadPaperButton" class="button secondary" type="button">Upload paper / page photos</button>
                   <button id="examUploadMemoButton" class="button subtle" type="button">Upload memo / page photos</button>
-                  <input id="examPaperInput" type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp" multiple hidden>
-                  <input id="examMemoInput" type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp" multiple hidden>
+                  <input id="examPaperInput" type="file" accept=".pdf,.doc,.docx,.docm,.xls,.xlsx,.xlsm,.ppt,.pptx,.pptm,.jpg,.jpeg,.png,.webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp" multiple hidden>
+                  <input id="examMemoInput" type="file" accept=".pdf,.doc,.docx,.docm,.xls,.xlsx,.xlsm,.ppt,.pptx,.pptm,.jpg,.jpeg,.png,.webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp" multiple hidden>
                 </div>
                 <p id="examUploadStatus" class="status" role="status" aria-live="polite">No past paper uploaded yet.</p>
                 <button id="startUploadedExam" class="button primary" type="button" disabled>Start uploaded paper</button>
@@ -284,8 +284,8 @@
             <section id="strictMockLinksSection" class="exam-source-section" aria-labelledby="strictMockPaperLinksTitle"><h3 id="strictMockPaperLinksTitle">Past papers by term</h3><p class="source-note">Stanmore and DBE links open in your browser. Download the paper, then return here to upload it.</p><div id="strictMockPaperLinks" class="exam-paper-term-groups" aria-live="polite"></div></section>
             <section id="strictMockUploads" class="exam-upload-panel strict-mock-uploads" aria-label="Strict mock exam files">
               <h3>Prepare the paper</h3>
-              <div class="exam-upload-actions"><button id="strictMockUploadPaper" class="button secondary" type="button">Upload question paper / page photos</button><button id="strictMockUploadMemo" class="button subtle" type="button">Upload memo / page photos (if available)</button><input id="strictMockPaperInput" type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp" multiple hidden><input id="strictMockMemoInput" type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp" multiple hidden></div>
-              <p id="strictMockPaperStatus" class="status" role="status" aria-live="polite">Upload a question paper as a PDF or Word document to begin.</p>
+              <div class="exam-upload-actions"><button id="strictMockUploadPaper" class="button secondary" type="button">Upload question paper / page photos</button><button id="strictMockUploadMemo" class="button subtle" type="button">Upload memo / page photos (if available)</button><input id="strictMockPaperInput" type="file" accept=".pdf,.doc,.docx,.docm,.xls,.xlsx,.xlsm,.ppt,.pptx,.pptm,.jpg,.jpeg,.png,.webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp" multiple hidden><input id="strictMockMemoInput" type="file" accept=".pdf,.doc,.docx,.docm,.xls,.xlsx,.xlsm,.ppt,.pptx,.pptm,.jpg,.jpeg,.png,.webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp" multiple hidden></div>
+              <p id="strictMockPaperStatus" class="status" role="status" aria-live="polite">Upload a question paper as a PDF, Word, Excel, or PowerPoint document to begin.</p>
               <button id="prepareStrictMock" class="button secondary" type="button" disabled>Prepare paper</button>
               <p id="strictMockReadyStatus" class="status" role="status" aria-live="polite"></p>
               <button id="startStrictMockTimer" class="button primary" type="button" hidden>Start timer when ready</button>
@@ -293,8 +293,8 @@
             <section id="strictMockActive" class="strict-mock-active" aria-label="Strict mock exam timer and answer script" hidden>
               <div class="strict-mock-timer-card"><span class="eyebrow">Time remaining</span><output id="strictMockTimer" class="strict-mock-timer" aria-live="off">--:--:--</output><p id="strictMockTimerStatus" class="status" role="status" aria-live="polite">Start the timer when your paper and writing materials are ready.</p></div>
               <h3>Upload your handwritten answer script</h3>
-              <p class="source-note">Write your answers on paper during the timed exam. When you have finished, choose PDF, Word, or image answer files, or take photos of every answer page (up to 20 files total). Marking and feedback begin only after you submit the complete script.</p>
-              <div class="exam-upload-actions"><button id="strictMockUploadAnswers" class="button secondary" type="button">Choose answer files / photos</button><button id="strictMockTakeAnswerPhoto" class="button subtle" type="button">Take photo</button><input id="strictMockAnswerInput" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" multiple hidden><input id="strictMockAnswerCameraInput" type="file" accept="image/*" capture="environment" hidden></div>
+              <p class="source-note">Write your answers on paper during the timed exam. When you have finished, choose PDF, Word, Excel, PowerPoint, or image answer files, or take photos of every answer page (up to 20 files total). Marking and feedback begin only after you submit the complete script.</p>
+              <div class="exam-upload-actions"><button id="strictMockUploadAnswers" class="button secondary" type="button">Choose answer files / photos</button><button id="strictMockTakeAnswerPhoto" class="button subtle" type="button">Take photo</button><input id="strictMockAnswerInput" type="file" accept=".pdf,.doc,.docx,.docm,.xls,.xlsx,.xlsm,.ppt,.pptx,.pptm,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" multiple hidden><input id="strictMockAnswerCameraInput" type="file" accept="image/*" capture="environment" hidden></div>
               <div id="strictMockAnswerFiles" class="strict-mock-answer-files" aria-live="polite"></div>
               <p id="strictMockAnswerStatus" class="status" role="status" aria-live="polite">No answer pages uploaded.</p>
               <button id="submitStrictMockScript" class="button primary" type="button" disabled>Submit complete script for marking</button>
@@ -306,7 +306,7 @@
             <h2 id="examQuestionTitle">Question</h2><figure id="examSourceSnapshot" class="exam-source-snapshot" hidden><img id="examSourceSnapshotImage" alt="Snapshot of the original question paper" loading="lazy"><figcaption id="examSourceSnapshotCaption">Original question paper snapshot</figcaption></figure><div id="examQuestionText" class="math-content"></div><div id="examQuestionVisuals" class="question-visuals"></div><div id="examVideoPreview" class="question-video-preview" aria-live="polite"></div>
             <div class="exam-guidance"><div class="hint-actions"><button id="examGuidanceButton" class="button secondary" type="button">Ask for a hint</button><button id="examFormulaButton" class="button subtle" type="button">Show relevant formulae</button></div><div id="examGuidanceText" class="hint-content" hidden></div><div id="examFormulaText" class="hint-content" hidden></div></div>
             <div class="answer-label"><span>Your working</span><div class="math-editor-frame exam-math-editor-frame"><iframe id="examAnswer" title="Test and exam working editor" src="./math-editor.html?v=17"></iframe></div></div>
-            <div class="exam-answer-tools"><button id="examKeyboardToggle" class="tool-button math-editor-keyboard-toggle" data-editor-target="exam" type="button" aria-expanded="false" aria-controls="practiceMathKeyboard" aria-label="Open maths keyboard">⌨<span>Math keyboard</span></button><button id="examUploadPhotoButton" class="tool-button" type="button" aria-label="Choose PDF, Word, or image answer files from this device">▧<span>Choose files / photos</span></button><button id="examTakePhotoButton" class="tool-button" type="button" aria-label="Take a photo of handwritten working">📷<span>Take photo</span></button><input id="examHandwritingInput" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" multiple hidden><input id="examHandwritingCameraInput" type="file" accept="image/*" capture="environment" hidden><span id="examAnswerAttachments" class="exam-answer-attachments" aria-live="polite"></span><span id="examPhotoStatus" class="status" role="status" aria-live="polite"></span></div>
+            <div class="exam-answer-tools"><button id="examKeyboardToggle" class="tool-button math-editor-keyboard-toggle" data-editor-target="exam" type="button" aria-expanded="false" aria-controls="practiceMathKeyboard" aria-label="Open maths keyboard">⌨<span>Math keyboard</span></button><button id="examUploadPhotoButton" class="tool-button" type="button" aria-label="Choose PDF, Word, Excel, PowerPoint, or image answer files from this device">▧<span>Choose files / photos</span></button><button id="examTakePhotoButton" class="tool-button" type="button" aria-label="Take a photo of handwritten working">📷<span>Take photo</span></button><input id="examHandwritingInput" type="file" accept=".pdf,.doc,.docx,.docm,.xls,.xlsx,.xlsm,.ppt,.pptx,.pptm,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/*" multiple hidden><input id="examHandwritingCameraInput" type="file" accept="image/*" capture="environment" hidden><span id="examAnswerAttachments" class="exam-answer-attachments" aria-live="polite"></span><span id="examPhotoStatus" class="status" role="status" aria-live="polite"></span></div>
             <div id="examMathKeyboardMount" class="math-keyboard-mount"></div>
             <div class="answer-actions"><button id="saveExamAnswer" class="button secondary" type="button">Save answer</button><button id="previousExamQuestion" class="button subtle" type="button">Previous</button><button id="nextExamQuestion" class="button subtle" type="button">Next</button><button id="submitExam" class="button primary" type="button" hidden>Submit assessment</button><span id="examSaveStatus" class="status" role="status" aria-live="polite">Answers save automatically.</span></div>
           </article>
@@ -406,7 +406,7 @@
   <dialog id="paperCatalogDialog" class="paper-catalog-dialog" aria-labelledby="paperCatalogTitle">
     <div class="dialog-toolbar paper-catalog-toolbar"><div><p class="eyebrow">Past papers and memos</p><strong id="paperCatalogTitle">Paper links</strong></div><button id="paperCatalogClose" class="button subtle" type="button">Close</button></div>
     <section class="paper-catalog-content">
-      <p class="muted">Choose a filename to search the web for a downloadable copy. SharperTime does not host these papers. After downloading, upload the PDF or Word document (.doc or .docx) here and choose the question you want help with.</p>
+      <p class="muted">Choose a filename to search the web for a downloadable copy. SharperTime does not host these papers. After downloading, upload the PDF, Word, Excel, or PowerPoint file here and choose the question you want help with.</p>
       <label class="paper-catalog-search-label" for="paperCatalogSearch">Find a paper or memo</label>
       <div class="paper-catalog-controls">
         <input id="paperCatalogSearch" type="search" autocomplete="off" placeholder="Search filenames">

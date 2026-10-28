@@ -889,7 +889,7 @@ export function installRealtimeTutor({ ensureInspection, getContext, transcribeA
   }
 
   async function start(contextType) {
-    if (contextType === "exam" && document.documentElement.classList.contains("strict-mock-exam-active")) return;
+    if (document.documentElement.classList.contains("strict-mock-exam-active")) return;
     if (starting) return;
     if (activeContext) {
       if (activeContext === contextType) await stop();
@@ -1019,7 +1019,7 @@ export function installRealtimeTutor({ ensureInspection, getContext, transcribeA
     togglePushToTalk,
     prepareSpeechFromGesture() { primeSpeechFromGesture(); },
     speakReply(text, context, callbacks) { speak(text, context, callbacks); },
-    stopIfContext(contextType) { if (activeContext === contextType) void stop(); },
+    stopIfContext(contextType) { if (!contextType || activeContext === contextType) void stop(); },
     get activeContext() { return activeContext; },
   };
 }

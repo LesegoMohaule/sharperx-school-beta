@@ -18,8 +18,8 @@ const MAX_UPLOAD_ITEMS = 20;
 const ASK_PHOTO_STORAGE_KEY = "sharperx_web_ask_photos_v1";
 const ASK_DOCUMENT_STORAGE_KEY = "sharperx_web_ask_documents_v1";
 function isImageUploadFile(file) {
-  return String(file?.type || "").toLowerCase().startsWith("image/")
-    || /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i.test(String(file?.name || ""));
+  return ["image/jpeg", "image/png", "image/webp"].includes(String(file?.type || "").toLowerCase())
+    || /\.(jpe?g|png|webp)$/i.test(String(file?.name || ""));
 }
 function isSupportedDocumentFile(file) {
   const extension = String(file?.name || "").toLowerCase().match(/\.[^.]+$/)?.[0] || "";
@@ -70,7 +70,14 @@ async function uploadLearnerFile(inspectionId, file, photoType = "school_answer_
   const uploaded = await uploadForm(`/api/inspections/${encodeURIComponent(inspectionId)}/upload-document`, form);
   const id = String(uploaded.id || uploaded.document_id || "");
   if (!id) throw new Error("The server did not return a document ID.");
-  return { id, kind: "document" };
+  const extractedCharacters = Number(uploaded.extracted_characters || 0);
+  const extractionFailed = String(uploaded.text_preview || "").toLowerCase().startsWith("document text could not be extracted:");
+  const readabilityWarning = extractedCharacters > 0 && !extractionFailed
+    ? ""
+    : /\.pdf$/i.test(file.name)
+      ? "No searchable text was extracted; the original PDF will be sent for visual reading."
+      : "No searchable text was extracted; the server will try to inspect the original Word pages. If page content is missing, upload a searchable PDF or clear page photos.";
+  return { id, kind: "document", readabilityWarning };
 }
 function imageBatchNotice(selection) {
   const notes = [];
@@ -152,11 +159,15 @@ const state = {
   examInspectionId: sessionStorage.getItem("sharperx_web_exam_inspection_id") || "",
   examPaperDocumentId: sessionStorage.getItem("sharperx_web_exam_paper_id") || "",
   examMemoDocumentId: sessionStorage.getItem("sharperx_web_exam_memo_id") || "",
+  examPaperPhotoIds: (() => { try { const value = JSON.parse(sessionStorage.getItem("sharperx_web_exam_paper_photo_ids") || "[]"); return Array.isArray(value) ? value.map(String).slice(0, MAX_UPLOAD_ITEMS) : []; } catch { return []; } })(),
+  examMemoPhotoIds: (() => { try { const value = JSON.parse(sessionStorage.getItem("sharperx_web_exam_memo_photo_ids") || "[]"); return Array.isArray(value) ? value.map(String).slice(0, MAX_UPLOAD_ITEMS) : []; } catch { return []; } })(),
   examPaperFileName: sessionStorage.getItem("sharperx_web_exam_paper_name") || "",
   examMemoFileName: sessionStorage.getItem("sharperx_web_exam_memo_name") || "",
   strictMockInspectionId: sessionStorage.getItem("sharperx_web_strict_mock_inspection_id") || "",
   strictMockPaperDocumentId: sessionStorage.getItem("sharperx_web_strict_mock_paper_id") || "",
   strictMockMemoDocumentId: sessionStorage.getItem("sharperx_web_strict_mock_memo_id") || "",
+  strictMockPaperPhotoIds: (() => { try { const value = JSON.parse(sessionStorage.getItem("sharperx_web_strict_mock_paper_photo_ids") || "[]"); return Array.isArray(value) ? value.map(String).slice(0, MAX_UPLOAD_ITEMS) : []; } catch { return []; } })(),
+  strictMockMemoPhotoIds: (() => { try { const value = JSON.parse(sessionStorage.getItem("sharperx_web_strict_mock_memo_photo_ids") || "[]"); return Array.isArray(value) ? value.map(String).slice(0, MAX_UPLOAD_ITEMS) : []; } catch { return []; } })(),
   strictMockPaperFileName: sessionStorage.getItem("sharperx_web_strict_mock_paper_name") || "",
   strictMockMemoFileName: sessionStorage.getItem("sharperx_web_strict_mock_memo_name") || "",
   strictMockAnswerPhotoIds: (() => { try { const value = JSON.parse(sessionStorage.getItem("sharperx_web_strict_mock_answer_photo_ids") || "[]"); return Array.isArray(value) ? value.map(String).slice(0, MAX_UPLOAD_ITEMS) : []; } catch { return []; } })(),
@@ -1506,6 +1517,7 @@ async function uploadAskPhotoFiles(files) {
   $("[data-file-trigger=askCameraInput]").disabled = true;
   let uploadedCount = 0;
   const failures = [];
+  const readabilityWarnings = [];
   const sendButton = $("#sendAskButton");
   const sendButtonWasDisabled = sendButton.disabled;
   sendButton.disabled = true;
@@ -1523,15 +1535,16 @@ async function uploadAskPhotoFiles(files) {
         } else {
           state.askDocuments.push({ id: uploaded.id, filename: file.name });
           persistAskDocumentState();
-          appendMessage(`Document attached: ${file.name}. Its readable text will be included with your next question.`, { kind: "Uploaded document" });
+          appendMessage(`Document attached: ${file.name}. Its readable text will be included with your next question.${uploaded.readabilityWarning ? ` ${uploaded.readabilityWarning}` : ""}`, { kind: "Uploaded document" });
+          if (uploaded.readabilityWarning) readabilityWarnings.push(`${file.name}: ${uploaded.readabilityWarning}`);
         }
         uploadedCount += 1;
       } catch (error) { failures.push(`${file.name}: ${error.message || "upload failed"}`); }
     }
-    const notices = [uploadBatchNotice(selection), ...failures].filter(Boolean);
+    const notices = [uploadBatchNotice(selection), ...failures, ...readabilityWarnings].filter(Boolean);
     const total = state.askPhotos.length + state.askDocuments.length;
     const message = `${uploadedCount} of ${selection.files.length} file${selection.files.length === 1 ? "" : "s"} attached (${total}/${MAX_UPLOAD_ITEMS} for this Ask session).`;
-    setStatus($("#voiceStatus"), [message, ...notices].join(" "), failures.length || selection.overLimit || selection.unsupported ? "warning" : "success");
+    setStatus($("#voiceStatus"), [message, ...notices].join(" "), failures.length || readabilityWarnings.length || selection.overLimit || selection.unsupported ? "warning" : "success");
   } catch (error) {
     setStatus($("#voiceStatus"), error.message || "The selected photos could not be uploaded.", "error");
   } finally {
@@ -3128,6 +3141,7 @@ async function uploadPracticePhotoFiles(files) {
   $("#practiceCameraButton").disabled = true;
   let uploadedCount = 0;
   const failures = [];
+  const readabilityWarnings = [];
   try {
     const inspectionId = await ensureInspection("practice");
     for (const file of selection.files) {
@@ -3149,10 +3163,11 @@ async function uploadPracticePhotoFiles(files) {
           uploadedCount += 1;
           renderPracticeAnswerAttachments();
         }
+        if (uploaded.kind === "document" && uploaded.readabilityWarning) readabilityWarnings.push(`${file.name}: ${uploaded.readabilityWarning}`);
       } catch (error) { failures.push(`${file.name}: ${error.message || "upload failed"}`); }
     }
-    const notices = [uploadBatchNotice(selection), ...failures].filter(Boolean);
-    setStatus($("#practiceMarkStatus"), `${uploadedCount} file${uploadedCount === 1 ? "" : "s"} attached (${state.practiceAnswerPhotoIds.length + state.practiceAnswerDocumentIds.length}/${MAX_UPLOAD_ITEMS} for this answer). ${notices.join(" ")}`.trim(), failures.length || selection.overLimit || selection.unsupported ? "warning" : "success");
+    const notices = [uploadBatchNotice(selection), ...failures, ...readabilityWarnings].filter(Boolean);
+    setStatus($("#practiceMarkStatus"), `${uploadedCount} file${uploadedCount === 1 ? "" : "s"} attached (${state.practiceAnswerPhotoIds.length + state.practiceAnswerDocumentIds.length}/${MAX_UPLOAD_ITEMS} for this answer). ${notices.join(" ")}`.trim(), failures.length || readabilityWarnings.length || selection.overLimit || selection.unsupported ? "warning" : "success");
   } catch (error) {
     setStatus($("#practiceMarkStatus"), error.message, "error");
   } finally {
@@ -3702,48 +3717,89 @@ async function renderExamPaperLinks(hostId = "examPaperLinks", selectedGrade = $
 
 function updateUploadedExamStatus() {
   const status = $("#examUploadStatus");
-  if (!state.examPaperDocumentId) {
-    setStatus(status, "No past paper uploaded yet. Select a downloaded PDF or Word file to continue.");
+  const hasPaper = Boolean(state.examPaperDocumentId || state.examPaperPhotoIds.length);
+  const hasMemo = Boolean(state.examMemoDocumentId || state.examMemoPhotoIds.length);
+  if (!hasPaper) {
+    setStatus(status, "No past paper uploaded yet. Choose a PDF, Word document, or clear page photo(s).");
   } else {
-    const memo = state.examMemoDocumentId ? ` Memo: ${state.examMemoFileName || "uploaded"}.` : " No memo uploaded; Guided Practice will use question-only support.";
-    setStatus(status, `Question paper ready: ${state.examPaperFileName || "uploaded file"}.${memo}`, "success");
+    const paperImages = state.examPaperPhotoIds.length ? ` ${state.examPaperPhotoIds.length} page photo(s).` : "";
+    const memo = hasMemo ? ` Memo: ${state.examMemoFileName || "uploaded"}.` : " No memo uploaded; Guided Practice will use question-only support.";
+    setStatus(status, `Question paper ready: ${state.examPaperFileName || "uploaded file"}.${paperImages}${memo}`, "success");
   }
-  $("#startUploadedExam").disabled = !state.examPaperDocumentId;
+  $("#startUploadedExam").disabled = !hasPaper;
 }
 
-async function uploadExamSource(file, kind) {
-  if (!file) return;
-  if (!isSupportedDocumentFile(file)) {
-    setStatus($("#examUploadStatus"), "Choose a PDF, .doc or .docx file from your device.", "error");
+async function uploadExamSource(files, kind) {
+  const selected = [...(files || [])];
+  if (!selected.length) return;
+  const supported = selected.filter((file) => isImageUploadFile(file) || isSupportedDocumentFile(file));
+  if (!supported.length || supported.length !== selected.length) {
+    setStatus($("#examUploadStatus"), "Choose PDF, .doc, .docx, JPG, PNG, or WEBP files.", "error");
+    return;
+  }
+  const count = state.examPaperPhotoIds.length + state.examMemoPhotoIds.length
+    + Number(Boolean(state.examPaperDocumentId)) + Number(Boolean(state.examMemoDocumentId));
+  if (supported.length > MAX_UPLOAD_ITEMS || count + supported.length > MAX_UPLOAD_ITEMS) {
+    setStatus($("#examUploadStatus"), `The limit is ${MAX_UPLOAD_ITEMS} paper and memo files/photos combined.`, "error");
+    return;
+  }
+  if (supported.filter(isSupportedDocumentFile).length > 1) {
+    setStatus($("#examUploadStatus"), "Choose one PDF or Word document at a time, or select up to 20 page photos.", "error");
     return;
   }
   const button = kind === "memo" ? $("#examUploadMemoButton") : $("#examUploadPaperButton");
   button.disabled = true;
-  setStatus($("#examUploadStatus"), `Uploading ${file.name}…`);
+  setStatus($("#examUploadStatus"), `Uploading ${supported.length} file${supported.length === 1 ? "" : "s"}…`);
+  const readabilityWarnings = [];
   try {
     const inspectionId = await ensureInspection("exam");
-    const form = new FormData();
-    form.set("document_type", kind === "memo" ? "ask_marking_memo" : "ask_question_paper");
-    form.set("document", file, file.name);
-    const result = await uploadForm(`/api/inspections/${encodeURIComponent(inspectionId)}/upload-document`, form);
-    const documentId = result.id || result.document_id;
-    if (!documentId) throw new Error("The document upload did not return a document ID. Please try again.");
-    if (kind === "memo") {
-      const previousId = state.examMemoDocumentId;
-      state.examMemoDocumentId = documentId;
-      state.examMemoFileName = file.name;
-      sessionStorage.setItem("sharperx_web_exam_memo_id", documentId);
-      sessionStorage.setItem("sharperx_web_exam_memo_name", file.name);
-      if (previousId && previousId !== documentId) void deleteSessionPaperDocument(previousId, inspectionId).catch(() => {});
-    } else {
-      const previousId = state.examPaperDocumentId;
-      state.examPaperDocumentId = documentId;
-      state.examPaperFileName = file.name;
-      sessionStorage.setItem("sharperx_web_exam_paper_id", documentId);
-      sessionStorage.setItem("sharperx_web_exam_paper_name", file.name);
-      if (previousId && previousId !== documentId) void deleteSessionPaperDocument(previousId, inspectionId).catch(() => {});
+    for (const file of supported) {
+      if (isImageUploadFile(file)) {
+        const form = new FormData();
+        form.set("photo_type", kind === "memo" ? "ask_marking_memo" : "ask_question_paper");
+        form.set("photo", file, file.name);
+        const result = await uploadForm(`/api/inspections/${encodeURIComponent(inspectionId)}/upload-photo`, form);
+        const photoId = String(result.id || result.photo_id || "");
+        if (!photoId) throw new Error(`The server did not return an image ID for ${file.name}.`);
+        const idsKey = kind === "memo" ? "examMemoPhotoIds" : "examPaperPhotoIds";
+        const storageKey = kind === "memo" ? "sharperx_web_exam_memo_photo_ids" : "sharperx_web_exam_paper_photo_ids";
+        if (!state[idsKey].includes(photoId)) state[idsKey].push(photoId);
+        state[idsKey] = state[idsKey].slice(0, MAX_UPLOAD_ITEMS);
+        sessionStorage.setItem(storageKey, JSON.stringify(state[idsKey]));
+        if (kind === "memo") state.examMemoFileName = file.name;
+        else state.examPaperFileName = file.name;
+        continue;
+      }
+
+      const form = new FormData();
+      form.set("document_type", kind === "memo" ? "ask_marking_memo" : "ask_question_paper");
+      form.set("document", file, file.name);
+      const result = await uploadForm(`/api/inspections/${encodeURIComponent(inspectionId)}/upload-document`, form);
+      const documentId = String(result.id || result.document_id || "");
+      if (!documentId) throw new Error("The document upload did not return a document ID. Please try again.");
+      if (!Number(result.extracted_characters || 0) || String(result.text_preview || "").toLowerCase().startsWith("document text could not be extracted:")) {
+        readabilityWarnings.push(/\.pdf$/i.test(file.name)
+          ? `${file.name}: no searchable text was extracted; the original PDF will be read visually during paper preparation.`
+          : `${file.name}: no searchable text was extracted; the server will try to inspect the original Word pages. If page content is missing, upload a searchable PDF or clear page photos.`);
+      }
+      if (kind === "memo") {
+        const previousId = state.examMemoDocumentId;
+        state.examMemoDocumentId = documentId;
+        state.examMemoFileName = file.name;
+        sessionStorage.setItem("sharperx_web_exam_memo_id", documentId);
+        sessionStorage.setItem("sharperx_web_exam_memo_name", file.name);
+        if (previousId && previousId !== documentId) void deleteSessionPaperDocument(previousId, inspectionId).catch(() => {});
+      } else {
+        const previousId = state.examPaperDocumentId;
+        state.examPaperDocumentId = documentId;
+        state.examPaperFileName = file.name;
+        sessionStorage.setItem("sharperx_web_exam_paper_id", documentId);
+        sessionStorage.setItem("sharperx_web_exam_paper_name", file.name);
+        if (previousId && previousId !== documentId) void deleteSessionPaperDocument(previousId, inspectionId).catch(() => {});
+      }
     }
     updateUploadedExamStatus();
+    if (readabilityWarnings.length) setStatus($("#examUploadStatus"), `${$("#examUploadStatus").textContent} ${readabilityWarnings.join(" ")}`, "warning");
   } catch (error) {
     setStatus($("#examUploadStatus"), error.message, "error");
   } finally {
@@ -3754,14 +3810,14 @@ async function uploadExamSource(file, kind) {
 $("#examUploadPaperButton").addEventListener("click", () => $("#examPaperInput").click());
 $("#examUploadMemoButton").addEventListener("click", () => $("#examMemoInput").click());
 $("#examPaperInput").addEventListener("change", (event) => {
-  const file = event.currentTarget.files?.[0];
+  const files = [...(event.currentTarget.files || [])];
   event.currentTarget.value = "";
-  void uploadExamSource(file, "paper");
+  void uploadExamSource(files, "paper");
 });
 $("#examMemoInput").addEventListener("change", (event) => {
-  const file = event.currentTarget.files?.[0];
+  const files = [...(event.currentTarget.files || [])];
   event.currentTarget.value = "";
-  void uploadExamSource(file, "memo");
+  void uploadExamSource(files, "memo");
 });
 $("#examSessionMode").addEventListener("change", updateUploadedExamStatus);
 
@@ -3933,7 +3989,9 @@ async function waitForUploadedPaperPreparation(startResult, statusElement = $("#
 }
 
 $("#startUploadedExam").addEventListener("click", async () => {
-  if (!state.examPaperDocumentId) return;
+  const hasPaper = Boolean(state.examPaperDocumentId || state.examPaperPhotoIds.length);
+  const hasMemo = Boolean(state.examMemoDocumentId || state.examMemoPhotoIds.length);
+  if (!hasPaper) return;
   const button = $("#startUploadedExam");
   const mode = $("#examSessionMode").value === "strict" ? "strict" : "guided";
   button.disabled = true;
@@ -3948,6 +4006,7 @@ $("#startUploadedExam").addEventListener("click", async () => {
       inspection_id: state.examInspectionId,
       title: state.examPaperFileName || "Uploaded Mathematics past paper",
       mode: mode === "strict" ? "exam" : "guided",
+      allow_missing_memo: !hasMemo,
     });
     const prepared = await waitForUploadedPaperPreparation(started);
     if (!prepared.paper_id) throw new Error(prepared.detail || prepared.message || "The uploaded paper was not ready to start.");
@@ -3977,7 +4036,8 @@ $("#startUploadedExam").addEventListener("click", async () => {
   } catch (error) {
     setStatus($("#examUploadStatus"), error.message, "error");
   } finally {
-    button.disabled = !state.examPaperDocumentId || ($("#examSessionMode").value === "strict" && !state.examMemoDocumentId);
+    button.disabled = !(state.examPaperDocumentId || state.examPaperPhotoIds.length)
+      || ($("#examSessionMode").value === "strict" && !(state.examMemoDocumentId || state.examMemoPhotoIds.length));
   }
 });
 
@@ -4197,50 +4257,89 @@ let strictMockUploading = false;
 let strictMockPreparing = false;
 
 function updateStrictMockSourceStatus() {
-  const paper = state.strictMockPaperDocumentId ? state.strictMockPaperFileName || "Question paper uploaded" : "No question paper uploaded yet.";
-  const memo = state.strictMockMemoDocumentId ? `Memo: ${state.strictMockMemoFileName || "file uploaded"}.` : "No memo uploaded; the app will derive and verify a marking guide from the paper where possible.";
-  setStatus($("#strictMockPaperStatus"), `${paper} ${memo}`, state.strictMockPaperDocumentId ? "success" : "");
-  $("#prepareStrictMock").disabled = !state.strictMockPaperDocumentId || strictMockUploading || strictMockPreparing || Boolean(state.strictMockSession);
+  const hasPaper = Boolean(state.strictMockPaperDocumentId || state.strictMockPaperPhotoIds.length);
+  const hasMemo = Boolean(state.strictMockMemoDocumentId || state.strictMockMemoPhotoIds.length);
+  const paper = hasPaper ? `${state.strictMockPaperFileName || "Question paper uploaded"}${state.strictMockPaperPhotoIds.length ? ` · ${state.strictMockPaperPhotoIds.length} page photo(s)` : ""}` : "No question paper uploaded yet.";
+  const memo = hasMemo ? `Memo: ${state.strictMockMemoFileName || "file uploaded"}${state.strictMockMemoPhotoIds.length ? ` · ${state.strictMockMemoPhotoIds.length} page photo(s)` : ""}.` : "No memo uploaded; the app will derive and verify a marking guide from the paper where possible.";
+  setStatus($("#strictMockPaperStatus"), `${paper} ${memo}`, hasPaper ? "success" : "");
+  $("#prepareStrictMock").disabled = !hasPaper || strictMockUploading || strictMockPreparing || Boolean(state.strictMockSession);
   $("#strictMockUploadPaper").disabled = strictMockUploading || strictMockPreparing || Boolean(state.strictMockSession);
   $("#strictMockUploadMemo").disabled = strictMockUploading || strictMockPreparing || Boolean(state.strictMockSession);
   $("#strictMockGrade").disabled = Boolean(state.strictMockSession);
   $("#strictMockTerm").disabled = Boolean(state.strictMockSession);
 }
 
-async function uploadStrictMockSource(file, kind) {
-  if (!file) return;
-  if (!isSupportedDocumentFile(file)) {
-    setStatus($("#strictMockPaperStatus"), "Choose a PDF, .doc or .docx file from your device.", "error");
+async function uploadStrictMockSource(files, kind) {
+  const selected = [...(files || [])];
+  if (!selected.length) return;
+  const supported = selected.filter((file) => isImageUploadFile(file) || isSupportedDocumentFile(file));
+  if (!supported.length || supported.length !== selected.length) {
+    setStatus($("#strictMockPaperStatus"), "Choose PDF, .doc, .docx, JPG, PNG, or WEBP files.", "error");
+    return;
+  }
+  const count = state.strictMockPaperPhotoIds.length + state.strictMockMemoPhotoIds.length
+    + Number(Boolean(state.strictMockPaperDocumentId)) + Number(Boolean(state.strictMockMemoDocumentId));
+  if (supported.length > MAX_UPLOAD_ITEMS || count + supported.length > MAX_UPLOAD_ITEMS) {
+    setStatus($("#strictMockPaperStatus"), `The limit is ${MAX_UPLOAD_ITEMS} paper and memo files/photos combined.`, "error");
+    return;
+  }
+  if (supported.filter(isSupportedDocumentFile).length > 1) {
+    setStatus($("#strictMockPaperStatus"), "Choose one PDF or Word document at a time, or select up to 20 page photos.", "error");
     return;
   }
   try {
     invalidateStrictMockPreparation();
     strictMockUploading = true;
+    const readabilityWarnings = [];
     updateStrictMockSourceStatus();
-    setStatus($("#strictMockPaperStatus"), `Uploading ${file.name}…`);
+    setStatus($("#strictMockPaperStatus"), `Uploading ${supported.length} file${supported.length === 1 ? "" : "s"}…`);
     const inspectionId = await ensureStrictMockInspection();
-    const form = new FormData();
-    form.set("document_type", kind === "memo" ? "ask_marking_memo" : "ask_question_paper");
-    form.set("document", file, file.name);
-    const result = await uploadForm(`/api/inspections/${encodeURIComponent(inspectionId)}/upload-document`, form);
-    const documentId = String(result.id || result.document_id || "");
-    if (!documentId) throw new Error("The document upload did not return a document ID.");
-    if (kind === "memo") {
-      const old = state.strictMockMemoDocumentId;
-      state.strictMockMemoDocumentId = documentId;
-      state.strictMockMemoFileName = file.name;
-      sessionStorage.setItem("sharperx_web_strict_mock_memo_id", documentId);
-      sessionStorage.setItem("sharperx_web_strict_mock_memo_name", file.name);
-      if (old && old !== documentId) await deleteSessionPaperDocument(old, inspectionId).catch(() => {});
-    } else {
-      const old = state.strictMockPaperDocumentId;
-      state.strictMockPaperDocumentId = documentId;
-      state.strictMockPaperFileName = file.name;
-      sessionStorage.setItem("sharperx_web_strict_mock_paper_id", documentId);
-      sessionStorage.setItem("sharperx_web_strict_mock_paper_name", file.name);
-      if (old && old !== documentId) await deleteSessionPaperDocument(old, inspectionId).catch(() => {});
+    for (const file of supported) {
+      if (isImageUploadFile(file)) {
+        const form = new FormData();
+        form.set("photo_type", kind === "memo" ? "ask_marking_memo" : "ask_question_paper");
+        form.set("photo", file, file.name);
+        const result = await uploadForm(`/api/inspections/${encodeURIComponent(inspectionId)}/upload-photo`, form);
+        const photoId = String(result.id || result.photo_id || "");
+        if (!photoId) throw new Error(`The server did not return an image ID for ${file.name}.`);
+        const idsKey = kind === "memo" ? "strictMockMemoPhotoIds" : "strictMockPaperPhotoIds";
+        const storageKey = kind === "memo" ? "sharperx_web_strict_mock_memo_photo_ids" : "sharperx_web_strict_mock_paper_photo_ids";
+        if (!state[idsKey].includes(photoId)) state[idsKey].push(photoId);
+        state[idsKey] = state[idsKey].slice(0, MAX_UPLOAD_ITEMS);
+        sessionStorage.setItem(storageKey, JSON.stringify(state[idsKey]));
+        if (kind === "memo") state.strictMockMemoFileName = file.name;
+        else state.strictMockPaperFileName = file.name;
+        continue;
+      }
+      const form = new FormData();
+      form.set("document_type", kind === "memo" ? "ask_marking_memo" : "ask_question_paper");
+      form.set("document", file, file.name);
+      const result = await uploadForm(`/api/inspections/${encodeURIComponent(inspectionId)}/upload-document`, form);
+      const documentId = String(result.id || result.document_id || "");
+      if (!documentId) throw new Error("The document upload did not return a document ID.");
+      if (!Number(result.extracted_characters || 0) || String(result.text_preview || "").toLowerCase().startsWith("document text could not be extracted:")) {
+        readabilityWarnings.push(/\.pdf$/i.test(file.name)
+          ? `${file.name}: no searchable text was extracted; the original PDF will be read visually during paper preparation.`
+          : `${file.name}: no searchable text was extracted; the server will try to inspect the original Word pages. If page content is missing, upload a searchable PDF or clear page photos.`);
+      }
+      if (kind === "memo") {
+        const old = state.strictMockMemoDocumentId;
+        state.strictMockMemoDocumentId = documentId;
+        state.strictMockMemoFileName = file.name;
+        sessionStorage.setItem("sharperx_web_strict_mock_memo_id", documentId);
+        sessionStorage.setItem("sharperx_web_strict_mock_memo_name", file.name);
+        if (old && old !== documentId) await deleteSessionPaperDocument(old, inspectionId).catch(() => {});
+      } else {
+        const old = state.strictMockPaperDocumentId;
+        state.strictMockPaperDocumentId = documentId;
+        state.strictMockPaperFileName = file.name;
+        sessionStorage.setItem("sharperx_web_strict_mock_paper_id", documentId);
+        sessionStorage.setItem("sharperx_web_strict_mock_paper_name", file.name);
+        if (old && old !== documentId) await deleteSessionPaperDocument(old, inspectionId).catch(() => {});
+      }
     }
     updateStrictMockSourceStatus();
+    if (readabilityWarnings.length) setStatus($("#strictMockPaperStatus"), `${$("#strictMockPaperStatus").textContent} ${readabilityWarnings.join(" ")}`, "warning");
   } catch (error) {
     setStatus($("#strictMockPaperStatus"), error.message, "error");
   } finally {
@@ -4376,7 +4475,6 @@ async function renderStrictMockResult(result) {
   body.className = "math-content";
   const detail = (result.questions || []).map((item) => [
     `${item.display_label || item.question_number || "Question"} · ${item.marks ?? 0} / ${item.maximum_marks ?? item.marks ?? 0} marks`,
-    item.question_text_latex || item.question_text || "",
     "Your response: handwritten answer script images submitted.",
     item.feedback ? `Feedback and corrections:\n${item.feedback}` : "",
     item.correct_method || item.solution || item.worked_solution ? `Full solution:\n${item.correct_method || item.solution || item.worked_solution}` : "",
@@ -4410,6 +4508,8 @@ function resetStrictMockExam() {
   state.examSessionId = "";
   state.strictMockPaperDocumentId = "";
   state.strictMockMemoDocumentId = "";
+  state.strictMockPaperPhotoIds = [];
+  state.strictMockMemoPhotoIds = [];
   state.strictMockPaperFileName = "";
   state.strictMockMemoFileName = "";
   state.strictMockAnswerPhotoIds = [];
@@ -4421,6 +4521,8 @@ function resetStrictMockExam() {
     "sharperx_web_exam_session_id",
     "sharperx_web_strict_mock_paper_id",
     "sharperx_web_strict_mock_memo_id",
+    "sharperx_web_strict_mock_paper_photo_ids",
+    "sharperx_web_strict_mock_memo_photo_ids",
     "sharperx_web_strict_mock_paper_name",
     "sharperx_web_strict_mock_memo_name",
     "sharperx_web_strict_mock_inspection_id",
@@ -4444,7 +4546,9 @@ function resetStrictMockExam() {
 }
 
 async function prepareStrictMock() {
-  if (!state.strictMockPaperDocumentId || strictMockPreparing) return;
+  const hasPaper = Boolean(state.strictMockPaperDocumentId || state.strictMockPaperPhotoIds.length);
+  const hasMemo = Boolean(state.strictMockMemoDocumentId || state.strictMockMemoPhotoIds.length);
+  if (!hasPaper || strictMockPreparing) return;
   strictMockPreparing = true;
   $("#prepareStrictMock").disabled = true;
   setStatus($("#strictMockReadyStatus"), "Preparing the paper and its marking guide. The timer has not started yet…");
@@ -4459,7 +4563,7 @@ async function prepareStrictMock() {
       inspection_id: inspectionId,
       title: state.strictMockPaperFileName || `Grade ${grade} Mathematics assessment`,
       mode: "exam",
-      allow_missing_memo: !state.strictMockMemoDocumentId,
+      allow_missing_memo: !hasMemo,
     });
     const prepared = await waitForUploadedPaperPreparation(started, $("#strictMockReadyStatus"));
     if (!prepared.paper_id) throw new Error(prepared.detail || prepared.message || "The uploaded paper was not ready.");
@@ -4522,6 +4626,7 @@ async function uploadStrictMockAnswerFiles(files) {
   $("#strictMockTakeAnswerPhoto").disabled = true;
   let uploadedCount = 0;
   const failures = [];
+  const readabilityWarnings = [];
   let completionMessage = "";
   let completionKind = "success";
   try {
@@ -4539,6 +4644,7 @@ async function uploadStrictMockAnswerFiles(files) {
           state.strictMockDocumentNames.push(file.name);
           uploadedCount += 1;
         }
+        if (uploaded.kind === "document" && uploaded.readabilityWarning) readabilityWarnings.push(`${file.name}: ${uploaded.readabilityWarning}`);
         sessionStorage.setItem("sharperx_web_strict_mock_answer_photo_ids", JSON.stringify(state.strictMockAnswerPhotoIds));
         sessionStorage.setItem("sharperx_web_strict_mock_answer_photo_names", JSON.stringify(state.strictMockPhotoNames));
         sessionStorage.setItem("sharperx_web_strict_mock_answer_document_ids", JSON.stringify(state.strictMockAnswerDocumentIds));
@@ -4546,10 +4652,10 @@ async function uploadStrictMockAnswerFiles(files) {
         renderStrictMockAnswerFiles();
       } catch (error) { failures.push(`${file.name}: ${error.message || "upload failed"}`); }
     }
-    const notices = [uploadBatchNotice(selection), ...failures].filter(Boolean);
+    const notices = [uploadBatchNotice(selection), ...failures, ...readabilityWarnings].filter(Boolean);
     const count = state.strictMockAnswerPhotoIds.length + state.strictMockAnswerDocumentIds.length;
     completionMessage = `${uploadedCount} file${uploadedCount === 1 ? "" : "s"} uploaded (${count}/${MAX_UPLOAD_ITEMS} total). Submit the complete answer script when ready. ${notices.join(" ")}`.trim();
-    completionKind = failures.length || selection.overLimit || selection.unsupported ? "warning" : "success";
+    completionKind = failures.length || readabilityWarnings.length || selection.overLimit || selection.unsupported ? "warning" : "success";
   } catch (error) {
     completionMessage = error.message || "The selected answer pages could not be uploaded.";
     completionKind = "error";
@@ -4594,8 +4700,8 @@ $("#strictMockTerm").addEventListener("change", () => {
 });
 $("#strictMockUploadPaper").addEventListener("click", () => $("#strictMockPaperInput").click());
 $("#strictMockUploadMemo").addEventListener("click", () => $("#strictMockMemoInput").click());
-$("#strictMockPaperInput").addEventListener("change", (event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; void uploadStrictMockSource(file, "paper"); });
-$("#strictMockMemoInput").addEventListener("change", (event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; void uploadStrictMockSource(file, "memo"); });
+$("#strictMockPaperInput").addEventListener("change", (event) => { const files = [...(event.currentTarget.files || [])]; event.currentTarget.value = ""; void uploadStrictMockSource(files, "paper"); });
+$("#strictMockMemoInput").addEventListener("change", (event) => { const files = [...(event.currentTarget.files || [])]; event.currentTarget.value = ""; void uploadStrictMockSource(files, "memo"); });
 $("#prepareStrictMock").addEventListener("click", prepareStrictMock);
 $("#startStrictMockTimer").addEventListener("click", startStrictMockTimer);
 $("#strictMockUploadAnswers").addEventListener("click", () => $("#strictMockAnswerInput").click());
@@ -4781,39 +4887,77 @@ async function renderExamSourceSnapshot(question) {
   const image = $("#examSourceSnapshotImage");
   const questionText = $("#examQuestionText");
   figure.hidden = true;
+  image.hidden = false;
   image.removeAttribute("src");
-  questionText.hidden = false;
-  const inspectionId = state.examInspectionId || sessionStorage.getItem("sharperx_web_exam_inspection_id") || "";
-  const documentId = state.examPaperDocumentId || sessionStorage.getItem("sharperx_web_exam_paper_id") || "";
-  if (!inspectionId || !documentId) return;
-  const number = String(question.question_number || question.display_label || "").trim().match(/\d{1,2}/)?.[0] || "";
-  if (!/^\d{1,2}$/.test(number)) return;
-  const cacheKey = `${documentId}:${number}`;
+  figure.querySelectorAll("img[data-source-snapshot-extra], .exam-snapshot-unavailable, .exam-snapshot-loading").forEach((item) => item.remove());
+  const caption = $("#examSourceSnapshotCaption");
+  const sourceRequired = question.source_snapshot_required === true;
+  questionText.hidden = sourceRequired;
+  if (!sourceRequired) return;
+  image.hidden = true;
+  figure.hidden = false;
+  const loading = document.createElement("p");
+  loading.className = "exam-snapshot-loading";
+  loading.textContent = "Loading the original question page…";
+  figure.insertBefore(loading, caption);
+  caption.textContent = `Original question page · ${question.display_label || question.question_number || "Question"}`;
+  const sessionId = String(state.examSessionId || sessionStorage.getItem("sharperx_web_exam_session_id") || "");
+  const number = String(question.display_label || question.question_number || "Question").trim();
+  const showUnavailable = () => {
+    figure.querySelectorAll(".exam-snapshot-loading").forEach((item) => item.remove());
+    image.hidden = true;
+    const notice = document.createElement("p");
+    notice.className = "exam-snapshot-unavailable";
+    notice.textContent = "The original question page could not be loaded. Reconstructed text and drawings are hidden to avoid showing an inaccurate question. Upload a searchable PDF or clear page photos to view the source page.";
+    figure.insertBefore(notice, caption);
+    caption.textContent = "Original question page unavailable";
+    figure.hidden = false;
+    questionText.hidden = true;
+  };
+  if (!sessionId) {
+    showUnavailable();
+    return;
+  }
+  const cacheKey = `${sessionId}:${question.id}`;
   try {
     let snapshot = examSnapshotCache.get(cacheKey);
     if (!snapshot) {
-      snapshot = await postJson(`/api/inspections/${encodeURIComponent(inspectionId)}/question-snapshot`, {
-        document_id: documentId,
-        question_number: number,
-      });
+      snapshot = await getJson(`/api/education/exam-sessions/${encodeURIComponent(sessionId)}/question-snapshot`);
       examSnapshotCache.set(cacheKey, snapshot);
     }
-    if (state.examCurrentQuestion !== question || !snapshot.image_png_base64) return;
-    image.src = `data:image/png;base64,${snapshot.image_png_base64}`;
-    image.alt = `Original paper image for Question ${number}`;
+    if (state.examCurrentQuestion !== question) return;
+    const sourceImages = Array.isArray(snapshot.source_images) ? snapshot.source_images : [];
+    figure.querySelectorAll(".exam-snapshot-loading").forEach((item) => item.remove());
+    if (snapshot.image_png_base64) {
+      image.src = `data:image/png;base64,${snapshot.image_png_base64}`;
+      image.alt = `Original paper page for Question ${number}`;
+    } else if (sourceImages.length) {
+      const first = sourceImages[0];
+      image.src = `data:${first.mime_type || "image/jpeg"};base64,${first.data_base64 || ""}`;
+      image.alt = `Uploaded original paper page ${first.filename || ""}`;
+    } else {
+      showUnavailable();
+      return;
+    }
+    for (const source of sourceImages.slice(snapshot.image_png_base64 ? 0 : 1)) {
+      if (!source?.data_base64) continue;
+      const extra = document.createElement("img");
+      extra.dataset.sourceSnapshotExtra = "true";
+      extra.alt = `Uploaded original paper page ${source.filename || ""}`;
+      extra.loading = "lazy";
+      extra.src = `data:${source.mime_type || "image/jpeg"};base64,${source.data_base64}`;
+      figure.insertBefore(extra, caption);
+    }
     const pages = Array.isArray(snapshot.page_numbers) ? snapshot.page_numbers.join(", ") : "";
-    $("#examSourceSnapshotCaption").textContent = `Original paper · Question ${number}${pages ? ` · page${pages.includes(",") ? "s" : ""} ${pages}` : ""}`;
+    caption.textContent = `Original question page · ${number}${pages ? ` · page${pages.includes(",") ? "s" : ""} ${pages}` : sourceImages.length ? ` · ${sourceImages.length} uploaded page photo(s)` : ""}`;
     image.onerror = () => {
-      figure.hidden = true;
-      questionText.hidden = false;
+      showUnavailable();
     };
     figure.hidden = false;
     questionText.hidden = true;
   } catch (error) {
-    // The OCR question remains available if the PDF scan cannot be rendered.
-    figure.hidden = true;
-    questionText.hidden = false;
-    setStatus($("#examPhotoStatus"), `The source snapshot could not be shown: ${error.message}`);
+    showUnavailable();
+    setStatus($("#examPhotoStatus"), "The original source page could not be shown. The reconstructed question has been hidden.");
   }
 }
 
@@ -4836,12 +4980,24 @@ async function renderExamSession(session) {
       state.examAnswerDocumentNames.set(question.id, Array.isArray(saved) ? saved.slice(0, MAX_UPLOAD_ITEMS).map((item) => String(item.name || "Answer document")) : []);
     } catch { state.examAnswerDocumentAttachments.set(question.id, []); state.examAnswerDocumentNames.set(question.id, []); }
   }
+  if (Array.isArray(question.answer?.document_ids)) {
+    const serverDocumentIds = question.answer.document_ids.map(String).filter(Boolean).slice(0, MAX_UPLOAD_ITEMS);
+    state.examAnswerDocumentAttachments.set(question.id, serverDocumentIds);
+    const currentNames = state.examAnswerDocumentNames.get(question.id) || [];
+    state.examAnswerDocumentNames.set(question.id, serverDocumentIds.map((_, index) => currentNames[index] || "Answer document"));
+  }
   state.examAnswerPersisted.set(question.id, String(question.answer?.answer_text || question.answer?.math_content || ""));
   if (Array.isArray(question.answer?.attachment_ids)) state.examAnswerAttachments.set(question.id, question.answer.attachment_ids.map(String).slice(0, MAX_UPLOAD_ITEMS));
   $("#examProgress").textContent = (session.paper_title || "Assessment") + " · Question " + (state.examQuestionIndex + 1) + " of " + session.question_count;
   $("#examSaveStatus").textContent = "Answers save automatically. Marking and feedback appear after final submission.";
   $("#examQuestionTitle").textContent = question.display_label || "Question " + (state.examQuestionIndex + 1);
-  renderMath($("#examQuestionText"), question.question_text_latex || question.question_text || "");
+  if (question.source_snapshot_required === true) {
+    $("#examQuestionText").replaceChildren();
+    $("#examQuestionText").hidden = true;
+  } else {
+    renderMath($("#examQuestionText"), question.question_text_latex || question.question_text || "");
+    $("#examQuestionText").hidden = false;
+  }
   void renderExamSourceSnapshot(question);
   setMathEditorLatex("exam", question.answer && question.answer.answer_text || "");
   setMathKeyboardVisible(false, "exam");
@@ -4855,6 +5011,9 @@ async function renderExamSession(session) {
   if (session.mode === "strict") {
     $("#examVideoPreview").replaceChildren();
     $("#examVideoPreview").hidden = true;
+  } else if (question.source_snapshot_required === true) {
+    $("#examVideoPreview").replaceChildren();
+    $("#examVideoPreview").hidden = true;
   } else void loadQuestionVideoPreview(question, "exam");
   $("#examFullScreen").hidden = true;
   $("#previousExamQuestion").disabled = state.examQuestionIndex <= 0;
@@ -4862,8 +5021,8 @@ async function renderExamSession(session) {
   $("#submitExam").hidden = state.examQuestionIndex < Number(session.question_count || 0) - 1;
   updateExamNavigationState();
   $("#examGuidanceButton").disabled = session.mode === "strict";
-  state.examVisuals = collectVisuals(question);
-  if (!state.examPaperDocumentId && (question.bank_question_id || question.question_id || question.id || state.examVisuals.length)) {
+  state.examVisuals = question.source_snapshot_required === true ? [] : collectVisuals(question);
+  if (question.source_snapshot_required !== true && !state.examPaperDocumentId && (question.bank_question_id || question.question_id || question.id || state.examVisuals.length)) {
     const reviewQuestion = Object.assign({}, question, { question_id: question.bank_question_id || question.question_id || question.id });
     const locallyCachedVisuals = readCachedQuestionVisuals(reviewQuestion);
     if (locallyCachedVisuals !== null) {
@@ -5049,7 +5208,7 @@ async function uploadExamHandwritingFiles(files) {
           }
           renderExamAnswerAttachments(question.id);
           await saveExamAnswer();
-          setStatus($("#examPhotoStatus"), `Document saved: ${file.name}. Its text is attached to this answer.`, "success");
+          setStatus($("#examPhotoStatus"), `Document saved: ${file.name}. Its extracted text and original PDF/Word figures are attached to this answer.${uploaded.readabilityWarning ? ` ${uploaded.readabilityWarning}` : ""}`, uploaded.readabilityWarning ? "warning" : "success");
           continue;
         }
         const photoId = uploaded.id;

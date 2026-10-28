@@ -259,14 +259,14 @@
             <p id="examStatus" class="status" role="status" aria-live="polite"></p>
             <section class="exam-source-section" aria-labelledby="examPaperLinksTitle">
               <h2 id="examPaperLinksTitle">Past papers by term</h2>
-              <p class="source-note">Open a paper link in your browser, download the file, then return here and upload the question paper as a PDF or Word document (.doc or .docx). To write on paper with a timer, open Strict Mock Exam; upload the memo there if it is available.</p>
+              <p class="source-note">Open a paper link in your browser, download it, then return here and upload its PDF, Word document (.doc or .docx), or clear page photos. Upload up to 20 source files/photos. To write on paper with a timer, open Strict Mock Exam; upload the memo there if it is available.</p>
               <div id="examPaperLinks" class="exam-paper-term-groups" aria-live="polite"></div>
               <div class="exam-upload-panel">
                 <div class="exam-upload-actions">
-                  <button id="examUploadPaperButton" class="button secondary" type="button">Upload question paper</button>
-                  <button id="examUploadMemoButton" class="button subtle" type="button">Upload memo</button>
-                  <input id="examPaperInput" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
-                  <input id="examMemoInput" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+                  <button id="examUploadPaperButton" class="button secondary" type="button">Upload paper / page photos</button>
+                  <button id="examUploadMemoButton" class="button subtle" type="button">Upload memo / page photos</button>
+                  <input id="examPaperInput" type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp" multiple hidden>
+                  <input id="examMemoInput" type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp" multiple hidden>
                 </div>
                 <p id="examUploadStatus" class="status" role="status" aria-live="polite">No past paper uploaded yet.</p>
                 <button id="startUploadedExam" class="button primary" type="button" disabled>Start uploaded paper</button>
@@ -284,7 +284,7 @@
             <section id="strictMockLinksSection" class="exam-source-section" aria-labelledby="strictMockPaperLinksTitle"><h3 id="strictMockPaperLinksTitle">Past papers by term</h3><p class="source-note">Stanmore and DBE links open in your browser. Download the paper, then return here to upload it.</p><div id="strictMockPaperLinks" class="exam-paper-term-groups" aria-live="polite"></div></section>
             <section id="strictMockUploads" class="exam-upload-panel strict-mock-uploads" aria-label="Strict mock exam files">
               <h3>Prepare the paper</h3>
-              <div class="exam-upload-actions"><button id="strictMockUploadPaper" class="button secondary" type="button">Upload question paper</button><button id="strictMockUploadMemo" class="button subtle" type="button">Upload memo (if available)</button><input id="strictMockPaperInput" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden><input id="strictMockMemoInput" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden></div>
+              <div class="exam-upload-actions"><button id="strictMockUploadPaper" class="button secondary" type="button">Upload question paper / page photos</button><button id="strictMockUploadMemo" class="button subtle" type="button">Upload memo / page photos (if available)</button><input id="strictMockPaperInput" type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp" multiple hidden><input id="strictMockMemoInput" type="file" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp" multiple hidden></div>
               <p id="strictMockPaperStatus" class="status" role="status" aria-live="polite">Upload a question paper as a PDF or Word document to begin.</p>
               <button id="prepareStrictMock" class="button secondary" type="button" disabled>Prepare paper</button>
               <p id="strictMockReadyStatus" class="status" role="status" aria-live="polite"></p>

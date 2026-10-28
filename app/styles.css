@@ -361,6 +361,34 @@ input:focus, select:focus, textarea:focus { border-color: var(--brand-cyan); box
 .exam-source-snapshot[hidden] { display: none !important; }
 .exam-plan-note, .exam-target-note { margin: 8px 0; padding: 10px 12px; border-radius: 10px; color: #244c72; background: #eef6ff; font-size: 12px; line-height: 1.5; }
 .exam-target-note:empty { display: none; }
+.exam-strict-page { display: grid; gap: 12px; margin-top: 10px; }
+.exam-strict-page[hidden], .strict-mock-active[hidden], .strict-mock-result[hidden], #strictMockUploads[hidden] { display: none !important; }
+.exam-strict-page > #closeStrictMockExam { justify-self: start; }
+.strict-mock-heading { padding: 16px; border: 1px solid #c9dced; border-radius: 14px; background: linear-gradient(135deg, #eef7ff, #fff); }
+.strict-mock-heading .eyebrow { margin: 0 0 4px; }
+.strict-mock-heading h2 { margin: 0 0 7px; color: var(--brand-navy); font-size: 22px; }
+.strict-mock-heading p:last-child { margin: 0; color: var(--ink-soft); font-size: 13px; line-height: 1.55; }
+.strict-mock-filters { display: grid; grid-template-columns: minmax(100px, .55fr) minmax(220px, 1.4fr) minmax(130px, .7fr); gap: 10px; }
+.strict-mock-filters label { display: grid; gap: 5px; color: var(--ink-soft); font-size: 12px; font-weight: 700; }
+.strict-mock-filters select { width: 100%; min-height: 42px; padding: 8px 10px; border: 1px solid #cbd8e7; border-radius: 9px; color: var(--ink); background: #fff; font: inherit; }
+.strict-mock-uploads h3, .strict-mock-active h3 { margin: 0; color: var(--brand-navy); font-size: 16px; }
+.strict-mock-active { display: grid; gap: 12px; padding: 14px; border: 1px solid #cddced; border-radius: 14px; background: #f8fbff; }
+.strict-mock-timer-card { display: grid; justify-items: center; gap: 5px; padding: 16px; border: 1px solid #c2d8ee; border-radius: 13px; color: #fff; background: #0e3558; text-align: center; }
+.strict-mock-timer-card .eyebrow { color: #c9def2; }
+.strict-mock-timer { font-variant-numeric: tabular-nums; font-size: clamp(36px, 10vw, 58px); font-weight: 800; letter-spacing: .04em; line-height: 1.1; }
+.strict-mock-timer-card .status { margin: 4px 0 0; color: #e6f2ff; font-size: 12px; }
+.strict-mock-active > .source-note { margin: -7px 0 0; color: var(--ink-soft); font-size: 13px; line-height: 1.5; }
+.strict-mock-answer-files { display: grid; gap: 6px; }
+.strict-mock-answer-file { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 9px; border: 1px solid #d5e2f0; border-radius: 9px; color: var(--ink); background: #fff; font-size: 12px; }
+.strict-mock-answer-file span { min-width: 0; overflow-wrap: anywhere; }
+.strict-mock-answer-file .button { flex: 0 0 auto; min-height: 32px; padding: 5px 9px; }
+.strict-mock-result { display: grid; gap: 12px; }
+.strict-mock-result h2 { margin: 0; }
+@media (max-width: 600px) {
+  .strict-mock-filters { grid-template-columns: minmax(0, 1fr); }
+  .strict-mock-filters label { min-width: 0; }
+  .strict-mock-timer-card { padding: 13px 9px; }
+}
 .exam-answer-attachments { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; color: var(--ink-soft); font-size: 12px; }
 .exam-answer-attachment { display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .exam-answer-attachments button { min-height: 30px; padding: 4px 9px; }
@@ -389,6 +417,16 @@ html.canvas-dialog-open, body.canvas-dialog-open { overflow: hidden; overscroll-
 .voice-review-dialog .voice-review-guidance { margin: 0; }
 .voice-review-dialog .voice-review-actions { align-items: center; }
 .voice-review-dialog .voice-review-actions .status { flex: 1 1 100%; }
+.exam-handwriting-review-dialog { width: min(96vw, 760px); max-height: min(calc(var(--app-viewport-height) * .92), 900px); padding: 0; overflow: auto; border: 1px solid #cad8e8; border-radius: 18px; color: var(--ink); background: #f8faff; box-shadow: 0 24px 80px rgba(0,0,0,.28); }
+.exam-handwriting-review-dialog::backdrop { background: rgba(6, 20, 42, .68); backdrop-filter: blur(2px); }
+.exam-handwriting-review { display: grid; gap: 12px; padding: 16px; }
+.exam-handwriting-review > p { margin: 0; }
+.exam-handwriting-review > img { display: block; width: 100%; max-height: 30vh; object-fit: contain; border: 1px solid var(--line); border-radius: 10px; background: white; }
+.exam-handwriting-review > label { display: grid; gap: 6px; font-weight: 750; }
+.exam-handwriting-review textarea { width: 100%; min-height: 92px; padding: 10px; border: 1px solid #9eb5cc; border-radius: 10px; color: var(--ink); background: white; font: inherit; line-height: 1.5; }
+.exam-handwriting-review-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
+.exam-handwriting-review-actions .button { flex: 1 1 180px; }
+.answer-actions #examSaveStatus { flex: 1 1 100%; margin: 0; }
 .dialog-toolbar { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 9px 14px; border-bottom: 1px solid var(--line); background: white; }
 .dialog-toolbar strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .image-viewport { height: 78vh; max-height: 830px; height: min(calc(var(--app-viewport-height) * .78), 830px); overflow: hidden; touch-action: none; display: grid; place-items: center; background: #f4f8fd; }
@@ -612,7 +650,7 @@ html.canvas-dialog-open, body.canvas-dialog-open { overflow: hidden; overscroll-
   .lesson-player { padding: 11px; }
   .lesson-player video, .lesson-player iframe { min-height: min(260px, 38vh); height: min(58vh, 520px); }
   .view-heading > label { min-width: 90px; }
-  .image-dialog, .canvas-dialog, .voice-review-dialog { width: 100vw; max-width: none; max-height: var(--app-viewport-height); height: var(--app-viewport-height); border: 0; border-radius: 0; }
+  .image-dialog, .canvas-dialog, .voice-review-dialog, .exam-handwriting-review-dialog { width: 100vw; max-width: none; max-height: var(--app-viewport-height); height: var(--app-viewport-height); border: 0; border-radius: 0; }
   .image-viewport { height: calc(var(--app-viewport-height) - 118px); }
   .dialog-toolbar { min-height: 56px; padding: 7px 9px; }
   .canvas-toolbar { align-items: stretch; flex-wrap: wrap; gap: 3px 6px; padding: 4px 8px; }

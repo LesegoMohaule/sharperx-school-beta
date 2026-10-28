@@ -357,7 +357,10 @@ input:focus, select:focus, textarea:focus { border-color: var(--brand-cyan); box
 .exam-upload-panel > #startUploadedExam { justify-self: start; }
 .exam-source-snapshot { min-width: 0; margin: 12px 0; padding: 8px; border: 1px solid var(--line); border-radius: 12px; background: #f7f9fc; }
 .exam-source-snapshot img { display: block; width: 100%; max-height: min(68vh, 900px); object-fit: contain; object-position: top center; background: #fff; }
+.exam-source-snapshot img[hidden] { display: none !important; }
 .exam-source-snapshot figcaption { margin-top: 6px; color: var(--ink-soft); font-size: 11px; }
+.exam-snapshot-loading, .exam-snapshot-unavailable { margin: 10px 2px; color: var(--ink-soft); font-size: 13px; line-height: 1.5; }
+.exam-snapshot-unavailable { color: #8b2d20; }
 .exam-source-snapshot[hidden] { display: none !important; }
 .exam-plan-note, .exam-target-note { margin: 8px 0; padding: 10px 12px; border-radius: 10px; color: #244c72; background: #eef6ff; font-size: 12px; line-height: 1.5; }
 .exam-target-note:empty { display: none; }

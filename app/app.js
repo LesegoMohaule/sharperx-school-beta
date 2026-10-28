@@ -3887,7 +3887,7 @@ function setExamTutorAvailability(available) {
   if (locked) {
     panel.hidden = true;
     panel.setAttribute("aria-hidden", "true");
-    realtimeTutor.stopIfContext("exam");
+    realtimeTutor.stopIfContext();
   }
 }
 

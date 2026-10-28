@@ -12,7 +12,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icon.svg">
-  <link rel="stylesheet" href="./styles.css?v=73">
+  <link rel="stylesheet" href="./styles.css?v=75">
   <script>
     try {
       if (/[?&](email|password)=/i.test(window.location.search) && window.history && window.history.replaceState) {
@@ -249,13 +249,13 @@
             <p class="live-tutor-note">Press Voice to speak to the tutor. Speaking does not submit your assessment answer.</p>
           </section>
           <div id="examSetup" class="exam-setup">
-            <div class="filter-card exam-filters"><label>Grade<select id="examGrade"><option>8</option><option>9</option><option>10</option><option>11</option><option selected>12</option></select></label><label>Term<select id="examTerm"><option value="1" selected>Term 1</option><option value="2">Term 2</option><option value="3">Term 3</option><option value="4">Term 4</option></select></label><label>Assessment<select id="examType" disabled><option value="test">Control test</option><option value="exam">Examination</option></select></label><label>Session mode<select id="examSessionMode"><option value="guided">Guided practice</option><option value="strict">Strict mock exam</option></select></label><button id="loadExamTopics" class="button secondary" type="button">Load topics</button><button id="generateExam" class="button primary" type="button" disabled>Generate assessment</button></div>
+            <div class="filter-card exam-filters"><label>Grade<select id="examGrade"><option>8</option><option>9</option><option>10</option><option>11</option><option selected>12</option></select></label><label>Term<select id="examTerm"><option value="1" selected>Term 1</option><option value="2">Term 2</option><option value="3">Term 3</option><option value="4">Term 4</option></select></label><label>Assessment<select id="examType" disabled><option value="test">Control test</option><option value="exam">Examination</option></select></label><label hidden>Session mode<select id="examSessionMode"><option value="guided" selected>Guided practice</option></select></label><button id="loadExamTopics" class="button secondary" type="button">Load topics</button><button id="generateExam" class="button primary" type="button" disabled>Generate assessment</button><button id="openStrictMockExam" class="button secondary" type="button">Open Strict Mock Exam</button></div>
             <p id="examPlanNote" class="exam-plan-note" role="note">Use the scope your teacher or department gave you for the upcoming assessment. If you do not have the scope, ask your teacher before selecting topics.</p>
             <p id="examTargetNote" class="exam-target-note" aria-live="polite"></p>
             <p id="examStatus" class="status" role="status" aria-live="polite"></p>
             <section class="exam-source-section" aria-labelledby="examPaperLinksTitle">
               <h2 id="examPaperLinksTitle">Past papers by term</h2>
-              <p class="source-note">Open a paper link in your browser, download the PDF, then return here and upload the question paper. A memo is optional for Guided Practice and required for Strict Mock Exam.</p>
+              <p class="source-note">Open a paper link in your browser, download the PDF, then return here and upload the question paper for Guided Practice. To write on paper with a timer, open Strict Mock Exam; upload the memo there if it is available.</p>
               <div id="examPaperLinks" class="exam-paper-term-groups" aria-live="polite"></div>
               <div class="exam-upload-panel">
                 <div class="exam-upload-actions">
@@ -272,6 +272,31 @@
             <p id="examPaperSummary" class="paper-summary" hidden></p>
             <button id="startExamSession" class="button primary" type="button" hidden>Start assessment</button>
           </div>
+          <section id="examStrictPage" class="exam-strict-page" aria-labelledby="strictMockTitle" hidden>
+            <button id="closeStrictMockExam" class="button subtle" type="button">← Back to Test / Exam Prep</button>
+            <header class="strict-mock-heading"><p class="eyebrow">Paper-based assessment</p><h2 id="strictMockTitle">Strict Mock Exam</h2><p>Choose a paper from the links, download and print it, then upload the question paper. Have the printed paper, pen, answer paper and calculator ready. Upload the memo if it is available. Prepare everything first, then start the timer when you are ready to write.</p></header>
+            <div class="filter-card strict-mock-filters"><label>Grade<select id="strictMockGrade"><option>8</option><option>9</option><option>10</option><option>11</option><option selected>12</option></select></label><label>Term<select id="strictMockTerm"><option value="1" selected>Term 1 · March test</option><option value="2">Term 2 · June exam</option><option value="3">Term 3 · September test / trial exam</option><option value="4">Term 4 · October / November / December exam</option></select></label><label>Assessment<select id="strictMockType" disabled><option value="test">Test</option><option value="exam">Examination</option></select></label></div>
+            <p id="strictMockDurationNote" class="exam-target-note" aria-live="polite"></p>
+            <section id="strictMockLinksSection" class="exam-source-section" aria-labelledby="strictMockPaperLinksTitle"><h3 id="strictMockPaperLinksTitle">Past papers by term</h3><p class="source-note">Stanmore and DBE links open in your browser. Download the paper, then return here to upload it.</p><div id="strictMockPaperLinks" class="exam-paper-term-groups" aria-live="polite"></div></section>
+            <section id="strictMockUploads" class="exam-upload-panel strict-mock-uploads" aria-label="Strict mock exam files">
+              <h3>Prepare the paper</h3>
+              <div class="exam-upload-actions"><button id="strictMockUploadPaper" class="button secondary" type="button">Upload question paper PDF</button><button id="strictMockUploadMemo" class="button subtle" type="button">Upload memo PDF (if available)</button><input id="strictMockPaperInput" type="file" accept=".pdf,application/pdf" hidden><input id="strictMockMemoInput" type="file" accept=".pdf,application/pdf" hidden></div>
+              <p id="strictMockPaperStatus" class="status" role="status" aria-live="polite">Upload a question paper PDF to begin.</p>
+              <button id="prepareStrictMock" class="button secondary" type="button" disabled>Prepare paper</button>
+              <p id="strictMockReadyStatus" class="status" role="status" aria-live="polite"></p>
+              <button id="startStrictMockTimer" class="button primary" type="button" hidden>Start timer when ready</button>
+            </section>
+            <section id="strictMockActive" class="strict-mock-active" aria-label="Strict mock exam timer and answer script" hidden>
+              <div class="strict-mock-timer-card"><span class="eyebrow">Time remaining</span><output id="strictMockTimer" class="strict-mock-timer" aria-live="off">--:--:--</output><p id="strictMockTimerStatus" class="status" role="status" aria-live="polite">Start the timer when your paper and writing materials are ready.</p></div>
+              <h3>Upload your handwritten answer script</h3>
+              <p class="source-note">Write your answers on paper during the timed exam. When you have finished, upload clear images of every answer page (up to 12 images). Marking and feedback begin only after you submit the complete script.</p>
+              <div class="exam-upload-actions"><button id="strictMockUploadAnswers" class="button secondary" type="button">Upload answer page images</button><input id="strictMockAnswerInput" type="file" accept="image/*" multiple hidden></div>
+              <div id="strictMockAnswerFiles" class="strict-mock-answer-files" aria-live="polite"></div>
+              <p id="strictMockAnswerStatus" class="status" role="status" aria-live="polite">No answer pages uploaded.</p>
+              <button id="submitStrictMockScript" class="button primary" type="button" disabled>Submit complete script for marking</button>
+            </section>
+            <div id="strictMockResult" class="feedback-card strict-mock-result" hidden><button id="newStrictMockExam" class="button secondary" type="button">Start another Strict Mock Exam</button></div>
+          </section>
           <article id="examWorkspace" class="question-card exam-workspace" hidden>
             <div class="question-card-top"><span id="examProgress" class="eyebrow"></span><div class="question-top-actions"><button id="examFullScreen" class="button subtle" type="button" hidden>View full screen</button><button id="examCanvasButton" class="button subtle" type="button">Open canvas</button><button id="examGraphCanvasButton" class="button subtle" type="button">Draw graph</button></div></div>
             <h2 id="examQuestionTitle">Question</h2><figure id="examSourceSnapshot" class="exam-source-snapshot" hidden><img id="examSourceSnapshotImage" alt="Snapshot of the original question paper" loading="lazy"><figcaption id="examSourceSnapshotCaption">Original question paper snapshot</figcaption></figure><div id="examQuestionText" class="math-content"></div><div id="examQuestionVisuals" class="question-visuals"></div><div id="examVideoPreview" class="question-video-preview" aria-live="polite"></div>
@@ -279,7 +304,7 @@
             <div class="answer-label"><span>Your working</span><div class="math-editor-frame exam-math-editor-frame"><iframe id="examAnswer" title="Test and exam working editor" src="./math-editor.html?v=17"></iframe></div></div>
             <div class="exam-answer-tools"><button id="examKeyboardToggle" class="tool-button math-editor-keyboard-toggle" data-editor-target="exam" type="button" aria-expanded="false" aria-controls="practiceMathKeyboard" aria-label="Open maths keyboard">⌨<span>Math keyboard</span></button><button id="examUploadPhotoButton" class="tool-button" type="button" aria-label="Upload a photo of handwritten working">📷<span>Upload photo</span></button><input id="examHandwritingInput" type="file" accept="image/*" capture="environment" hidden><span id="examAnswerAttachments" class="exam-answer-attachments" aria-live="polite"></span><span id="examPhotoStatus" class="status" role="status" aria-live="polite"></span></div>
             <div id="examMathKeyboardMount" class="math-keyboard-mount"></div>
-            <div class="answer-actions"><button id="saveExamAnswer" class="button secondary" type="button">Save answer</button><button id="previousExamQuestion" class="button subtle" type="button">Previous</button><button id="nextExamQuestion" class="button subtle" type="button">Next</button><button id="submitExam" class="button primary" type="button">Submit assessment</button></div>
+            <div class="answer-actions"><button id="saveExamAnswer" class="button secondary" type="button">Save answer</button><button id="previousExamQuestion" class="button subtle" type="button">Previous</button><button id="nextExamQuestion" class="button subtle" type="button">Next</button><button id="submitExam" class="button primary" type="button" hidden>Submit assessment</button><span id="examSaveStatus" class="status" role="status" aria-live="polite">Answers save automatically.</span></div>
           </article>
           <div id="examResult" class="feedback-card" hidden></div>
         </section>
@@ -359,6 +384,18 @@
       <button id="voiceReviewMathKeyboardToggle" class="tool-button voice-math-keyboard-toggle math-editor-keyboard-toggle" data-editor-target="voiceMath" type="button" aria-expanded="false" aria-controls="practiceMathKeyboard" aria-label="Open maths keyboard for the mathematical form">⌨<span>Math keyboard</span></button>
       <div id="voiceReviewMathKeyboardMount" class="math-keyboard-mount"></div>
       <div class="voice-review-actions"><span id="voiceReviewStatus" class="status" role="status" aria-live="polite"></span><button id="voiceReviewFormatMath" class="button subtle" type="button">Format as math</button><button id="voiceReviewUseTranscript" class="button secondary" type="button">Use transcript</button><button id="voiceReviewUseMath" class="button secondary" type="button">Use math</button><button id="voiceReviewSend" class="button primary" type="button" hidden>Send to tutor</button></div>
+    </section>
+  </dialog>
+
+  <dialog id="examHandwritingReviewDialog" class="exam-handwriting-review-dialog" aria-labelledby="examHandwritingReviewTitle">
+    <div class="dialog-toolbar"><strong id="examHandwritingReviewTitle">Check handwritten transcription</strong></div>
+    <section class="exam-handwriting-review">
+      <p class="muted">The image is saved with this answer. Review the transcription, edit any mistakes, and confirm it. Nothing is marked until you submit from the last question.</p>
+      <img id="examHandwritingPreview" alt="Your handwritten answer photo">
+      <label for="examHandwritingTranscript">Recognized words and mathematics<textarea id="examHandwritingTranscript" rows="6" placeholder="No words or mathematics were recognized. You can enter them here."></textarea></label>
+      <label for="examHandwritingDrawing">Recognized graph or drawing<textarea id="examHandwritingDrawing" rows="3" placeholder="No drawing description was recognized."></textarea></label>
+      <p id="examHandwritingReviewStatus" class="status" role="status" aria-live="polite"></p>
+      <div class="exam-handwriting-review-actions"><button id="examHandwritingReviewCancel" class="button subtle" type="button">Keep photo only</button><button id="examHandwritingReviewConfirm" class="button primary" type="button">Confirm transcription</button></div>
     </section>
   </dialog>
 
@@ -463,9 +500,9 @@
       var appScript = document.createElement("script");
       if (supportsModules && supportsModernSyntax) {
         appScript.type = "module";
-        appScript.src = "./app.bundle.js?v=77";
+        appScript.src = "./app.bundle.js?v=79";
       } else {
-        appScript.src = "./legacy-app.js?v=83";
+        appScript.src = "./legacy-app.js?v=85";
       }
       appScript.onload = function () {
         loginButton.disabled = false;

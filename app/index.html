@@ -12,7 +12,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icon.svg">
-  <link rel="stylesheet" href="./styles.css?v=78">
+  <link rel="stylesheet" href="./styles.css?v=79">
   <script>
     try {
       if (/[?&](email|password)=/i.test(window.location.search) && window.history && window.history.replaceState) {
@@ -132,8 +132,8 @@
                 <div class="composer-footer"><span id="voiceStatus" class="muted" role="status"></span><button id="sendAskButton" class="button primary send-button" type="submit">Send <span aria-hidden="true">➤</span></button></div>
                 <input id="photoInput" type="file" accept="image/*" multiple hidden>
                 <input id="askCameraInput" type="file" accept="image/*" capture="environment" hidden>
-                <input id="paperInput" type="file" accept=".pdf,application/pdf" hidden>
-                <input id="memoInput" type="file" accept=".pdf,application/pdf" hidden>
+                <input id="paperInput" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+                <input id="memoInput" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
               </form>
             </div>
             <aside class="ask-help-panel">
@@ -259,14 +259,14 @@
             <p id="examStatus" class="status" role="status" aria-live="polite"></p>
             <section class="exam-source-section" aria-labelledby="examPaperLinksTitle">
               <h2 id="examPaperLinksTitle">Past papers by term</h2>
-              <p class="source-note">Open a paper link in your browser, download the PDF, then return here and upload the question paper for Guided Practice. To write on paper with a timer, open Strict Mock Exam; upload the memo there if it is available.</p>
+              <p class="source-note">Open a paper link in your browser, download the file, then return here and upload the question paper as a PDF or Word document (.doc or .docx). To write on paper with a timer, open Strict Mock Exam; upload the memo there if it is available.</p>
               <div id="examPaperLinks" class="exam-paper-term-groups" aria-live="polite"></div>
               <div class="exam-upload-panel">
                 <div class="exam-upload-actions">
-                  <button id="examUploadPaperButton" class="button secondary" type="button">Upload question paper PDF</button>
-                  <button id="examUploadMemoButton" class="button subtle" type="button">Upload memo PDF</button>
-                  <input id="examPaperInput" type="file" accept=".pdf,application/pdf" hidden>
-                  <input id="examMemoInput" type="file" accept=".pdf,application/pdf" hidden>
+                  <button id="examUploadPaperButton" class="button secondary" type="button">Upload question paper</button>
+                  <button id="examUploadMemoButton" class="button subtle" type="button">Upload memo</button>
+                  <input id="examPaperInput" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+                  <input id="examMemoInput" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
                 </div>
                 <p id="examUploadStatus" class="status" role="status" aria-live="polite">No past paper uploaded yet.</p>
                 <button id="startUploadedExam" class="button primary" type="button" disabled>Start uploaded paper</button>
@@ -284,8 +284,8 @@
             <section id="strictMockLinksSection" class="exam-source-section" aria-labelledby="strictMockPaperLinksTitle"><h3 id="strictMockPaperLinksTitle">Past papers by term</h3><p class="source-note">Stanmore and DBE links open in your browser. Download the paper, then return here to upload it.</p><div id="strictMockPaperLinks" class="exam-paper-term-groups" aria-live="polite"></div></section>
             <section id="strictMockUploads" class="exam-upload-panel strict-mock-uploads" aria-label="Strict mock exam files">
               <h3>Prepare the paper</h3>
-              <div class="exam-upload-actions"><button id="strictMockUploadPaper" class="button secondary" type="button">Upload question paper PDF</button><button id="strictMockUploadMemo" class="button subtle" type="button">Upload memo PDF (if available)</button><input id="strictMockPaperInput" type="file" accept=".pdf,application/pdf" hidden><input id="strictMockMemoInput" type="file" accept=".pdf,application/pdf" hidden></div>
-              <p id="strictMockPaperStatus" class="status" role="status" aria-live="polite">Upload a question paper PDF to begin.</p>
+              <div class="exam-upload-actions"><button id="strictMockUploadPaper" class="button secondary" type="button">Upload question paper</button><button id="strictMockUploadMemo" class="button subtle" type="button">Upload memo (if available)</button><input id="strictMockPaperInput" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden><input id="strictMockMemoInput" type="file" accept=".pdf,.doc,.docx,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden></div>
+              <p id="strictMockPaperStatus" class="status" role="status" aria-live="polite">Upload a question paper as a PDF or Word document to begin.</p>
               <button id="prepareStrictMock" class="button secondary" type="button" disabled>Prepare paper</button>
               <p id="strictMockReadyStatus" class="status" role="status" aria-live="polite"></p>
               <button id="startStrictMockTimer" class="button primary" type="button" hidden>Start timer when ready</button>
@@ -406,7 +406,7 @@
   <dialog id="paperCatalogDialog" class="paper-catalog-dialog" aria-labelledby="paperCatalogTitle">
     <div class="dialog-toolbar paper-catalog-toolbar"><div><p class="eyebrow">Past papers and memos</p><strong id="paperCatalogTitle">Paper links</strong></div><button id="paperCatalogClose" class="button subtle" type="button">Close</button></div>
     <section class="paper-catalog-content">
-      <p class="muted">Choose a filename to search the web for a downloadable copy. SharperTime does not host these papers. After downloading, upload the PDF here and choose the question you want help with.</p>
+      <p class="muted">Choose a filename to search the web for a downloadable copy. SharperTime does not host these papers. After downloading, upload the PDF or Word document (.doc or .docx) here and choose the question you want help with.</p>
       <label class="paper-catalog-search-label" for="paperCatalogSearch">Find a paper or memo</label>
       <div class="paper-catalog-controls">
         <input id="paperCatalogSearch" type="search" autocomplete="off" placeholder="Search filenames">
@@ -504,9 +504,9 @@
       var appScript = document.createElement("script");
       if (supportsModules && supportsModernSyntax) {
         appScript.type = "module";
-        appScript.src = "./app.bundle.js?v=82";
+        appScript.src = "./app.bundle.js?v=83";
       } else {
-        appScript.src = "./legacy-app.js?v=88";
+        appScript.src = "./legacy-app.js?v=89";
       }
       appScript.onload = function () {
         loginButton.disabled = false;

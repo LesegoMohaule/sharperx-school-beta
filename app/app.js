@@ -20,6 +20,11 @@ function isImageUploadFile(file) {
   return String(file?.type || "").toLowerCase().startsWith("image/")
     || /\.(avif|bmp|gif|heic|heif|jpe?g|png|tiff?|webp)$/i.test(String(file?.name || ""));
 }
+function isSupportedDocumentFile(file) {
+  const extension = String(file?.name || "").toLowerCase().match(/\.[^.]+$/)?.[0] || "";
+  return [".pdf", ".doc", ".docx"].includes(extension)
+    || ["application/pdf", "application/msword", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"].includes(String(file?.type || "").toLowerCase());
+}
 function selectImageBatch(files, attachedCount) {
   const candidates = [...(files || [])];
   const images = candidates.filter(isImageUploadFile);
@@ -952,12 +957,14 @@ window.addEventListener("pagehide", (event) => {
 
 async function uploadPaper(file, kind) {
   if (!file) return;
+  const hasExtension = /\.[^.]+$/.test(file.name);
+  const isPdf = /\.pdf$/i.test(file.name) || (!hasExtension && String(file.type || "").toLowerCase() === "application/pdf");
   const status = $("#paperStatus");
   setStatus(status, `Uploading ${file.name}…`);
   try {
     const inspectionId = await ensureInspection();
     const form = new FormData();
-    form.set("document_type", kind === "memo" ? "ask_marking_memo" : "ask_question_paper");
+    form.set("document_type", kind === "memo" ? "ask_marking_memo" : isPdf ? "ask_question_paper" : "general");
     form.set("document", file, file.name);
     const result = await uploadForm(`/api/inspections/${encodeURIComponent(inspectionId)}/upload-document`, form);
     const documentId = result.id || result.document_id;
@@ -969,6 +976,9 @@ async function uploadPaper(file, kind) {
       if (previousMemo && previousMemo !== documentId) void deleteSessionPaperDocument(previousMemo, inspectionId).catch(() => {});
       setStatus(status, `Memo uploaded: ${file.name}. It will be used when marking a selected paper question.`, "success");
       appendMessage(`Marking memo uploaded: ${file.name}.`, { kind: "Uploaded memo" });
+    } else if (!isPdf) {
+      setStatus(status, `Word document attached: ${file.name}. Type your question in the editor and its readable text will be included.`, "success");
+      appendMessage(`Word document attached: ${file.name}. Ask about its contents in the question editor.`, { kind: "Uploaded document" });
     } else {
       const previousPaper = state.paperDocumentId;
       state.paperDocumentId = documentId;
@@ -990,8 +1000,8 @@ async function uploadPaper(file, kind) {
   }
 }
 
-$("#paperInput").addEventListener("change", (event) => uploadPaper(event.currentTarget.files?.[0], "paper"));
-$("#memoInput").addEventListener("change", (event) => uploadPaper(event.currentTarget.files?.[0], "memo"));
+$("#paperInput").addEventListener("change", (event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; void uploadPaper(file, "paper"); });
+$("#memoInput").addEventListener("change", (event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; void uploadPaper(file, "memo"); });
 
 $("#showPaperQuestionButton").addEventListener("click", async () => {
   realtimeTutor.stopIfContext("ask");
@@ -3438,7 +3448,7 @@ function renderSourceLinks() {
   host.replaceChildren();
   const intro = document.createElement("p");
   intro.className = "source-note";
-  intro.textContent = "Choose a paper filename to search for a downloadable copy. Download it, then upload your PDF here.";
+  intro.textContent = "Choose a paper filename to search for a downloadable copy. Upload the PDF or Word document (.doc or .docx) here.";
   const links = document.createElement("div");
   links.className = "source-link-list";
   function addLink(label, source) {
@@ -3559,7 +3569,7 @@ async function renderExamPaperLinks(hostId = "examPaperLinks", selectedGrade = $
     if (!entries.length) {
       const empty = document.createElement("p");
       empty.className = "status";
-      empty.textContent = `No past-paper links are listed for Grade ${grade}. You can still upload a PDF from your device.`;
+      empty.textContent = `No past-paper links are listed for Grade ${grade}. You can still upload a PDF or Word document from your device.`;
       host.append(empty);
     }
   } catch (error) {
@@ -3575,18 +3585,18 @@ async function renderExamPaperLinks(hostId = "examPaperLinks", selectedGrade = $
 function updateUploadedExamStatus() {
   const status = $("#examUploadStatus");
   if (!state.examPaperDocumentId) {
-    setStatus(status, "No past paper uploaded yet. Select a downloaded PDF to continue.");
+    setStatus(status, "No past paper uploaded yet. Select a downloaded PDF or Word file to continue.");
   } else {
     const memo = state.examMemoDocumentId ? ` Memo: ${state.examMemoFileName || "uploaded"}.` : " No memo uploaded; Guided Practice will use question-only support.";
-    setStatus(status, `Question paper ready: ${state.examPaperFileName || "uploaded PDF"}.${memo}`, "success");
+    setStatus(status, `Question paper ready: ${state.examPaperFileName || "uploaded file"}.${memo}`, "success");
   }
   $("#startUploadedExam").disabled = !state.examPaperDocumentId;
 }
 
 async function uploadExamSource(file, kind) {
   if (!file) return;
-  if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") {
-    setStatus($("#examUploadStatus"), "Choose a PDF file downloaded from the paper link.", "error");
+  if (!isSupportedDocumentFile(file)) {
+    setStatus($("#examUploadStatus"), "Choose a PDF, .doc or .docx file from your device.", "error");
     return;
   }
   const button = kind === "memo" ? $("#examUploadMemoButton") : $("#examUploadPaperButton");
@@ -3599,7 +3609,7 @@ async function uploadExamSource(file, kind) {
     form.set("document", file, file.name);
     const result = await uploadForm(`/api/inspections/${encodeURIComponent(inspectionId)}/upload-document`, form);
     const documentId = result.id || result.document_id;
-    if (!documentId) throw new Error("The PDF upload did not return a document ID. Please try again.");
+    if (!documentId) throw new Error("The document upload did not return a document ID. Please try again.");
     if (kind === "memo") {
       const previousId = state.examMemoDocumentId;
       state.examMemoDocumentId = documentId;
@@ -4069,8 +4079,8 @@ let strictMockUploading = false;
 let strictMockPreparing = false;
 
 function updateStrictMockSourceStatus() {
-  const paper = state.strictMockPaperDocumentId ? state.strictMockPaperFileName || "Question paper PDF uploaded" : "No question paper uploaded yet.";
-  const memo = state.strictMockMemoDocumentId ? `Memo: ${state.strictMockMemoFileName || "PDF uploaded"}.` : "No memo uploaded; the app will derive and verify a marking guide from the paper where possible.";
+  const paper = state.strictMockPaperDocumentId ? state.strictMockPaperFileName || "Question paper uploaded" : "No question paper uploaded yet.";
+  const memo = state.strictMockMemoDocumentId ? `Memo: ${state.strictMockMemoFileName || "file uploaded"}.` : "No memo uploaded; the app will derive and verify a marking guide from the paper where possible.";
   setStatus($("#strictMockPaperStatus"), `${paper} ${memo}`, state.strictMockPaperDocumentId ? "success" : "");
   $("#prepareStrictMock").disabled = !state.strictMockPaperDocumentId || strictMockUploading || strictMockPreparing || Boolean(state.strictMockSession);
   $("#strictMockUploadPaper").disabled = strictMockUploading || strictMockPreparing || Boolean(state.strictMockSession);
@@ -4081,8 +4091,8 @@ function updateStrictMockSourceStatus() {
 
 async function uploadStrictMockSource(file, kind) {
   if (!file) return;
-  if (!/\.pdf$/i.test(file.name) && file.type !== "application/pdf") {
-    setStatus($("#strictMockPaperStatus"), "Choose a PDF file downloaded from a paper link.", "error");
+  if (!isSupportedDocumentFile(file)) {
+    setStatus($("#strictMockPaperStatus"), "Choose a PDF, .doc or .docx file from your device.", "error");
     return;
   }
   try {
@@ -4096,7 +4106,7 @@ async function uploadStrictMockSource(file, kind) {
     form.set("document", file, file.name);
     const result = await uploadForm(`/api/inspections/${encodeURIComponent(inspectionId)}/upload-document`, form);
     const documentId = String(result.id || result.document_id || "");
-    if (!documentId) throw new Error("The PDF upload did not return a document ID.");
+    if (!documentId) throw new Error("The document upload did not return a document ID.");
     if (kind === "memo") {
       const old = state.strictMockMemoDocumentId;
       state.strictMockMemoDocumentId = documentId;

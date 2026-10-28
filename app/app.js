@@ -3845,9 +3845,7 @@ function openStrictMockPage() {
   $("#examSetup").hidden = true;
   $("#examWorkspace").hidden = true;
   $("#examResult").hidden = true;
-  $("#examTutorTools").hidden = true;
-  realtimeTutor.stopIfContext("exam");
-  $("#examLiveTutorPanel").hidden = true;
+  setExamTutorAvailability(false);
   $("#examStrictPage").hidden = false;
   const grade = $("#examGrade").value || state.grade;
   const term = $("#examTerm").value || "1";
@@ -3874,7 +3872,23 @@ function closeStrictMockPage() {
   $("#examSetup").hidden = false;
   $("#examWorkspace").hidden = true;
   $("#examResult").hidden = true;
-  $("#examTutorTools").hidden = false;
+  setExamTutorAvailability(true);
+}
+
+function setExamTutorAvailability(available) {
+  const locked = !available;
+  const tools = $("#examTutorTools");
+  const panel = $("#examLiveTutorPanel");
+  document.documentElement.classList.toggle("strict-mock-exam-active", locked);
+  tools.hidden = locked;
+  tools.inert = locked;
+  tools.setAttribute("aria-hidden", String(locked));
+  panel.inert = locked;
+  if (locked) {
+    panel.hidden = true;
+    panel.setAttribute("aria-hidden", "true");
+    realtimeTutor.stopIfContext("exam");
+  }
 }
 
 async function ensureStrictMockInspection() {
@@ -4275,11 +4289,7 @@ document.addEventListener("visibilitychange", () => { if (!document.hidden) tick
 function applyExamSessionToolRules(session) {
   const strict = String(session?.mode || "").toLowerCase() === "strict";
   const grade = Number(session?.grade || state.exam?.grade || $("#examGrade").value || 0);
-  $("#examTutorTools").hidden = strict;
-  if (strict) {
-    realtimeTutor.stopIfContext("exam");
-    $("#examLiveTutorPanel").hidden = true;
-  }
+  setExamTutorAvailability(!strict);
   $("#examGuidanceButton").hidden = strict;
   $("#examGuidanceButton").disabled = strict;
   $("#examFormulaButton").hidden = strict && grade !== 12;

@@ -889,6 +889,7 @@ export function installRealtimeTutor({ ensureInspection, getContext, transcribeA
   }
 
   async function start(contextType) {
+    if (contextType === "exam" && document.documentElement.classList.contains("strict-mock-exam-active")) return;
     if (starting) return;
     if (activeContext) {
       if (activeContext === contextType) await stop();

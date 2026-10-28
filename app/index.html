@@ -12,7 +12,7 @@
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icon.svg">
-  <link rel="stylesheet" href="./styles.css?v=75">
+  <link rel="stylesheet" href="./styles.css?v=76">
   <script>
     try {
       if (/[?&](email|password)=/i.test(window.location.search) && window.history && window.history.replaceState) {
@@ -500,9 +500,9 @@
       var appScript = document.createElement("script");
       if (supportsModules && supportsModernSyntax) {
         appScript.type = "module";
-        appScript.src = "./app.bundle.js?v=79";
+        appScript.src = "./app.bundle.js?v=80";
       } else {
-        appScript.src = "./legacy-app.js?v=85";
+        appScript.src = "./legacy-app.js?v=86";
       }
       appScript.onload = function () {
         loginButton.disabled = false;

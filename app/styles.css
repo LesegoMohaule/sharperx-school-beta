@@ -393,6 +393,8 @@ input:focus, select:focus, textarea:focus { border-color: var(--brand-cyan); box
 .exam-answer-attachment { display: inline-flex; align-items: center; gap: 5px; padding: 3px 6px; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
 .exam-answer-attachments button { min-height: 30px; padding: 4px 9px; }
 #examTutorTools[hidden], #examLiveTutorPanel[hidden] { display: none !important; }
+html.strict-mock-exam-active #examTutorTools,
+html.strict-mock-exam-active #examLiveTutorPanel { display: none !important; }
 #examGuidanceButton[hidden], #examFormulaButton[hidden], #examFormulaText[hidden], #examVideoPreview[hidden] { display: none !important; }
 .paper-summary { margin: 12px 0; padding: 12px 14px; border-radius: 11px; color: #244c72; background: #eaf5ff; line-height: 1.5; }
 .exam-setup > #startExamSession { margin: 2px 0 14px; }

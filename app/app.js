@@ -1,7 +1,8 @@
 import { API_BASE_URL, apiRequest, getAccessToken, getClientDeviceLabel, getJson, postForm, postJson, postPairingJson, pairingWebSocketUrl, isLocalIntranetPage, setAccessToken, uploadForm } from "./api.js?v=25";
 import { installRealtimeTutor } from "./realtime-tutor.js";
 import { buildLiveTutorPayload, selectLiveSpeechTranscript } from "./live-tutor-payload.mjs";
-import { ensureMathJax, renderTextbookMath as renderMath, splitTextbookMath } from "./math-display.js";
+import { ensureMathJax, renderTextbookMath as renderMath, splitTextbookMath, textbookMathFallbackText } from "./math-display.js";
+import { confirmedCanvasGraphAsymptotes, includeCanvasGraphAsymptotes, renderCanvasGraphAsymptoteSvg } from "./canvas-graph-asymptotes.mjs";
 import qrcode from "./vendor/qrcode-generator.js?v=17";
 
 const $ = (selector, root = document) => root.querySelector(selector);
@@ -11,6 +12,14 @@ function sanitizeLearnerFacingText(value) {
     .replace(/gpt\s*[- ]?\s*6\s*[- ]?\s*luna/gi, "tutor")
     .replace(/\bluna\b/gi, "tutor")
     .replace(/\bunimernet\b/gi, "handwriting recognition")
+    .split(/\r?\n/)
+    .map((line) => {
+      if (/^\s*(?:memo\s+used\b|memo\s+source\s*:|source\s+note\s*:|no exact matching memo\b|an uploaded memo reference\b)/i.test(line)) return "";
+      return line.replace(/\s*(?:source\s+note|memo\s+source)\s*:.*/i, "").trimEnd();
+    })
+    .filter(Boolean)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 const APP_VIEWS = new Set(["ask", "practice", "exam", "lessons", "reports"]);
@@ -29,6 +38,17 @@ const SUPPORTED_OFFICE_MIME_TYPES = new Set([
 ]);
 const ASK_PHOTO_STORAGE_KEY = "sharperx_web_ask_photos_v1";
 const ASK_DOCUMENT_STORAGE_KEY = "sharperx_web_ask_documents_v1";
+const ASK_CONVERSATION_STORAGE_KEY = "sharperx_web_ask_conversation_v1";
+const UI_STATE_STORAGE_KEY = "sharperx_web_ui_state_v1";
+const WORKSPACE_SCROLL_STORAGE_KEY = "sharperx_web_workspace_scroll_v1";
+const PAPER_SNAPSHOT_RECORD_KEY = "current-paper-snapshot";
+const CANVAS_DRAFT_RECORD_KEY = "current-canvas-draft";
+const CANVAS_LAYOUT_MAX_WIDTH = 32768;
+const CANVAS_LAYOUT_MAX_PARTITION_HEIGHT = 8192;
+const CANVAS_LAYOUT_MAX_TOTAL_HEIGHT = 65536;
+const CANVAS_LAYOUT_MAX_PARTITION_COUNT = 256;
+const CANVAS_LAYOUT_MAX_FUNCTION_COUNT = 128;
+const CANVAS_PARTITION_HEADER_HEIGHT = 44;
 function isImageUploadFile(file) {
   return ["image/jpeg", "image/png", "image/webp"].includes(String(file?.type || "").toLowerCase())
     || /\.(jpe?g|png|webp)$/i.test(String(file?.name || ""));
@@ -136,6 +156,9 @@ const PRACTICE_SESSION_KEYS = {
   inspectionPrefix: "sharperx_web_practice_inspection_",
   photosPrefix: "sharperx_web_practice_photos_",
   documentsPrefix: "sharperx_web_practice_documents_",
+  referencePhotos: "sharperx_web_practice_reference_photos",
+  referenceDocuments: "sharperx_web_practice_reference_documents",
+  referenceInspection: "sharperx_web_practice_reference_inspection",
 };
 
 function practiceQuestionStorageKey(prefix, questionId = state.currentPracticeQuestion?.question_id || state.currentPracticeQuestion?.bank_question_id || state.currentPracticeQuestion?.id || "") {
@@ -234,6 +257,9 @@ const state = {
   practiceAnswerPhotoPreviews: [],
   practiceAnswerDocumentIds: [],
   practiceAnswerDocumentNames: [],
+  practiceReferencePhotoIds: [],
+  practiceReferenceDocumentIds: [],
+  practiceReferenceDocumentNames: [],
   practiceEditorReady: false,
   practiceEditorState: null,
   practiceKeyboardMode: "Basic",
@@ -241,7 +267,7 @@ const state = {
   recorder: null,
   voiceRecorderContext: "",
   voiceReviewContext: "",
-  canvas: { mode: "write", strokes: [], scale: 1, offsetX: 0, offsetY: 0, pan: false, zoom: false, eraser: false, revision: 0, transcribedPhoto: null, photoPromise: null, active: null, pointers: new Map(), pinch: null, size: { width: 0, height: 0 }, readingConfirmed: false, readingApplied: false, confirmedReading: null, readingAlternatives: [], graphWorkflow: null },
+  canvas: { mode: "write", strokes: [], answerLabel: "", answerMarkers: [], selectedPartitions: [], scale: 1, offsetX: 0, offsetY: 0, pan: false, zoom: false, eraser: false, revision: 0, transcribedPhoto: null, photoPromise: null, active: null, pointers: new Map(), pinch: null, size: { width: 0, height: 0 }, readingConfirmed: false, readingApplied: false, confirmedReading: null, readingAlternatives: [], graphWorkflow: null },
   imageView: { scale: 1, x: 0, y: 0, pointers: new Map(), pinch: null, drag: null },
   toastTimer: 0,
   welcomeAudioTimer: 0,
@@ -429,12 +455,30 @@ function currentPageTutorContext(viewName = state.view) {
   const learnerMessages = $$(".message.user-message", $("#chatMessages")).length;
   context.topic = selected ? "Question paper" : "";
   context.current_question = selected?.text || askText.slice(0, 900);
-  context.question_number = selected ? String(selected.number || "") : "";
-  context.page_status = selected ? `Question ${selected.number || "from the selected paper"} is open in Ask.` : "The Ask page is open for a maths question.";
+  context.question_number = selected ? String(selected.contextNumber || selected.number || "") : "";
+  context.selected_subquestion = selected ? String(selected.number || "") : "";
+  context.page_status = selected ? `Full Question ${selected.contextNumber || selected.number || "from the selected paper"} is open in Ask; ${selected.number ? `the learner selected ${selected.number}.` : ""}` : "The Ask page is open for a maths question.";
   context.page_activity = `${learnerMessages} learner message${learnerMessages === 1 ? "" : "s"} in this Ask conversation${askText ? "; an unsent question is in the editor" : ""}.`;
   context.page_progress = askText ? "A question is drafted and ready to send." : learnerMessages ? "Continue the current Ask conversation." : "Ready for a maths question.";
   context.page_visible_support = "";
   return context;
+}
+
+function currentMathSpeechContext(viewName = state.view) {
+  const page = currentPageTutorContext(viewName);
+  const question = viewName === "practice" ? state.currentPracticeQuestion
+    : viewName === "exam" ? state.examCurrentQuestion
+      : viewName === "ask" ? state.selectedPaperQuestion : null;
+  const questionText = page.current_question
+    || question?.question_text_latex
+    || question?.question_text
+    || question?.text
+    || "";
+  return {
+    grade: String(page.grade || state.grade || "").slice(0, 24),
+    topic: String(page.topic || page.lesson_topic || "").slice(0, 120),
+    question_text: String(questionText).slice(0, 1200),
+  };
 }
 
 function tutorGreetingForPage(contextType = state.view, returning = true, pageContext = null) {
@@ -482,8 +526,9 @@ function showWorkspace() {
   ["#globalGrade", "#practiceGrade", "#examGrade", "#lessonGrade"].forEach((selector) => {
     $(selector).value = String(state.grade);
   });
-  restorePaperSession();
-  registerServiceWorker();
+  restoreUiState();
+  restoreAskConversation();
+  void restorePaperSession().then(() => restoreCanvasDraft());
   renderSourceLinks();
   void renderExamPaperLinks();
   updateUploadedExamStatus();
@@ -824,6 +869,8 @@ $("#logoutButton").addEventListener("click", async () => {
 function activateView(viewName) {
   if (!APP_VIEWS.has(viewName)) return;
   const previousView = state.view;
+  const visibleView = $(".view[data-view-panel]:not([hidden])")?.dataset.viewPanel;
+  if (visibleView === previousView) persistWorkspaceScroll();
   if (previousView !== viewName) realtimeTutor.stopSpeaking();
   if (realtimeTutor.activeContext && realtimeTutor.activeContext !== viewName) void realtimeTutor.stop();
   state.view = viewName;
@@ -834,6 +881,7 @@ function activateView(viewName) {
     panel.hidden = !active;
     panel.classList.toggle("is-visible", active);
   });
+  restoreWorkspaceScroll(viewName);
   highlightPageVoiceButton(viewName);
   refreshTutorWelcomeForPage();
   if (viewName === "practice" && !state.practiceTopics.length) {
@@ -842,7 +890,6 @@ function activateView(viewName) {
   }
   if (viewName === "exam") {
     void renderExamPaperLinks();
-    clearExamTopicSelections();
     if (!state.examSessionId && !state.examTopics.length) loadExamTopics().catch((error) => setStatus($("#examStatus"), error.message, "error"));
   }
   if (viewName === "lessons") loadLessons().catch((error) => setStatus($("#lessonStatus"), error.message, "error"));
@@ -865,27 +912,33 @@ $("#globalGrade").addEventListener("change", (event) => {
   renderExamPaperLinks();
 });
 
-function appendMessage(text, { mine = false, kind = "", imageUrl = "", actions = [], structuredText = "" } = {}) {
+function appendMessage(text, { mine = false, kind = "", imageUrl = "", actions = [], structuredText = "", solutionVisuals = [] } = {}) {
   const article = document.createElement("article");
   article.className = `message ${mine ? "user-message" : "assistant-message"}`;
   const messageText = mine ? String(text || "") : sanitizeLearnerFacingText(text);
   const displayKind = mine ? String(kind || "") : sanitizeLearnerFacingText(kind);
+  const zoomContent = document.createElement("div");
+  zoomContent.className = "message-zoom-content";
   if (displayKind) {
     const label = document.createElement("span");
     label.className = "message-kind";
     label.textContent = displayKind;
-    article.append(label);
+    zoomContent.append(label);
   }
   const body = document.createElement("p");
   renderMath(body, structuredText && !mine ? sanitizeLearnerFacingText(structuredText) : messageText);
-  article.append(body);
+  zoomContent.append(body);
+  if (!mine && Array.isArray(solutionVisuals) && solutionVisuals.length) {
+    appendTutorVisuals(zoomContent, solutionVisuals, messageText);
+  }
   if (imageUrl) {
     const image = document.createElement("img");
     image.className = "message-image";
     image.src = imageUrl;
     image.alt = "Uploaded question or working";
-    article.append(image);
+    zoomContent.append(image);
   }
+  article.append(zoomContent);
   if (actions.length) {
     const actionRow = document.createElement("div");
     actionRow.className = "message-actions";
@@ -897,12 +950,229 @@ function appendMessage(text, { mine = false, kind = "", imageUrl = "", actions =
       button.addEventListener("click", action.onClick);
       actionRow.append(button);
     }
-    article.append(actionRow);
+    zoomContent.append(actionRow);
   }
   $("#chatMessages").append(article);
   $("#chatMessages").scrollTop = $("#chatMessages").scrollHeight;
+  persistAskConversation();
   return article;
 }
+
+function persistAskConversation() {
+  const conversation = $$(".message", $("#chatMessages"))
+    .filter((message) => !message.classList.contains("welcome-message"))
+    .slice(-80).map((message) => ({
+    mine: message.classList.contains("user-message"),
+    kind: $(".message-kind", message)?.textContent || "",
+    text: $("p", message)?.textContent || "",
+    solutionVisuals: (() => {
+      try { return JSON.parse($(".ask-solution-visuals", message)?.dataset.visuals || "[]"); }
+      catch { return []; }
+    })(),
+  }));
+  try { sessionStorage.setItem(ASK_CONVERSATION_STORAGE_KEY, JSON.stringify(conversation)); }
+  catch { /* The visible conversation remains available in the current page. */ }
+}
+
+function registerMessagePinchZoom() {
+  const host = $("#chatMessages");
+  const gestures = new WeakMap();
+  const pointDistance = (first, second) => Math.hypot(first.clientX - second.clientX, first.clientY - second.clientY);
+  const resetZoom = (message) => {
+    const content = $(".message-zoom-content", message);
+    if (!content) return;
+    content.style.transform = "";
+    content.style.transformOrigin = "";
+    message.dataset.zoomScale = "1";
+    message.dataset.zoomX = "0";
+    message.dataset.zoomY = "0";
+    message.dataset.zoomed = "false";
+  };
+
+  host.addEventListener("touchstart", (event) => {
+    const message = event.target.closest(".message");
+    if (!message || event.target.closest("button, a, input, select, textarea")) return;
+    if (event.touches.length !== 2) return;
+    const content = $(".message-zoom-content", message);
+    if (!content) return;
+    const rect = content.getBoundingClientRect();
+    const first = event.touches[0];
+    const second = event.touches[1];
+    const midpointX = (first.clientX + second.clientX) / 2;
+    const midpointY = (first.clientY + second.clientY) / 2;
+    const scale = Number(message.dataset.zoomScale) || 1;
+    const translateX = Number(message.dataset.zoomX) || 0;
+    const translateY = Number(message.dataset.zoomY) || 0;
+    const baseLeft = rect.left - translateX;
+    const baseTop = rect.top - translateY;
+    gestures.set(message, {
+      distance: Math.max(1, pointDistance(first, second)),
+      scale,
+      baseLeft,
+      baseTop,
+      contentX: (midpointX - baseLeft - translateX) / scale,
+      contentY: (midpointY - baseTop - translateY) / scale,
+    });
+    event.preventDefault();
+  }, { passive: false });
+
+  host.addEventListener("touchmove", (event) => {
+    if (event.touches.length !== 2) return;
+    const message = event.target.closest(".message");
+    const gesture = message && gestures.get(message);
+    const content = message && $(".message-zoom-content", message);
+    if (!gesture || !content) return;
+    event.preventDefault();
+    const scale = Math.min(3, Math.max(1, gesture.scale * pointDistance(event.touches[0], event.touches[1]) / gesture.distance));
+    if (scale <= 1.02) {
+      resetZoom(message);
+      return;
+    }
+    const midpointX = (event.touches[0].clientX + event.touches[1].clientX) / 2;
+    const midpointY = (event.touches[0].clientY + event.touches[1].clientY) / 2;
+    const translateX = midpointX - gesture.baseLeft - gesture.contentX * scale;
+    const translateY = midpointY - gesture.baseTop - gesture.contentY * scale;
+    content.style.transformOrigin = "0 0";
+    content.style.transform = `translate(${translateX}px, ${translateY}px) scale(${scale})`;
+    message.dataset.zoomScale = String(scale);
+    message.dataset.zoomX = String(translateX);
+    message.dataset.zoomY = String(translateY);
+    message.dataset.zoomed = scale > 1.02 ? "true" : "false";
+  }, { passive: false });
+
+  const finishGesture = (event) => {
+    const message = event.target.closest(".message");
+    if (message) gestures.delete(message);
+  };
+  host.addEventListener("touchend", finishGesture);
+  host.addEventListener("touchcancel", finishGesture);
+  host.addEventListener("dblclick", (event) => {
+    const message = event.target.closest(".message[data-zoomed='true']");
+    if (message) resetZoom(message);
+  });
+}
+
+registerMessagePinchZoom();
+
+function parentPaperQuestionNumber(value) {
+  return String(value || "").trim().match(/^(?:question|q)?\s*(\d{1,2})/i)?.[1] || String(value || "").trim();
+}
+
+function restoreAskConversation() {
+  const host = $("#chatMessages");
+  if (host.dataset.restored === "true") return;
+  host.dataset.restored = "true";
+  let conversation = [];
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(ASK_CONVERSATION_STORAGE_KEY) || "[]");
+    if (Array.isArray(saved)) conversation = saved.slice(-80);
+  } catch { /* Ignore a damaged per-tab conversation snapshot. */ }
+  if (!conversation.length) return;
+  host.replaceChildren();
+  for (const item of conversation) {
+    if (!item || typeof item.text !== "string") continue;
+    const article = document.createElement("article");
+    article.className = `message ${item.mine ? "user-message" : "assistant-message"}`;
+    const zoomContent = document.createElement("div");
+    zoomContent.className = "message-zoom-content";
+    if (item.kind) {
+      const label = document.createElement("span");
+      label.className = "message-kind";
+      label.textContent = String(item.kind);
+      zoomContent.append(label);
+    }
+    const body = document.createElement("p");
+    renderMath(body, item.text);
+    zoomContent.append(body);
+    if (Array.isArray(item.solutionVisuals) && item.solutionVisuals.length) {
+      appendTutorVisuals(zoomContent, item.solutionVisuals, item.text);
+    }
+    article.append(zoomContent);
+    host.append(article);
+  }
+  host.scrollTop = host.scrollHeight;
+}
+
+function appendTutorVisuals(host, visuals, questionText = "") {
+  const available = (Array.isArray(visuals) ? visuals : []).slice(0, 6);
+  if (!available.length) return null;
+  const section = document.createElement("section");
+  section.className = "ask-solution-visuals";
+  section.dataset.visuals = JSON.stringify(available);
+  const heading = document.createElement("h4");
+  heading.textContent = "Worked solution graph or diagram";
+  const images = document.createElement("div");
+  images.className = "question-visuals answer-visuals";
+  renderQuestionVisuals(images, available, heading.textContent, questionText);
+  section.append(heading, images);
+  host.append(section);
+  return section;
+}
+
+function persistUiState() {
+  const fields = {};
+  $$("#workspace input[id], #workspace textarea[id], #workspace select[id]").forEach((field) => {
+    if (field.type === "file" || field.type === "password" || field.disabled) return;
+    if (["globalGrade", "practiceGrade", "examGrade", "lessonGrade"].includes(field.id)) return;
+    fields[field.id] = field.type === "checkbox" || field.type === "radio" ? { checked: field.checked } : { value: field.value };
+  });
+  try { sessionStorage.setItem(UI_STATE_STORAGE_KEY, JSON.stringify(fields)); }
+  catch { /* The active page remains usable when storage is full or disabled. */ }
+}
+
+function restoreUiState() {
+  let fields = {};
+  try { fields = JSON.parse(sessionStorage.getItem(UI_STATE_STORAGE_KEY) || "{}"); }
+  catch { return; }
+  if (!fields || typeof fields !== "object") return;
+  for (const [id, saved] of Object.entries(fields)) {
+    const field = document.getElementById(id);
+    if (!field || field.type === "file" || field.type === "password") continue;
+    if (Object.hasOwn(saved || {}, "checked")) field.checked = Boolean(saved.checked);
+    else if (typeof saved?.value === "string") field.value = saved.value;
+  }
+}
+
+let workspaceScrollRestorePending = false;
+let workspaceScrollSaveTimer = 0;
+
+function readWorkspaceScrollPositions() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(WORKSPACE_SCROLL_STORAGE_KEY) || "{}");
+    return saved && typeof saved === "object" ? saved : {};
+  } catch { return {}; }
+}
+
+function persistWorkspaceScroll() {
+  const mainPanel = $("#mainPanel");
+  if (!mainPanel || !state.view) return;
+  const positions = readWorkspaceScrollPositions();
+  positions[state.view] = Math.max(0, Number(mainPanel.scrollTop) || 0);
+  try { sessionStorage.setItem(WORKSPACE_SCROLL_STORAGE_KEY, JSON.stringify(positions)); }
+  catch { /* Scroll restoration is optional when session storage is full. */ }
+}
+
+function restoreWorkspaceScroll(viewName = state.view) {
+  const position = Number(readWorkspaceScrollPositions()[viewName]);
+  workspaceScrollRestorePending = true;
+  requestAnimationFrame(() => {
+    $("#mainPanel").scrollTop = Number.isFinite(position) ? Math.max(0, position) : 0;
+    requestAnimationFrame(() => { workspaceScrollRestorePending = false; });
+  });
+}
+
+$("#mainPanel").addEventListener("scroll", () => {
+  if (workspaceScrollRestorePending) return;
+  clearTimeout(workspaceScrollSaveTimer);
+  workspaceScrollSaveTimer = window.setTimeout(persistWorkspaceScroll, 120);
+}, { passive: true });
+
+document.addEventListener("input", (event) => {
+  if (event.target.matches("#workspace input[id], #workspace textarea[id], #workspace select[id]")) persistUiState();
+}, true);
+document.addEventListener("change", (event) => {
+  if (event.target.matches("#workspace input[id], #workspace textarea[id], #workspace select[id]")) persistUiState();
+}, true);
 
 function askConversationHistory(limit = 12) {
   return $$(".message", $("#chatMessages")).slice(-limit).map((message) => ({
@@ -980,14 +1250,24 @@ function updateAskPhotoUploadControls() {
   $("[data-file-trigger=askCameraInput]").disabled = disabled;
 }
 
-function restorePaperSession() {
+async function restorePaperSession() {
   const hasPaper = Boolean(state.paperDocumentId && state.inspectionId);
   $("#paperTools").hidden = !hasPaper;
-  if (hasPaper) {
-    $("#paperFileName").textContent = state.paperFileName || "Question paper uploaded in this session";
-    $("#paperStatus").textContent = "Choose another question number to use the same uploaded paper.";
-    $("#paperQuestionNumber").value = "";
-  }
+  if (!hasPaper) return;
+  $("#paperFileName").textContent = state.paperFileName || "Question paper uploaded in this session";
+  $("#paperStatus").textContent = "Choose another question number to use the same uploaded paper.";
+  try {
+    const saved = await workspaceRecord(PAPER_SNAPSHOT_RECORD_KEY);
+    if (!saved || saved.paper_document_id !== state.paperDocumentId || !saved.image || !saved.question) return;
+    state.selectedPaperQuestion = saved.question;
+    state.paperPageImage = saved.image;
+    $("#paperQuestionNumber").value = saved.entered_question || saved.question.number || "";
+    $("#paperSnapshotTitle").textContent = `Question ${saved.question.number}`;
+    $("#paperSnapshotImage").src = saved.image;
+    $("#paperQuestionText").hidden = true;
+    $("#paperSnapshotCard").hidden = false;
+    setStatus($("#paperStatus"), "Your selected question and full source page have been restored.", "success");
+  } catch { /* Keep the uploaded paper available if local page caching is unavailable. */ }
 }
 
 function clearPaperSessionLocal() {
@@ -999,6 +1279,9 @@ function clearPaperSessionLocal() {
   sessionStorage.removeItem("sharperx_web_paper_id");
   sessionStorage.removeItem("sharperx_web_memo_id");
   sessionStorage.removeItem("sharperx_web_paper_name");
+  void deleteWorkspaceRecord(PAPER_SNAPSHOT_RECORD_KEY).catch(() => {});
+  $("#paperSnapshotCard").hidden = true;
+  $("#paperSnapshotImage").removeAttribute("src");
   $("#paperTools").hidden = true;
 }
 
@@ -1026,18 +1309,12 @@ async function discardSessionPaperUploads({ keepalive = false } = {}) {
   clearPaperSessionLocal();
 }
 
-window.addEventListener("pagehide", (event) => {
-  if (event.persisted) return;
-  const inspectionId = state.inspectionId || sessionStorage.getItem("sharperx_web_inspection_id") || "";
-  const documentIds = [...new Set([
-    state.paperDocumentId || sessionStorage.getItem("sharperx_web_paper_id") || "",
-    state.memoDocumentId || sessionStorage.getItem("sharperx_web_memo_id") || "",
-  ].filter(Boolean))];
-  if (inspectionId && documentIds.length) {
-    void Promise.allSettled(documentIds.map((id) => deleteSessionPaperDocument(id, inspectionId, true)));
-  }
-  clearPaperSessionLocal();
-}, { once: true });
+window.addEventListener("pagehide", () => {
+  persistUiState();
+  persistWorkspaceScroll();
+  persistAskConversation();
+  persistCanvasDraft();
+});
 
 async function uploadPaper(file, kind) {
   if (!file) return;
@@ -1079,8 +1356,8 @@ async function uploadPaper(file, kind) {
       $("#paperFileName").textContent = file.name;
       $("#paperQuestionNumber").value = "";
       $("#paperSnapshotCard").hidden = true;
-      setStatus(status, "Paper uploaded. Enter the question number you want to attempt or ask about.", "success");
-      appendMessage(`Question paper uploaded: ${file.name}. Which question would you like to attempt or get help with? Enter its number above, for example 2(b), then choose “Show question”.`, { kind: "Uploaded question paper" });
+      setStatus(status, "Paper uploaded. Check that it includes the instructions, information/formula sheet, and every answer or diagram sheet it references. Then enter a question number.", "success");
+      appendMessage(`Question paper uploaded: ${file.name}. For accurate paper-specific help, include the complete paper with its instructions, information/formula sheet, and all referenced answer or diagram sheets. Which question would you like to attempt or get help with? Enter its number above, for example 2(b), then choose “Show question”. If the question requires a separate handwritten answer or graph, complete it on that sheet and upload a clear photo of the finished page.`, { kind: "Uploaded question paper" });
     }
   } catch (error) {
     setStatus(status, error.message, "error");
@@ -1099,21 +1376,27 @@ $("#showPaperQuestionButton").addEventListener("click", async () => {
   button.disabled = true;
   setStatus($("#paperStatus"), `Finding question ${questionNumber} and its page…`);
   try {
+    const contextNumber = parentPaperQuestionNumber(questionNumber);
     const result = await postJson(`/api/inspections/${encodeURIComponent(state.inspectionId)}/question-snapshot`, {
       document_id: state.paperDocumentId,
-      question_number: questionNumber,
+      question_number: contextNumber,
+      selected_question_number: questionNumber,
       memo_document_id: state.memoDocumentId || null,
     });
     const pageBase64 = result.image_png_base64 || result.question_png_base64 || result.full_page_png_base64 || result.page_png_base64 || "";
     if (!pageBase64) throw new Error("The full page containing that question could not be prepared.");
-    const questionNumberShown = result.question_number || result.extracted_question_number || questionNumber;
+    const questionNumberShown = questionNumber;
+    const contextQuestionNumber = parentPaperQuestionNumber(result.question_number || result.extracted_question_number || contextNumber);
     state.paperPageImage = `data:image/png;base64,${pageBase64}`;
     state.selectedPaperQuestion = {
       number: questionNumberShown,
-      text: `Read Question ${questionNumberShown} from the original uploaded page snapshot. Treat the page image as the authoritative source.`,
+      contextNumber: contextQuestionNumber,
+      contextText: String(result.question_text || "").slice(0, 24000),
+      text: `Read all of Question ${contextQuestionNumber}, including its instructions and subquestions. Focus guidance on selected subquestion ${questionNumberShown}. Treat the original page snapshot as authoritative.`,
       memoText: result.memo_text || "",
       focus: result.question_focus || null,
     };
+    void saveWorkspaceRecord({ id: PAPER_SNAPSHOT_RECORD_KEY, paper_document_id: state.paperDocumentId, entered_question: questionNumber, question: state.selectedPaperQuestion, image: state.paperPageImage, saved_at: Date.now() }).catch(() => {});
     $("#paperSnapshotTitle").textContent = `Question ${state.selectedPaperQuestion.number}`;
     $("#paperSnapshotImage").src = state.paperPageImage;
     $("#paperQuestionText").hidden = true;
@@ -1129,13 +1412,15 @@ $("#showPaperQuestionButton").addEventListener("click", async () => {
       subject: "Mathematics",
       grade: state.grade,
       topic: "Question paper",
-      question: `Read Question ${state.selectedPaperQuestion.number} directly from the attached original paper page. Treat the page snapshot as authoritative and give question-specific hints without reproducing the question text.`,
+      question: `Read all of Question ${state.selectedPaperQuestion.contextNumber}, including every subquestion and the instructions on the source page. The learner selected ${state.selectedPaperQuestion.number}; focus the hints on that part while considering the full question context. Treat the attached page snapshot as authoritative and do not reproduce its text.`,
       mode: "question_hints",
       inspection_id: state.inspectionId,
       ai_tier: "luna",
       allow_web_search: false,
       question_paper_document_id: state.paperDocumentId,
       question_paper_question_number: String(state.selectedPaperQuestion.number),
+      question_paper_context_question_number: String(state.selectedPaperQuestion.contextNumber),
+      question_paper_memo_document_id: state.memoDocumentId || null,
       conversation_history: askConversationHistory(),
       app_context: {
         page: "Ask",
@@ -1143,8 +1428,9 @@ $("#showPaperQuestionButton").addEventListener("click", async () => {
         grade: state.grade,
         subject: "Mathematics",
         topic: "Question paper",
-        current_question: `Question ${state.selectedPaperQuestion.number} from the attached original paper page snapshot.`,
-        question_number: String(state.selectedPaperQuestion.number),
+        current_question: `Full Question ${state.selectedPaperQuestion.contextNumber} and its subquestions from the attached source page. The selected focus is Question ${state.selectedPaperQuestion.number}.`,
+        question_number: String(state.selectedPaperQuestion.contextNumber),
+        selected_subquestion: String(state.selectedPaperQuestion.number),
       },
     });
     requireTutorCompletion(hintResult, "Paper hints");
@@ -1199,6 +1485,10 @@ async function sendAsk(event) {
   const shownText = selected
     ? (text ? `Attempt / request for Question ${selected.number}:\n${text}` : `Question ${selected.number}:\n${selected.text}`)
     : text || "Please look at the attached working.";
+  const reportQuestionText = selected
+    ? `Question ${selected.contextNumber || selected.number} (selected subquestion ${selected.number}). The original question-page snapshot is attached below.\n\nLearner attempt / request:\n${text || "No written attempt was included."}`
+    : shownText;
+  const reportQuestionSnapshot = selected ? String(state.paperPageImage || "") : "";
   const conversationHistory = askConversationHistory();
   appendMessage(shownText, { mine: true, imageUrl: attachedImage });
   try {
@@ -1217,7 +1507,9 @@ async function sendAsk(event) {
       confirmed_photo_transcription: null,
       photo_reading_confirmed: false,
       question_paper_document_id: selected ? state.paperDocumentId : null,
-      question_paper_question_number: selected ? selected.number : null,
+      question_paper_question_number: selected ? String(selected.number || "") : null,
+      question_paper_context_question_number: selected ? String(selected.contextNumber || "") : null,
+      question_paper_memo_document_id: selected ? (state.memoDocumentId || null) : null,
       marking_memo_reference: selected && selected.memoText ? selected.memoText.slice(0, 30000) : null,
       conversation_history: conversationHistory,
       app_context: {
@@ -1227,7 +1519,8 @@ async function sendAsk(event) {
         subject: "Mathematics",
         topic: selected ? "Question paper" : "",
         current_question: selected?.text || text,
-        question_number: selected ? String(selected.number || "") : "",
+        question_number: selected ? String(selected.contextNumber || selected.number || "") : "",
+        selected_subquestion: selected ? String(selected.number || "") : "",
       },
     };
     setStatus($("#voiceStatus"), "Preparing your response…");
@@ -1239,12 +1532,20 @@ async function sendAsk(event) {
     persistAskDocumentState();
     updateAskPhotoUploadControls();
     const responseText = readTutorText(result);
-    appendMessage(responseText, {
+    const solutionVisuals = Array.isArray(result.solution_visuals) ? result.solution_visuals : [];
+    const completeResponseText = readTutorDisplayText(result) || responseText;
+    const responseDisplayText = result.solution_visual_notice
+      ? `${completeResponseText}\n\n${result.solution_visual_notice}`
+      : completeResponseText;
+    appendMessage(responseDisplayText, {
       kind: "Tutor response",
-      structuredText: readTutorDisplayText(result),
+      structuredText: result.solution_visual_notice
+        ? `${readTutorDisplayText(result)}\n\n${result.solution_visual_notice}`
+        : readTutorDisplayText(result),
+      solutionVisuals,
       actions: [
         { label: "Read aloud", onClick: () => realtimeTutor.speakReply(responseText, "ask") },
-        { label: "Save PDF report", onClick: () => saveReport("Ask feedback", shownText, responseText) },
+        { label: "Save PDF report", onClick: () => saveReport("Ask feedback", reportQuestionText, responseDisplayText, { reportKind: "ask", solutionVisuals, questionPageSnapshot: reportQuestionSnapshot }) },
       ],
     });
     realtimeTutor.speakReply(responseText, "ask");
@@ -1276,29 +1577,65 @@ function retryLastAsk() {
 function readTutorText(result) {
   const candidates = [result.assistant_message, result.answer, result.response, result.feedback, result.message, result.tutor_response, result.text];
   const value = candidates.find((candidate) => typeof candidate === "string" && candidate.trim());
-  const response = value
+  let response = value
     ? sanitizeLearnerFacingText(value)
     : result.result && typeof result.result === "string"
       ? sanitizeLearnerFacingText(result.result)
       : "I couldn't prepare a response. Please try again.";
+  const steps = Array.isArray(result?.worked_solution_steps)
+    ? result.worked_solution_steps.map((step) => String(step || "").trim()).filter(Boolean)
+    : Array.isArray(result?.practice_marking?.worked_solution_steps)
+      ? result.practice_marking.worked_solution_steps.map((step) => String(step || "").trim()).filter(Boolean)
+      : [];
+  const normalized = (text) => String(text || "").toLowerCase().replace(/\\[()\[\]]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+  const hasEveryStep = steps.length > 0 && steps.every((step) => normalized(response).includes(normalized(step)));
+  if (steps.length && !hasEveryStep) {
+    response = response.replace(/(?:^|\n)\s*full worked solution\s*:?[\s\S]*$/i, "").trim();
+    response = `${response ? `${response}\n\n` : ""}Full worked solution\n\n${steps.join("\n")}`;
+  }
   return String(result?.ai_status || "").toLowerCase() === "completed_needs_review"
     ? `Please check this response carefully; it could not be fully verified.\n\n${response}`
-    : response;
+    : sanitizeLearnerFacingText(response);
 }
 
 function readTutorDisplayText(result) {
   const segments = Array.isArray(result?.message_segments) ? result.message_segments : [];
-  const structured = segments.map((segment) => {
-    const content = String(segment?.content || "").trim();
-    if (!content) return "";
-    if (segment.type === "display_math") return `\\[${content}\\]`;
-    if (segment.type === "inline_math") return `\\(${content}\\)`;
-    return segment.type === "text" ? content : "";
-  }).filter(Boolean).join("\n");
-  if (structured) return structured;
-  return typeof result?.assistant_message_markup === "string"
+  const structured = [];
+  let previousType = "";
+  for (const segment of segments) {
+    const content = String(segment?.content || "").trim().replace(/[\\]{2,}(?=[()[\]])/g, (slashes) => slashes.slice(-1));
+    const type = String(segment?.type || "");
+    if (!content || !["text", "inline_math", "display_math"].includes(type)) continue;
+    const previous = structured[structured.length - 1] || "";
+    if (type === "display_math") {
+      structured.push(`${previousType ? "\n\n" : ""}\\[${content.replace(/^\\\[|\\\]$/g, "").trim()}\\]\n\n`);
+    } else if (type === "inline_math") {
+      const math = content.replace(/^\\\(|\\\)$/g, "").trim();
+      const needsSpace = previousType === "text" && /[A-Za-z0-9,;:]$/.test(previous);
+      structured.push(`${needsSpace ? " " : ""}\\(${math}\\)`);
+    } else {
+      const needsSpace = previousType === "inline_math" && /^[A-Za-z0-9]/.test(content);
+      const separator = !previousType || previousType === "display_math" ? "" : previousType === "inline_math" ? (needsSpace ? " " : "") : "\n\n";
+      structured.push(`${separator}${content}`);
+    }
+    previousType = type;
+  }
+  const structuredText = structured.join("").trim();
+  let response = structuredText || (typeof result?.assistant_message_markup === "string"
     ? result.assistant_message_markup.trim()
-    : "";
+    : "");
+  const steps = Array.isArray(result?.worked_solution_steps)
+    ? result.worked_solution_steps.map((step) => String(step || "").trim()).filter(Boolean)
+    : Array.isArray(result?.practice_marking?.worked_solution_steps)
+      ? result.practice_marking.worked_solution_steps.map((step) => String(step || "").trim()).filter(Boolean)
+      : [];
+  const normalized = (text) => String(text || "").toLowerCase().replace(/\\[()\[\]]/g, "").replace(/[^a-z0-9]+/g, " ").trim();
+  const hasEveryStep = steps.length > 0 && steps.every((step) => normalized(response).includes(normalized(step)));
+  if (steps.length && !hasEveryStep) {
+    response = response.replace(/(?:^|\n)\s*full worked solution\s*:?[\s\S]*$/i, "").trim();
+    response = `${response ? `${response}\n\n` : ""}Full worked solution\n\n${steps.join("\n")}`;
+  }
+  return sanitizeLearnerFacingText(response);
 }
 
 function requireTutorCompletion(result, operation) {
@@ -1435,17 +1772,20 @@ const realtimeTutor = installRealtimeTutor({
       question_text: selected?.text || getMathEditorLatex("ask").trim() || null,
       question_paper_document_id: selected ? state.paperDocumentId : null,
       question_paper_question_number: selected ? String(selected.number || "") : null,
+      question_paper_context_question_number: selected ? String(selected.contextNumber || "") : null,
+      question_paper_memo_document_id: selected ? (state.memoDocumentId || null) : null,
       app_context: currentPageTutorContext(),
       conversation_history: history,
     };
   },
-  transcribeAudio: async (blob) => {
+  transcribeAudio: async (blob, language, mathContext) => {
     if (!getAccessToken()) throw new Error("Sign in again before starting a live tutor session.");
     const type = blob.type || "audio/webm";
     const ext = type.includes("wav") ? "wav" : type.includes("mp4") ? "m4a" : type.includes("ogg") ? "ogg" : "webm";
     const form = new FormData();
     form.set("audio", new File([blob], `live-tutor.${ext}`, { type }));
-    form.set("language", "en");
+    form.set("language", String(language?.locale || language?.value || "en").split("-")[0]);
+    if (mathContext) form.set("math_context", JSON.stringify(mathContext));
     const result = await uploadForm("/api/education/speech/transcribe", form);
     const transcript = selectLiveSpeechTranscript(result);
     if (!transcript) return "";
@@ -1647,6 +1987,7 @@ async function recordVoiceNote(context) {
         const form = new FormData();
         form.set("audio", new File([blob], `${context}-voice-note.${ext}`, { type }));
         form.set("language", "en");
+        form.set("math_context", JSON.stringify(currentMathSpeechContext(context)));
         const result = await uploadForm("/api/education/speech/transcribe", form);
         const transcript = result.raw_transcript || result.transcript || result.text || result.transcription || "";
         if (!String(transcript).trim()) throw new Error("No words were recognized in that voice note.");
@@ -1748,11 +2089,6 @@ function applyImageTransform() {
 
 $$('[data-close-dialog]').forEach((button) => button.addEventListener("click", () => button.closest("dialog")?.close()));
 $("#imageFitButton").addEventListener("click", resetImageView);
-
-function registerServiceWorker() {
-  if (!("serviceWorker" in navigator) || !/^https?:$/.test(location.protocol)) return;
-  navigator.serviceWorker.register("./service-worker.js", { scope: "./" }).catch(() => {});
-}
 
 checkSession();
 
@@ -2112,6 +2448,42 @@ function diagramImageSource(visual, questionText = "") {
   return "";
 }
 
+function structuredFunctionGraphSvg(diagram, graph) {
+  const equation = String(graph?.equation || "").trim();
+  if (!equation || !parseCanvasGraphExpression(equation)) return "";
+  const asNumber = (value, fallback) => {
+    const number = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(number) ? number : fallback;
+  };
+  const xMin = asNumber(graph.x_min ?? graph.domain_min, -6);
+  const xMax = asNumber(graph.x_max ?? graph.domain_max, 6);
+  const evaluator = parseCanvasGraphExpression(equation);
+  const samples = Array.from({ length: 161 }, (_, index) => evaluator(xMin + (xMax - xMin) * index / 160))
+    .filter((value) => value !== null && Number.isFinite(value) && Math.abs(value) < 1e6)
+    .sort((a, b) => a - b);
+  const sampleMin = samples[Math.floor(samples.length * 0.05)] ?? -5;
+  const sampleMax = samples[Math.ceil(samples.length * 0.95) - 1] ?? 5;
+  const ySpan = Math.max(sampleMax - sampleMin, 1);
+  const result = {
+    equation,
+    x_min: xMin,
+    x_max: xMax,
+    y_min: asNumber(graph.y_min, sampleMin - ySpan * 0.08),
+    y_max: asNumber(graph.y_max, sampleMax + ySpan * 0.08),
+    critical_points: Array.isArray(graph.points) ? graph.points : Array.isArray(graph.critical_points) ? graph.critical_points : [],
+  };
+  const asymptotes = Array.isArray(graph.asymptotes)
+    ? graph.asymptotes
+    : Array.isArray(diagram.asymptotes) ? diagram.asymptotes : [];
+  const svg = renderCanvasGraphPreview([{
+    graphType: String(diagram.title || graph.type || "Function graph"),
+    points: [],
+    asymptotes,
+    result,
+  }]);
+  return svg || "";
+}
+
 function structuredQuestionVisualSvg(visual, questionText = "") {
   const diagram = visual?.diagram || visual?.visual || visual || {};
   const kind = String(diagram.kind || "").toLowerCase();
@@ -2124,6 +2496,10 @@ function structuredQuestionVisualSvg(visual, questionText = "") {
   const isGraph = ["function_graph", "trig_graph"].includes(kind);
   const isGeometry = kind === "geometry_2d";
   if (!isGraph && !isGeometry) return "";
+  if (isGraph) {
+    const graphSvg = structuredFunctionGraphSvg(diagram, graph);
+    if (graphSvg) return graphSvg;
+  }
 
   const numberOrNull = (value) => {
     if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -2325,7 +2701,8 @@ async function selectPracticeQuestion(question) {
   realtimeTutor.stopIfContext("practice");
   state.currentPracticeQuestion = question;
   const questionId = String(question.question_id || question.bank_question_id || question.id || "");
-  state.practiceInspectionId = sessionStorage.getItem(practiceQuestionStorageKey(PRACTICE_SESSION_KEYS.inspectionPrefix, questionId)) || "";
+  state.practiceInspectionId = sessionStorage.getItem(practiceQuestionStorageKey(PRACTICE_SESSION_KEYS.inspectionPrefix, questionId))
+    || sessionStorage.getItem(PRACTICE_SESSION_KEYS.referenceInspection) || "";
   const storedPhotoIds = sessionStorage.getItem(practiceQuestionStorageKey(PRACTICE_SESSION_KEYS.photosPrefix, questionId));
   try { state.practiceAnswerPhotoIds = storedPhotoIds ? JSON.parse(storedPhotoIds).filter((id) => typeof id === "string" && id).slice(0, MAX_UPLOAD_ITEMS) : []; }
   catch { state.practiceAnswerPhotoIds = []; }
@@ -2335,9 +2712,17 @@ async function selectPracticeQuestion(question) {
     state.practiceAnswerDocumentIds = Array.isArray(savedDocuments) ? savedDocuments.map((item) => String(item.id || "")).filter(Boolean).slice(0, MAX_UPLOAD_ITEMS) : [];
     state.practiceAnswerDocumentNames = Array.isArray(savedDocuments) ? savedDocuments.slice(0, MAX_UPLOAD_ITEMS).map((item) => String(item.name || "Uploaded document")) : [];
   } catch { state.practiceAnswerDocumentIds = []; state.practiceAnswerDocumentNames = []; }
+  try { state.practiceReferencePhotoIds = JSON.parse(sessionStorage.getItem(PRACTICE_SESSION_KEYS.referencePhotos) || "[]").filter((id) => typeof id === "string" && id).slice(0, MAX_UPLOAD_ITEMS); }
+  catch { state.practiceReferencePhotoIds = []; }
+  try {
+    const referenceDocuments = JSON.parse(sessionStorage.getItem(PRACTICE_SESSION_KEYS.referenceDocuments) || "[]");
+    state.practiceReferenceDocumentIds = Array.isArray(referenceDocuments) ? referenceDocuments.map((item) => String(item.id || "")).filter(Boolean).slice(0, MAX_UPLOAD_ITEMS) : [];
+    state.practiceReferenceDocumentNames = Array.isArray(referenceDocuments) ? referenceDocuments.slice(0, MAX_UPLOAD_ITEMS).map((item) => String(item.name || "Paper source")) : [];
+  } catch { state.practiceReferenceDocumentIds = []; state.practiceReferenceDocumentNames = []; }
   state.practiceAnswerPhotoPreviews.forEach((item) => URL.revokeObjectURL(item.url));
   state.practiceAnswerPhotoPreviews = [];
   renderPracticeAnswerAttachments();
+  renderPracticeReferenceAttachments();
   sessionStorage.setItem(PRACTICE_SESSION_KEYS.grade, String(formatGrade($("#practiceGrade").value)));
   sessionStorage.setItem(PRACTICE_SESSION_KEYS.topic, $("#practiceTopic").value);
   sessionStorage.setItem(PRACTICE_SESSION_KEYS.subtopic, $("#practiceSubtopic").value);
@@ -2607,6 +2992,9 @@ async function requestPracticeSupport(hintLevel, { formulaOnly = false } = {}) {
       ai_tier: "luna",
       allow_web_search: false,
       requested_hint_level: formulaOnly ? 0 : hintLevel,
+      inspection_id: sessionStorage.getItem(PRACTICE_SESSION_KEYS.referenceInspection) || state.practiceInspectionId || undefined,
+      photo_ids: [...state.practiceReferencePhotoIds],
+      document_ids: [...state.practiceReferenceDocumentIds],
       question_visual_reference: visual?.diagram || visual,
       app_context: {
         ...currentPageTutorContext(),
@@ -2650,7 +3038,6 @@ $("#practiceFormulaButton").addEventListener("click", () => {
 });
 
 $("#practiceCanvasButton").addEventListener("click", () => openCanvas("practice", state.currentPracticeQuestion));
-$("#practiceGraphCanvasButton").addEventListener("click", () => openCanvas("practice-graph", state.currentPracticeQuestion));
 
 const mathEditorFrames = {
   ask: $("#askMathEditor"),
@@ -2725,6 +3112,12 @@ function initializeMathEditor(name) {
     api.execute({ name: "loadLatex", value: settings.pendingLatex });
     delete settings.pendingLatex;
   }
+  if (name === "ask") {
+    try {
+      const savedLatex = sessionStorage.getItem("sharperx_web_ask_editor_v1");
+      if (savedLatex) api.execute({ name: "loadLatex", value: savedLatex });
+    } catch { /* The editor works normally if per-tab storage is unavailable. */ }
+  }
   if (name === "practice") state.practiceEditorReady = true;
   return true;
 }
@@ -2743,6 +3136,10 @@ window.addEventListener("message", (event) => {
   const name = getMathEditorNameForWindow(event.source);
   if (!name) return;
   mathEditorStates.set(name, event.data.state || null);
+  if (name === "ask" && event.data.state?.event === "change") {
+    try { sessionStorage.setItem("sharperx_web_ask_editor_v1", String(event.data.state?.latex || "")); }
+    catch { /* Keep the active editor usable when storage is unavailable. */ }
+  }
   if (name === "practice") state.practiceEditorState = event.data.state || null;
   if (name === activeMathEditorName) updateMathKeyboardPreview(event.data.state?.latex || "");
   if (event.data.state?.event === "ready") initializeMathEditor(name);
@@ -3107,15 +3504,59 @@ function renderPracticeAnswerAttachments() {
     card.append(label, remove);
     host.append(card);
   });
-  const totalCount = state.practiceAnswerPhotoIds.length + state.practiceAnswerDocumentIds.length;
-  const full = practicePhotoUploadBusy || totalCount >= MAX_UPLOAD_ITEMS;
+  const totalCount = state.practiceAnswerPhotoIds.length + state.practiceAnswerDocumentIds.length
+    + state.practiceReferencePhotoIds.length + state.practiceReferenceDocumentIds.length;
+  const full = practicePhotoUploadBusy || practiceReferenceUploadBusy || totalCount >= MAX_UPLOAD_ITEMS;
   $("#practiceHandwritingButton").disabled = full;
   $("#practiceCameraButton").disabled = full;
+  renderPracticeReferenceAttachments();
 }
 
 let practicePhotoUploadBusy = false;
+let practiceReferenceUploadBusy = false;
+
+function renderPracticeReferenceAttachments() {
+  const host = $("#practiceReferenceAttachments");
+  if (!host) return;
+  host.replaceChildren();
+  const entries = [
+    ...state.practiceReferencePhotoIds.map((id, index) => ({ id, label: `Paper or answer-sheet page ${index + 1}`, image: true })),
+    ...state.practiceReferenceDocumentIds.map((id, index) => ({ id, label: state.practiceReferenceDocumentNames[index] || "Paper instructions / source", image: false, index })),
+  ];
+  entries.forEach((entry) => {
+    const item = document.createElement("div");
+    item.className = "practice-attachment";
+    const label = document.createElement("span");
+    label.textContent = entry.label;
+    label.style.cssText = "display:grid;place-items:center;min-height:56px;padding:8px;text-align:center;font-size:12px;overflow-wrap:anywhere";
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.textContent = "×";
+    remove.setAttribute("aria-label", `Remove ${entry.label}`);
+    remove.addEventListener("click", () => {
+      if (entry.image) {
+        state.practiceReferencePhotoIds = state.practiceReferencePhotoIds.filter((photoId) => photoId !== entry.id);
+        sessionStorage.setItem(PRACTICE_SESSION_KEYS.referencePhotos, JSON.stringify(state.practiceReferencePhotoIds));
+      } else {
+        state.practiceReferenceDocumentIds.splice(entry.index, 1);
+        state.practiceReferenceDocumentNames.splice(entry.index, 1);
+        sessionStorage.setItem(PRACTICE_SESSION_KEYS.referenceDocuments, JSON.stringify(state.practiceReferenceDocumentIds.map((id, index) => ({ id, name: state.practiceReferenceDocumentNames[index] }))));
+      }
+      renderPracticeReferenceAttachments();
+      renderPracticeAnswerAttachments();
+    });
+    item.append(label, remove);
+    host.append(item);
+  });
+  const totalCount = state.practiceAnswerPhotoIds.length + state.practiceAnswerDocumentIds.length
+    + state.practiceReferencePhotoIds.length + state.practiceReferenceDocumentIds.length;
+  const full = practiceReferenceUploadBusy || practicePhotoUploadBusy || totalCount >= MAX_UPLOAD_ITEMS;
+  $("#practiceReferenceUploadButton").disabled = full;
+  $("#practiceReferenceTakePhotoButton").disabled = full;
+}
+
 async function uploadPracticePhotoFiles(files) {
-  const selection = selectUploadBatch(files, state.practiceAnswerPhotoIds.length + state.practiceAnswerDocumentIds.length);
+  const selection = selectUploadBatch(files, state.practiceAnswerPhotoIds.length + state.practiceAnswerDocumentIds.length + state.practiceReferencePhotoIds.length + state.practiceReferenceDocumentIds.length);
   if (!selection.files.length) {
     const message = selection.remaining === 0 ? `The limit is ${MAX_UPLOAD_ITEMS} files per practice answer.`
       : selection.unsupported ? "Choose PDF, Word, Excel, PowerPoint, or image files for this answer." : "No files were selected.";
@@ -3127,7 +3568,7 @@ async function uploadPracticePhotoFiles(files) {
   markButton.disabled = true;
   const lockedControls = [
     $("#practiceGrade"), $("#practiceTopic"), $("#practiceSubtopic"),
-    $("#practiceCanvasButton"), $("#practiceGraphCanvasButton"),
+    $("#practiceCanvasButton"),
     ...$$("button", $("#practiceQuestionList")),
   ].filter(Boolean).map((button) => [button, button.disabled]);
   lockedControls.forEach(([button]) => { button.disabled = true; });
@@ -3161,7 +3602,8 @@ async function uploadPracticePhotoFiles(files) {
       } catch (error) { failures.push(`${file.name}: ${error.message || "upload failed"}`); }
     }
     const notices = [uploadBatchNotice(selection), ...failures, ...readabilityWarnings].filter(Boolean);
-    setStatus($("#practiceMarkStatus"), `${uploadedCount} file${uploadedCount === 1 ? "" : "s"} attached (${state.practiceAnswerPhotoIds.length + state.practiceAnswerDocumentIds.length}/${MAX_UPLOAD_ITEMS} for this answer). ${notices.join(" ")}`.trim(), failures.length || readabilityWarnings.length || selection.overLimit || selection.unsupported ? "warning" : "success");
+    const totalAttached = state.practiceAnswerPhotoIds.length + state.practiceAnswerDocumentIds.length + state.practiceReferencePhotoIds.length + state.practiceReferenceDocumentIds.length;
+    setStatus($("#practiceMarkStatus"), `${uploadedCount} file${uploadedCount === 1 ? "" : "s"} attached (${totalAttached}/${MAX_UPLOAD_ITEMS} paper/source and answer files/photos). ${notices.join(" ")}`.trim(), failures.length || readabilityWarnings.length || selection.overLimit || selection.unsupported ? "warning" : "success");
   } catch (error) {
     setStatus($("#practiceMarkStatus"), error.message, "error");
   } finally {
@@ -3181,8 +3623,83 @@ for (const inputSelector of ["#practiceHandwritingInput", "#practiceHandwritingC
   });
 }
 
+async function uploadPracticeReferenceFiles(files) {
+  const currentCount = state.practiceAnswerPhotoIds.length + state.practiceAnswerDocumentIds.length
+    + state.practiceReferencePhotoIds.length + state.practiceReferenceDocumentIds.length;
+  const selection = selectUploadBatch(files, currentCount);
+  if (!selection.files.length) {
+    const message = selection.remaining === 0 ? `The limit is ${MAX_UPLOAD_ITEMS} source and answer files/photos for this practice question.`
+      : selection.unsupported ? "Choose PDF, Word, Excel, PowerPoint, or image files for paper instructions and sheets." : "No files were selected.";
+    return setStatus($("#practiceMarkStatus"), [message, uploadBatchNotice(selection)].filter(Boolean).join(" "), "error");
+  }
+  practiceReferenceUploadBusy = true;
+  renderPracticeReferenceAttachments();
+  const markButton = $("#markPracticeAnswer");
+  const wasDisabled = markButton.disabled;
+  markButton.disabled = true;
+  let uploadedCount = 0;
+  const failures = [];
+  const warnings = [];
+  try {
+    const inspectionId = await ensureInspection("practice");
+    state.practiceInspectionId = inspectionId;
+    sessionStorage.setItem(PRACTICE_SESSION_KEYS.referenceInspection, inspectionId);
+    const inspectionKey = practiceQuestionStorageKey(PRACTICE_SESSION_KEYS.inspectionPrefix);
+    if (inspectionKey) sessionStorage.setItem(inspectionKey, inspectionId);
+    for (const file of selection.files) {
+      try {
+        setStatus($("#practiceMarkStatus"), `Uploading paper page ${file.name}…`);
+        let id = "";
+        if (isImageUploadFile(file)) {
+          const form = new FormData();
+          form.set("photo_type", "practice_question_paper");
+          form.set("photo", file, file.name);
+          const result = await uploadForm(`/api/inspections/${encodeURIComponent(inspectionId)}/upload-photo`, form);
+          id = String(result.id || result.photo_id || "");
+          if (id && !state.practiceReferencePhotoIds.includes(id)) state.practiceReferencePhotoIds.push(id);
+        } else {
+          const form = new FormData();
+          form.set("document_type", "practice_question_paper");
+          form.set("document", file, file.name);
+          const result = await uploadForm(`/api/inspections/${encodeURIComponent(inspectionId)}/upload-document`, form);
+          id = String(result.id || result.document_id || "");
+          if (id && !state.practiceReferenceDocumentIds.includes(id)) {
+            state.practiceReferenceDocumentIds.push(id);
+            state.practiceReferenceDocumentNames.push(file.name);
+          }
+          const chars = Number(result.extracted_characters || 0);
+          const extractionFailed = String(result.text_preview || "").toLowerCase().startsWith("document text could not be extracted:");
+          if (!chars || extractionFailed) warnings.push(`${file.name}: extracted text is limited; the original pages will be inspected visually.`);
+        }
+        if (!id) throw new Error("The source upload did not return an ID.");
+        uploadedCount += 1;
+      } catch (error) { failures.push(`${file.name}: ${error.message || "upload failed"}`); }
+    }
+    sessionStorage.setItem(PRACTICE_SESSION_KEYS.referencePhotos, JSON.stringify(state.practiceReferencePhotoIds));
+    sessionStorage.setItem(PRACTICE_SESSION_KEYS.referenceDocuments, JSON.stringify(state.practiceReferenceDocumentIds.map((id, index) => ({ id, name: state.practiceReferenceDocumentNames[index] }))));
+    setStatus($("#practiceMarkStatus"), `${uploadedCount} paper/source page${uploadedCount === 1 ? "" : "s"} attached. ${[uploadBatchNotice(selection), ...warnings, ...failures].filter(Boolean).join(" ")}`.trim(), failures.length || warnings.length || selection.overLimit || selection.unsupported ? "warning" : "success");
+  } catch (error) {
+    setStatus($("#practiceMarkStatus"), error.message, "error");
+  } finally {
+    practiceReferenceUploadBusy = false;
+    markButton.disabled = wasDisabled;
+    renderPracticeReferenceAttachments();
+    renderPracticeAnswerAttachments();
+  }
+}
+
+$("#practiceReferenceUploadButton").addEventListener("click", () => $("#practiceReferenceInput").click());
+$("#practiceReferenceTakePhotoButton").addEventListener("click", () => $("#practiceReferenceCameraInput").click());
+for (const inputSelector of ["#practiceReferenceInput", "#practiceReferenceCameraInput"]) {
+  $(inputSelector).addEventListener("change", (event) => {
+    const files = [...(event.currentTarget.files || [])];
+    event.currentTarget.value = "";
+    if (!practiceReferenceUploadBusy && files.length) void uploadPracticeReferenceFiles(files);
+  });
+}
+
 $("#markPracticeAnswer").addEventListener("click", async () => {
-  if (practicePhotoUploadBusy) return setStatus($("#practiceMarkStatus"), "Wait for the selected photos to finish uploading before sending this answer.", "warning");
+  if (practicePhotoUploadBusy || practiceReferenceUploadBusy) return setStatus($("#practiceMarkStatus"), "Wait for the selected answer and paper pages to finish uploading before sending this answer.", "warning");
   const question = state.currentPracticeQuestion;
   const working = getPracticeEditorLatex().trim();
   if (!question) return;
@@ -3205,6 +3722,10 @@ $("#markPracticeAnswer").addEventListener("click", async () => {
       learner_final_answer: lastNonEmptyLine(working) || working,
       assistance_mode: state.practiceHintsUsed ? "Hints" : "SolveItMyself",
       hints_used: state.practiceHintsUsed,
+      inspection_id: state.practiceInspectionId || "",
+      source_inspection_id: sessionStorage.getItem(PRACTICE_SESSION_KEYS.referenceInspection) || state.practiceInspectionId || "",
+      source_document_ids: [...state.practiceReferenceDocumentIds],
+      source_photo_ids: [...state.practiceReferencePhotoIds],
     };
     let result;
     if (working && !hasUploadedAnswer) {
@@ -3253,7 +3774,12 @@ $("#markPracticeAnswer").addEventListener("click", async () => {
     save.className = "button secondary";
     save.type = "button";
     save.textContent = "Save PDF report";
-    save.addEventListener("click", () => saveReport(`Grade ${question.grade || state.grade} practice`, `${questionLabel(question)}\n\nYour working:\n${working}`, reportText));
+    save.addEventListener("click", () => saveReport(
+      `Grade ${question.grade || state.grade} practice`,
+      `${questionLabel(question)}\n\nYour working:\n${working}`,
+      reportText,
+      { solutionVisuals: answerVisuals },
+    ));
     panel.append(title, body);
     if (answerVisualPanel) panel.append(answerVisualPanel);
     panel.append(save);
@@ -3295,13 +3821,41 @@ function readMarkingText(result) {
 function openReportsDatabase() {
   if (!("indexedDB" in window)) return Promise.reject(new Error("This browser does not support local saved reports."));
   return new Promise((resolve, reject) => {
-    const request = indexedDB.open("sharperx-web-reports", 1);
+    const request = indexedDB.open("sharperx-web-reports", 2);
     request.onupgradeneeded = () => {
       if (!request.result.objectStoreNames.contains("reports")) request.result.createObjectStore("reports", { keyPath: "id" });
+      if (!request.result.objectStoreNames.contains("workspace")) request.result.createObjectStore("workspace", { keyPath: "id" });
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error || new Error("Saved reports could not be opened."));
   });
+}
+
+function workspaceRecord(id) {
+  return dbPromise.then((database) => new Promise((resolve, reject) => {
+    const request = database.transaction("workspace", "readonly").objectStore("workspace").get(id);
+    request.onsuccess = () => resolve(request.result || null);
+    request.onerror = () => reject(request.error || new Error("The saved workspace could not be read."));
+  }));
+}
+
+function saveWorkspaceRecord(record) {
+  return dbPromise.then((database) => new Promise((resolve, reject) => {
+    const transaction = database.transaction("workspace", "readwrite");
+    transaction.objectStore("workspace").put(record);
+    transaction.oncomplete = () => resolve(true);
+    transaction.onerror = () => reject(transaction.error || new Error("The workspace could not be saved."));
+    transaction.onabort = () => reject(transaction.error || new Error("The workspace could not be saved."));
+  }));
+}
+
+function deleteWorkspaceRecord(id) {
+  return dbPromise.then((database) => new Promise((resolve, reject) => {
+    const transaction = database.transaction("workspace", "readwrite");
+    transaction.objectStore("workspace").delete(id);
+    transaction.oncomplete = () => resolve(true);
+    transaction.onerror = () => reject(transaction.error || new Error("The saved workspace could not be cleared."));
+  }));
 }
 
 function reportTransaction(mode, operation) {
@@ -3332,7 +3886,38 @@ function downloadBlob(blob, filename) {
 
 async function mathSvgToPng(latex) {
   const mathJax = await ensureMathJax();
-  if (!mathJax?.tex2svgPromise) throw new Error("Math typesetting is not ready.");
+  if (!mathJax?.tex2svgPromise) {
+    const text = textbookMathFallbackText(latex);
+    if (!text) throw new Error("A formula could not be rendered for the report.");
+    const canvas = document.createElement("canvas");
+    const context = canvas.getContext("2d");
+    if (!context) throw new Error("A formula image could not be prepared.");
+    const fontSize = 30;
+    const maxWidth = 1600;
+    context.font = `${fontSize}px "Times New Roman", serif`;
+    const lines = [];
+    for (const paragraph of text.split(/\r?\n/)) {
+      const words = paragraph.split(/\s+/).filter(Boolean);
+      let line = "";
+      for (const word of words) {
+        const candidate = line ? `${line} ${word}` : word;
+        if (line && context.measureText(candidate).width > maxWidth - 48) {
+          lines.push(line);
+          line = word;
+        } else line = candidate;
+      }
+      if (line) lines.push(line);
+    }
+    canvas.width = Math.min(maxWidth, Math.ceil(Math.max(...lines.map((line) => context.measureText(line).width), 100) + 48));
+    canvas.height = Math.max(64, lines.length * (fontSize + 12) + 24);
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.fillStyle = "#142d48";
+    context.font = `${fontSize}px "Times New Roman", serif`;
+    context.textBaseline = "top";
+    lines.forEach((line, index) => context.fillText(line, 24, 12 + index * (fontSize + 12)));
+    return canvas.toDataURL("image/png").split(",", 2)[1] || "";
+  }
   const rendered = await mathJax.tex2svgPromise(latex, { display: true });
   const svg = rendered.querySelector("svg");
   const viewBox = (svg?.getAttribute("viewBox") || "").split(/[ ,]+/).map(Number);
@@ -3369,23 +3954,118 @@ async function mathSvgToPng(latex) {
   }
 }
 
-async function reportMathSegments(body) {
+function reportAskSubmissionText(question) {
+  const raw = String(question || "").trim();
+  const graphType = raw.match(/learner-confirmed graph type:\s*([^\n;]+)/i)?.[1]?.trim();
+  if (!graphType) return raw;
+  const metadataStart = raw.search(/learner-confirmed graph type:/i);
+  const attemptText = metadataStart >= 0 ? raw.slice(0, metadataStart).trim() : raw;
+  const lines = [];
+  if (attemptText) lines.push(attemptText);
+  lines.push(`Confirmed graph family: ${graphType}`);
+  const equation = raw.match(/learner-provided equation:\s*([\s\S]*?)(?=\s*;\s*learner-confirmed features:|\n|$)/i)?.[1]?.trim();
+  if (equation) lines.push(`Equation entered: ${equation}`);
+  const featureBlock = raw.match(/learner-confirmed features:\s*([\s\S]*?)(?=\n(?:confirmed drawing description|answer\s+\d+\.|$))/i)?.[1] || "";
+  const features = [...featureBlock.matchAll(/([A-Za-z][A-Za-z /-]*?):\s*([^,\n]+)/g)]
+    .map((match) => `${match[1].trim()}: ${match[2].trim()}`)
+    .filter((item, index, all) => all.indexOf(item) === index);
+  if (features.length) lines.push(`Features recorded: ${features.join("; ")}`);
+  lines.push("The learner's handwritten graph was submitted with the attempt for marking.");
+  return lines.join("\n");
+}
+
+async function reportVisualToPngBase64(visual) {
+  const source = diagramImageSource(visual);
+  if (!source) return "";
+  const image = new Image();
+  if (/^https?:/i.test(source)) image.crossOrigin = "anonymous";
+  await new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("The worked graph took too long to prepare for the report.")), 12000);
+    image.onload = () => { clearTimeout(timeout); resolve(); };
+    image.onerror = () => { clearTimeout(timeout); reject(new Error("The verified worked graph could not be prepared for the report.")); };
+    image.src = source;
+  });
+  const naturalWidth = image.naturalWidth || image.width;
+  const naturalHeight = image.naturalHeight || image.height;
+  if (!naturalWidth || !naturalHeight) return "";
+  const scale = Math.min(1, 1600 / naturalWidth, 1050 / naturalHeight);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(naturalWidth * scale));
+  canvas.height = Math.max(1, Math.round(naturalHeight * scale));
+  const context = canvas.getContext("2d");
+  if (!context) return "";
+  context.fillStyle = "#ffffff";
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/png").split(",", 2)[1] || "";
+}
+
+async function reportSnapshotToPngBase64(value) {
+  const match = String(value || "").match(/^data:image\/png;base64,([A-Za-z0-9+/=]+)$/);
+  if (!match || match[1].length > 5_500_000) return "";
+  const image = new Image();
+  image.src = value;
+  await new Promise((resolve, reject) => {
+    image.onload = resolve;
+    image.onerror = () => reject(new Error("The original question page could not be prepared for the report."));
+  });
+  const width = image.naturalWidth || image.width;
+  const height = image.naturalHeight || image.height;
+  if (!width || !height) return "";
+  for (const scale of [1, 0.85, 0.7, 0.55, 0.42]) {
+    const factor = Math.min(scale, 1500 / width, 2100 / height);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(width * factor));
+    canvas.height = Math.max(1, Math.round(height * factor));
+    const context = canvas.getContext("2d");
+    if (!context) return "";
+    context.fillStyle = "#ffffff";
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    const base64 = canvas.toDataURL("image/png").split(",", 2)[1] || "";
+    if (base64.length <= 1_850_000) return base64;
+  }
+  return "";
+}
+
+async function reportMathSegments(body, solutionVisuals = [], questionPageSnapshot = "") {
   const segments = splitTextbookMath(body);
-  if (!segments.some((segment) => segment.type === "math")) return null;
+  const questionPagePng = questionPageSnapshot ? await reportSnapshotToPngBase64(questionPageSnapshot) : "";
+  if (!segments.some((segment) => segment.type === "math") && !solutionVisuals.length && !questionPagePng) return null;
   if (segments.length > 250) throw new Error("This report contains too many separate maths lines to typeset. Shorten it and save again.");
   const printable = [];
+  if (questionPagePng) {
+    printable.push(
+      { type: "text", text: "## Original question-paper page - full question context" },
+      { type: "diagram_image", png_base64: questionPagePng, alt_text: "Original question-paper page containing the selected question and its subquestions" },
+      { type: "break" },
+    );
+  }
   for (const segment of segments) {
     if (segment.type === "break") printable.push({ type: "break" });
     else if (segment.type === "text") printable.push({ type: "text", text: segment.text });
     else printable.push({ type: "math_image", png_base64: await mathSvgToPng(segment.text) });
   }
+  if (solutionVisuals.length) {
+    printable.push({ type: "break" }, { type: "text", text: "## Correct worked graph or diagram" });
+    for (const visual of solutionVisuals.slice(0, 6)) {
+      const png = await reportVisualToPngBase64(visual);
+      if (!png) throw new Error("A verified worked graph could not be added to the PDF. Try saving the report again.");
+      printable.push({
+        type: "diagram_image",
+        png_base64: png,
+        alt_text: String(visual.accessibility_text || visual.diagram?.accessibility_text || visual.title || "Verified worked graph"),
+      });
+    }
+  }
   return printable;
 }
 
-async function saveReport(title, question, response) {
-  const body = (question || "") + "\n\nFeedback and worked solution\n\n" + (response || "");
+async function saveReport(title, question, response, { reportKind = "", solutionVisuals = [], questionPageSnapshot = "" } = {}) {
+  const submission = reportKind === "ask" ? reportAskSubmissionText(question) : String(question || "").trim();
+  const body = `${submission ? `## Learner submission\n\n${submission}\n\n` : ""}## Tutor feedback and worked solution\n\n${response || ""}`;
   try {
-    const segments = await reportMathSegments(body);
+    const segments = await reportMathSegments(body, solutionVisuals, questionPageSnapshot);
     const pdf = await apiRequest("/api/study-exports/pdf", {
       method: "POST",
       body: JSON.stringify({ title, subtitle: "Saved " + new Date().toLocaleString(), body: body.trim(), ...(segments ? { segments } : {}) }),
@@ -3718,7 +4398,7 @@ function updateUploadedExamStatus() {
   } else {
     const paperImages = state.examPaperPhotoIds.length ? ` ${state.examPaperPhotoIds.length} page photo(s).` : "";
     const memo = hasMemo ? ` Memo: ${state.examMemoFileName || "uploaded"}.` : " No memo uploaded; Guided Practice will use question-only support.";
-    setStatus(status, `Question paper ready: ${state.examPaperFileName || "uploaded file"}.${paperImages}${memo}`, "success");
+    setStatus(status, `Question paper ready: ${state.examPaperFileName || "uploaded file"}.${paperImages} Include the full instructions, information/formula sheet, and referenced answer/diagram sheets.${memo} Upload clear photos of handwritten answers when a separate sheet is required.`, "success");
   }
   $("#startUploadedExam").disabled = !hasPaper;
 }
@@ -3875,9 +4555,36 @@ function updateExamTermControls() {
   updateExamGenerateButton();
 }
 
-function clearExamTopicSelections() {
-  $("#examTopicChoices").querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = false; });
-  updateExamGenerateButton();
+function examTopicScopeStorageKey(grade = $("#examGrade").value) {
+  return `sharperx_web_exam_topic_scope_${formatGrade(grade)}`;
+}
+
+function persistExamTopicSelections() {
+  const host = $("#examTopicChoices");
+  const saved = {
+    topics: [...host.querySelectorAll("[data-topic-choice]:checked")].map((input) => input.dataset.topicChoice),
+    subtopics: [...host.querySelectorAll("[data-subtopic-choice]:checked")].map((input) => input.dataset.subtopicChoice),
+    openTopics: [...host.querySelectorAll("details[data-topic-subtopics][open]")].map((details) => details.dataset.topicSubtopics),
+  };
+  try { sessionStorage.setItem(examTopicScopeStorageKey(), JSON.stringify(saved)); }
+  catch { /* Keep the current topic selection if session storage is unavailable. */ }
+}
+
+function restoreExamTopicSelections() {
+  let saved;
+  try { saved = JSON.parse(sessionStorage.getItem(examTopicScopeStorageKey()) || "null"); }
+  catch { return; }
+  if (!saved || typeof saved !== "object") return;
+  const topics = new Set(Array.isArray(saved.topics) ? saved.topics.map(String) : []);
+  const subtopics = new Set(Array.isArray(saved.subtopics) ? saved.subtopics.map(String) : []);
+  const openTopics = new Set(Array.isArray(saved.openTopics) ? saved.openTopics.map(String) : []);
+  const host = $("#examTopicChoices");
+  host.querySelectorAll("[data-subtopic-choice]").forEach((input) => { input.checked = subtopics.has(String(input.dataset.subtopicChoice)); });
+  host.querySelectorAll("[data-topic-choice]").forEach((input) => {
+    const children = [...host.querySelectorAll('[data-parent-topic="' + CSS.escape(input.dataset.topicChoice) + '"]')];
+    input.checked = children.length ? children.some((child) => child.checked) : topics.has(String(input.dataset.topicChoice));
+  });
+  host.querySelectorAll("details[data-topic-subtopics]").forEach((details) => { details.open = openTopics.has(String(details.dataset.topicSubtopics)); });
 }
 
 async function loadExamTopics() {
@@ -3927,6 +4634,7 @@ async function loadExamTopics() {
       if (choices.childElementCount) {
         const details = document.createElement("details");
         details.className = "topic-subtopic-details";
+        details.dataset.topicSubtopics = topic.id;
         const summary = document.createElement("summary");
         summary.textContent = `Subtopics · ${choices.childElementCount}`;
         details.append(summary, choices);
@@ -3945,7 +4653,11 @@ async function loadExamTopics() {
       const parent = host.querySelector(topicSelector);
       parent.checked = [...host.querySelectorAll(childrenSelector)].some((child) => child.checked);
       updateExamGenerateButton();
+        persistExamTopicSelections();
     }));
+    host.querySelectorAll("[data-topic-choice]").forEach((input) => input.addEventListener("change", persistExamTopicSelections));
+    host.querySelectorAll("details[data-topic-subtopics]").forEach((details) => details.addEventListener("toggle", persistExamTopicSelections));
+    restoreExamTopicSelections();
     updateExamGenerateButton();
     setStatus($("#examStatus"), state.examTopics.length + " Grade " + grade + " topics loaded. Choose topics and subtopics, then generate a paper.", "success");
   } catch (error) {
@@ -4255,7 +4967,7 @@ function updateStrictMockSourceStatus() {
   const hasMemo = Boolean(state.strictMockMemoDocumentId || state.strictMockMemoPhotoIds.length);
   const paper = hasPaper ? `${state.strictMockPaperFileName || "Question paper uploaded"}${state.strictMockPaperPhotoIds.length ? ` · ${state.strictMockPaperPhotoIds.length} page photo(s)` : ""}` : "No question paper uploaded yet.";
   const memo = hasMemo ? `Memo: ${state.strictMockMemoFileName || "file uploaded"}${state.strictMockMemoPhotoIds.length ? ` · ${state.strictMockMemoPhotoIds.length} page photo(s)` : ""}.` : "No memo uploaded; the app will derive and verify a marking guide from the paper where possible.";
-  setStatus($("#strictMockPaperStatus"), `${paper} ${memo}`, hasPaper ? "success" : "");
+    setStatus($("#strictMockPaperStatus"), `${paper} ${memo} Include all paper instructions, the information/formula sheet, and every referenced answer/diagram sheet. Upload clear photos of the handwritten answer pages after writing.`, hasPaper ? "success" : "");
   $("#prepareStrictMock").disabled = !hasPaper || strictMockUploading || strictMockPreparing || Boolean(state.strictMockSession);
   $("#strictMockUploadPaper").disabled = strictMockUploading || strictMockPreparing || Boolean(state.strictMockSession);
   $("#strictMockUploadMemo").disabled = strictMockUploading || strictMockPreparing || Boolean(state.strictMockSession);
@@ -4471,22 +5183,40 @@ async function renderStrictMockResult(result) {
     `${item.display_label || item.question_number || "Question"} · ${item.marks ?? 0} / ${item.maximum_marks ?? item.marks ?? 0} marks`,
     "Your response: handwritten answer script images submitted.",
     item.feedback ? `Feedback and corrections:\n${item.feedback}` : "",
-    item.correct_method || item.solution || item.worked_solution ? `Full solution:\n${item.correct_method || item.solution || item.worked_solution}` : "",
+    item.correct_method || item.solution || item.worked_solution ? `Full worked solution:\n${item.correct_method || item.solution || item.worked_solution}` : "",
     Array.isArray(item.steps) ? item.steps.map((step) => typeof step === "string" ? step : step.feedback || step.expected || step.step || "").filter(Boolean).join("\n") : "",
   ].filter(Boolean).join("\n\n")).join("\n\n");
   renderMath(body, detail || "The assessment has been marked.");
+  const answerVisuals = (result.questions || []).flatMap((item) =>
+    (Array.isArray(item.solution_visuals) ? item.solution_visuals : []).map((visual) => ({ item, visual })));
+  const answerVisualPanels = answerVisuals.map(({ item, visual }) => {
+    const section = document.createElement("section");
+    section.className = "exam-answer-visual";
+    const heading = document.createElement("h3");
+    heading.textContent = `${item.display_label || item.question_number || "Question"} worked answer graph or drawing`;
+    const images = document.createElement("div");
+    images.className = "question-visuals answer-visuals";
+    renderQuestionVisuals(images, [visual], heading.textContent, item.question_text_latex || item.question_text || "");
+    section.append(heading, images);
+    return section;
+  });
   const save = document.createElement("button");
   save.className = "button secondary";
   save.type = "button";
   save.textContent = "Save PDF report";
-  save.addEventListener("click", () => saveReport("Strict Mock Exam marking", `Score ${result.total_awarded_marks} / ${result.total_marks}`, detail));
+  save.addEventListener("click", () => saveReport(
+    "Strict Mock Exam marking",
+    `Score ${result.total_awarded_marks} / ${result.total_marks}`,
+    detail,
+    { solutionVisuals: answerVisuals.map(({ visual }) => visual) },
+  ));
   const newExam = document.createElement("button");
   newExam.id = "newStrictMockExam";
   newExam.className = "button secondary";
   newExam.type = "button";
   newExam.textContent = "Start another Strict Mock Exam";
   newExam.addEventListener("click", resetStrictMockExam);
-  panel.append(title, body, save, newExam);
+  panel.append(title, body, ...answerVisualPanels, save, newExam);
   state.strictMockSession = { ...(state.strictMockSession || {}), status: "submitted" };
   sessionStorage.removeItem("sharperx_web_strict_mock_timer_deadline");
   sessionStorage.removeItem("sharperx_web_exam_session_id");
@@ -5123,7 +5853,6 @@ $("#examGuidanceButton").addEventListener("click", async () => {
 });
 $("#examFormulaButton").addEventListener("click", () => { void requestExamFormulae(); });
 $("#examCanvasButton").addEventListener("click", () => openCanvas("exam", state.examCurrentQuestion));
-$("#examGraphCanvasButton").addEventListener("click", () => openCanvas("exam-graph", state.examCurrentQuestion));
 $("#examUploadPhotoButton").addEventListener("click", () => $("#examHandwritingInput").click());
 $("#examTakePhotoButton").addEventListener("click", () => $("#examHandwritingCameraInput").click());
 async function reviewExamHandwriting(file, result) {
@@ -5176,7 +5905,7 @@ async function uploadExamHandwritingFiles(files) {
   }
   if (examPhotoBatchUploading) return;
   examPhotoBatchUploading = true;
-  const lockedButtons = ["#saveExamAnswer", "#previousExamQuestion", "#nextExamQuestion", "#submitExam", "#examCanvasButton", "#examGraphCanvasButton", "#examUploadPhotoButton", "#examTakePhotoButton"]
+  const lockedButtons = ["#saveExamAnswer", "#previousExamQuestion", "#nextExamQuestion", "#submitExam", "#examCanvasButton", "#examUploadPhotoButton", "#examTakePhotoButton"]
     .map((selector) => $(selector))
     .filter(Boolean)
     .map((button) => [button, button.disabled]);
@@ -5297,13 +6026,17 @@ $("#submitExam").addEventListener("click", async () => {
       item.display_label || item.question_number || "Question",
       "Your answer:\n" + (item.learner_answer || item.learner_math_content || "(no response)"),
       item.feedback || "",
-      item.correct_method || item.solution || item.worked_solution || "",
+      item.correct_method || item.solution || item.worked_solution
+        ? "Full worked solution:\n" + (item.correct_method || item.solution || item.worked_solution)
+        : "",
       Array.isArray(item.steps) ? item.steps.map((step) => typeof step === "string" ? step : step.feedback || step.expected || step.step || "").filter(Boolean).join("\n") : "",
     ].filter(Boolean).join("\n\n")).join("\n\n");
     const narration = (result.questions || []).map((item) => [
       item.display_label || item.question_number || "Question",
       item.feedback || "",
-      item.correct_method || item.solution || item.worked_solution || "",
+      item.correct_method || item.solution || item.worked_solution
+        ? "Full worked solution:\n" + (item.correct_method || item.solution || item.worked_solution)
+        : "",
       Array.isArray(item.steps) ? item.steps.map((step) => typeof step === "string" ? step : step.feedback || step.expected || "").filter(Boolean).join("\n") : "",
     ].filter(Boolean).join("\n\n")).join("\n\n");
     renderMath(body, detail);
@@ -5327,7 +6060,12 @@ $("#submitExam").addEventListener("click", async () => {
     save.className = "button secondary";
     save.type = "button";
     save.textContent = "Save PDF report";
-    save.addEventListener("click", () => saveReport("Assessment marking", "Score " + result.total_awarded_marks + " / " + result.total_marks, detail));
+    save.addEventListener("click", () => saveReport(
+      "Assessment marking",
+      "Score " + result.total_awarded_marks + " / " + result.total_marks,
+      detail,
+      { solutionVisuals: answerVisuals.map(({ visual }) => visual) },
+    ));
     panel.append(title, body, ...answerVisualPanels, save);
     if (!strict) narrateTutorPage("exam", `Assessment marked. You scored ${result.total_awarded_marks} out of ${result.total_marks}, or ${result.percentage} percent. ${narration}`);
     sessionStorage.removeItem("sharperx_web_exam_session_id");
@@ -6155,21 +6893,34 @@ function setPhoneCanvasConnected(connected) {
 }
 
 function phoneCanvasSnapshot() {
-  const source = state.canvas.strokes.filter((stroke) => stroke.source === "phone").reverse();
+  const rect = workingCanvas.getBoundingClientRect();
+  const frame = state.canvas.graphLayout
+    ? canvasHostFrame()
+    : { width: Math.max(1, rect.width), height: Math.max(1, rect.height) };
+  const source = state.canvas.strokes.slice().reverse();
   let remaining = 4000;
   const result = [];
   for (const stroke of source) {
     if (remaining <= 0 || result.length >= 250) break;
-    const points = Array.isArray(stroke.remotePoints) ? stroke.remotePoints : [];
+    const points = Array.isArray(stroke.points) ? stroke.points : [];
     const count = Math.min(points.length, remaining);
     if (!count) continue;
-    const selected = count === points.length
+    const selected = (count === points.length
       ? points
-      : Array.from({ length: count }, (_, index) => points[Math.round(index * (points.length - 1) / Math.max(1, count - 1))]);
+      : Array.from({ length: count }, (_, index) => points[Math.round(index * (points.length - 1) / Math.max(1, count - 1))]))
+      .map((point) => ({
+        x: state.canvas.graphLayout
+          ? point.x / frame.width
+          : ((point.x - frame.width / 2) * state.canvas.scale + frame.width / 2 + state.canvas.offsetX) / frame.width,
+        y: state.canvas.graphLayout
+          ? point.y / frame.height
+          : ((point.y - frame.height / 2) * state.canvas.scale + frame.height / 2 + state.canvas.offsetY) / frame.height,
+      }));
     result.push({
       id: stroke.id,
-      frame: stroke.remoteFrame,
-      width: stroke.remoteWidth,
+      partition: Number(stroke.partition) || 0,
+      frame,
+      width: (Number(stroke.width) || 2.2) * (state.canvas.graphLayout ? 1 : state.canvas.scale),
       color: stroke.color,
       tool: stroke.tool || "pen",
       points: selected,
@@ -6181,6 +6932,7 @@ function phoneCanvasSnapshot() {
 
 function invalidateCanvasTranscription() {
   if (!state.canvas) return;
+  state.canvas.zoomBoundsCache = null;
   if (state.canvas.stage === "writing" && state.canvas.regions?.length) {
     state.canvas.regions.forEach(releaseCanvasRegionSnapshot);
     state.canvas.regions = [];
@@ -6213,12 +6965,16 @@ function applyPhoneCanvasMessage(message) {
     setPhoneCanvasConnected(true);
     phoneCanvasSetStatus("Phone connected. Draw on it and your work will appear here.", "success");
     const question = state.canvasQuestion;
-    const questionText = question?.accessible_text || question?.question_text || question?.text || questionLabel(question || {});
+    const questionText = currentCanvasQuestionText() || question?.accessible_text || question?.question_text || question?.text || questionLabel(question || {});
     phoneCanvasSend({
       type: "setup",
       title: $("#canvasTitle").textContent,
       question: String(questionText || "").slice(0, 12_000),
       mode: state.canvas.mode,
+      canvas_frame: canvasHostFrame(),
+      fit_all: Boolean(state.canvas.fitAll),
+      graph_layout: state.canvas.graphLayout || null,
+      graph_functions_reviewed: state.canvas.graphWorkflow?.functions?.length || 0,
       strokes: phoneCanvasSnapshot(),
       stage: state.canvas.stage,
       region_kind: state.canvas.regionKind,
@@ -6256,17 +7012,24 @@ function applyPhoneCanvasMessage(message) {
     invalidateCanvasTranscription();
     const firstScreen = phoneCanvasMapPoint(message.point, message.frame);
     const first = canvasRegionScreenToWorld(firstScreen);
-    state.canvas.strokes.push({
+    const partition = canvasPartitionIndex(first.y);
+    const expansion = expandCompositePartition(partition, first);
+    first.x += expansion.dx;
+    first.y += expansion.dy;
+    Object.assign(first, clampCanvasPointToPartition(first, partition));
+    const remoteStroke = {
       id: String(message.id || ""),
       source: "phone",
       remoteFrame: message.frame,
       remoteWidth: Number(message.width) || 2.2,
       remotePoints: [message.point],
-      points: [{ x: first.x, y: first.y }],
+      points: [canvasStrokePoint(first)],
       color: message.tool === "eraser" ? "#fff" : "#162a29",
       tool: message.tool === "eraser" ? "eraser" : "pen",
       width: (Number(message.width) || 2.2) * firstScreen.scale,
-    });
+      partition,
+    };
+    state.canvas.strokes.push(remoteStroke);
     drawCanvas();
   } else if (message.type === "stroke_points") {
     if (state.canvas.draftRegion?.id === String(message.id || "")) {
@@ -6284,8 +7047,14 @@ function applyPhoneCanvasMessage(message) {
     if (!stroke || !Array.isArray(message.points)) return;
     message.points.forEach((point) => {
       const mapped = phoneCanvasMapPoint(point, message.frame);
+      const world = canvasRegionScreenToWorld(mapped);
+      const expansion = expandCompositePartition(stroke.partition, world);
+      world.x += expansion.dx;
+      world.y += expansion.dy;
+      Object.assign(world, clampCanvasPointToPartition(world, stroke.partition));
+      const inkPoint = canvasStrokePoint(world);
       stroke.remotePoints.push(point);
-      stroke.points.push(canvasRegionScreenToWorld(mapped));
+      stroke.points.push(inkPoint);
     });
     drawCanvas();
   } else if (message.type === "stroke_end") {
@@ -6296,6 +7065,7 @@ function applyPhoneCanvasMessage(message) {
       drawCanvasRegionOverlay();
       syncPhoneCanvasSetup();
     } else state.canvas.active = null;
+    persistCanvasDraft();
   } else if (message.type === "undo") {
     const targetId = String(message.id || "");
     if (state.canvas.stage === "regions") {
@@ -6334,7 +7104,38 @@ function applyPhoneCanvasMessage(message) {
     invalidateCanvasTranscription();
     state.canvas.strokes = state.canvas.strokes.filter((stroke) => stroke.source !== "phone");
     drawCanvas();
+  } else if (message.type === "graph_count") {
+    const count = Number(message.count);
+    const questionTag = sanitizeLearnerFacingText(String(message.question_tag || "")).trim().slice(0, 24);
+    if (!["graph-setup", "writing"].includes(state.canvas.stage) || state.canvas.graphLayout || !Number.isSafeInteger(count) || count < 1 || count > CANVAS_LAYOUT_MAX_FUNCTION_COUNT || !canvasQuestionTagIsValid(questionTag)) {
+      phoneCanvasSend({ type: "submission_error", message: "Enter a question number and a whole number of functions greater than 0." });
+      return;
+    }
+    configureCanvasCompositeLayout(count, { questionTag, combine: Boolean(message.combine) });
+  } else if (message.type === "add_partition") {
+    const kind = message.kind === "function" ? "function" : message.kind === "writing" ? "writing" : "";
+    const questionTag = sanitizeLearnerFacingText(String(message.question_tag || "")).trim().slice(0, 24);
+    if (!kind || !canvasQuestionTagIsValid(questionTag)) {
+      phoneCanvasSend({ type: "submission_error", message: "Enter a valid question or subquestion number for the new partition." });
+      return;
+    }
+    if (kind === "writing") addCompositeWritePartition(questionTag, true);
+    else {
+      const count = Number(message.count);
+      if (!Number.isSafeInteger(count) || count < 1 || count > CANVAS_LAYOUT_MAX_FUNCTION_COUNT) {
+        phoneCanvasSend({ type: "submission_error", message: "Enter a whole number of functions from 1 to 128." });
+        return;
+      }
+      addCompositeFunctionGroup(count, questionTag, Boolean(message.combine), true);
+    }
+  } else if (message.type === "delete_partitions") {
+    const partitions = Array.isArray(message.partitions) ? message.partitions : [];
+    deleteCanvasPartitions(partitions);
   } else if (message.type === "submit") {
+    if (state.canvas.stage === "writing" && state.canvas.mode === "composite") {
+      $("#canvasReadWritingButton").click();
+      return;
+    }
     if (state.canvas.stage === "writing" && state.canvas.mode === "graph") {
       if (!state.canvas.strokes.length) {
         const messageText = "Draw the graph before asking for a review.";
@@ -6462,7 +7263,7 @@ function connectPhoneCanvasSocket(session) {
 
 async function startPhoneCanvas() {
   if (state.canvas?.mode === "graph" && (!Number.isSafeInteger(state.canvas.graphFunctionCount) || state.canvas.graphFunctionCount < 1)) {
-    setStatus($("#canvasGraphCountStatus"), "Enter a whole number greater than 0 before opening the phone canvas.", "error");
+    setStatus($("#canvasGraphCountStatus"), "Enter a whole number from 1 to 128 before opening the phone canvas.", "error");
     $("#canvasGraphFunctionCount").focus({ preventScroll: true });
     return;
   }
@@ -6507,7 +7308,8 @@ function openCanvas(mode, question) {
   state.canvasQuestion = question || null;
   state.canvasReturnFocus = document.activeElement;
   const graphMode = mode.endsWith("graph");
-  state.canvas = { mode: graphMode ? "graph" : "write", stage: graphMode ? "graph-setup" : "writing", graphFunctionCount: 0, regions: [], regionKind: "words", draftRegion: null, strokes: [], scale: 1, offsetX: 0, offsetY: 0, pan: false, zoom: false, eraser: false, revision: 0, transcribedPhoto: null, photoPromise: null, active: null, drag: null, pointers: new Map(), pinch: null, size: { width: 0, height: 0 }, writingViewport: null, readingConfirmed: false, readingApplied: false, confirmedReading: null, readingAlternatives: [], graphWorkflow: null, questionAwareGraph: Boolean(question) || mode.startsWith("practice") || mode.startsWith("exam") || (mode === "ask-graph" && Boolean(state.selectedPaperQuestion)) };
+  state.canvas = { mode: graphMode ? "graph" : "write", stage: graphMode ? "graph-setup" : "writing", graphFunctionCount: 0, graphLayout: null, graphSketchIndex: 0, reviewingGraph: false, regions: [], regionKind: "words", draftRegion: null, strokes: [], answerLabel: "", answerMarkers: [], selectedPartitions: [], scale: 1, offsetX: 0, offsetY: 0, pan: false, zoom: false, eraser: false, revision: 0, transcribedPhoto: null, photoPromise: null, active: null, drag: null, pointers: new Map(), pinch: null, size: { width: 0, height: 0 }, writingViewport: null, readingConfirmed: false, readingApplied: false, confirmedReading: null, readingAlternatives: [], graphWorkflow: null, questionAwareGraph: Boolean(question) || mode.startsWith("practice") || mode.startsWith("exam") || (mode === "ask-graph" && Boolean(state.selectedPaperQuestion)) };
+  $("#canvasDrawGraphsButton").textContent = "+ Function";
   $("#canvasTitle").textContent = mode.endsWith("graph") ? "Draw a graph" : mode === "ask-write" ? "Write words / maths" : "Write or draw your answer";
   $("#canvasPanButton").setAttribute("aria-pressed", "false");
   $("#canvasPanButton").setAttribute("aria-label", "Enable pan mode");
@@ -6519,8 +7321,10 @@ function openCanvas(mode, question) {
   $("#canvasEraserButton").setAttribute("aria-label", "Enable eraser");
   $("#canvasEraserButton").textContent = "Eraser";
   $("#canvasReadWritingButton").textContent = graphMode ? "Review graph" : "Next";
+  $("#canvasDrawGraphsButton").hidden = graphMode;
   $("#canvasGraphCountPanel").hidden = !graphMode;
   $("#canvasGraphFunctionCount").value = "";
+  $("#canvasDrawGraphsButton").hidden = graphMode;
   setStatus($("#canvasGraphCountStatus"), "");
   $(".canvas-layout").hidden = graphMode;
   $("#canvasHelpText").hidden = graphMode;
@@ -6548,7 +7352,7 @@ function openCanvas(mode, question) {
   $("#canvasGraphDetails").disabled = false;
   $("#canvasGraphDetails").hidden = false;
   $("#canvasGraphEquationLabel").hidden = false;
-  $("#canvasGraphReviewFields").hidden = !mode.endsWith("graph");
+  $("#canvasGraphReviewFields").hidden = !graphMode;
   $("#canvasGraphGuidedPanel").hidden = true;
   $("#canvasGraphPreviewPanel").hidden = true;
   $("#canvasGraphPreview").replaceChildren();
@@ -6563,10 +7367,12 @@ function openCanvas(mode, question) {
   const askPaperQuestion = (mode === "ask-write" || mode === "ask-graph") && state.selectedPaperQuestion;
   const hasQuestionSidebar = mode.startsWith("practice") || mode.startsWith("exam") || Boolean(askPaperQuestion);
   const sidebar = $("#canvasQuestionSidebar");
-  sidebar.hidden = !hasQuestionSidebar;
-  $(".canvas-layout").classList.toggle("has-question", hasQuestionSidebar);
+  const compactPortrait = window.matchMedia?.("(max-width: 640px) and (orientation: portrait)").matches;
+  const showQuestionSidebar = hasQuestionSidebar && !compactPortrait;
+  sidebar.hidden = !showQuestionSidebar;
+  $(".canvas-layout").classList.toggle("has-question", showQuestionSidebar);
   $("#toggleQuestionSidebar").hidden = !hasQuestionSidebar;
-  $("#toggleQuestionSidebar").textContent = "Hide Q";
+  $("#toggleQuestionSidebar").textContent = showQuestionSidebar ? "Hide Q" : "Show Q";
   const image = $("#canvasQuestionImage");
   image.hidden = true;
   image.removeAttribute("src");
@@ -6587,34 +7393,53 @@ function openCanvas(mode, question) {
   requestAnimationFrame(() => {
     resizeCanvas();
     drawCanvas();
+    updateCanvasStage();
     $("#workingCanvas").focus({ preventScroll: true });
   });
 }
 
 function updateCanvasStage() {
   const canvas = state.canvas;
+  updateCanvasPartitionDeleteButton();
   const selecting = canvas.stage === "regions";
   const graphSetup = canvas.stage === "graph-setup";
   const reviewPending = ["transcribing", "review"].includes(canvas.stage);
+  const compositeWriting = canvas.mode === "composite" && canvas.stage === "writing" && !canvas.reviewingGraph;
+  const waitingForGraph = canvas.mode === "composite" && canvas.graphLayout && (canvas.graphWorkflow?.functions?.length || 0) < canvas.graphLayout.count;
   $("#canvasDialog").classList.toggle("canvas-selecting-regions", selecting);
+  $("#canvasDialog").classList.toggle("canvas-composite-layout", Boolean(canvas.graphLayout));
   $("#canvasGraphCountPanel").hidden = !graphSetup;
-  $(".canvas-layout").hidden = graphSetup;
+  $(".canvas-layout").hidden = graphSetup && canvas.mode === "graph";
   $("#canvasHelpText").hidden = graphSetup || selecting || reviewPending;
   $$(".canvas-region-tool").forEach((button) => {
     button.hidden = !selecting;
     button.setAttribute("aria-pressed", String(button.dataset.canvasRegionKind === canvas.regionKind));
   });
   $("#canvasBackWritingButton").hidden = !selecting;
+  $("#canvasDrawGraphsButton").hidden = selecting || reviewPending || graphSetup || canvas.mode === "graph" || Boolean(canvas.graphLayout);
+  $("#canvasAddWritePartitionButton").hidden = !compositeWriting;
+  $("#canvasAddFunctionPartitionButton").hidden = !compositeWriting;
+  if (compositeWriting) {
+    const nextFunction = (canvas.graphWorkflow?.functions?.length || 0) + 1;
+    const addFunctionButton = $("#canvasAddFunctionPartitionButton");
+    addFunctionButton.textContent = "+ Function";
+    addFunctionButton.setAttribute("aria-label", "Add function partitions");
+    addFunctionButton.title = "Add one or more function partitions for a question";
+  }
   $("#canvasReadWritingButton").hidden = selecting || ["graph-setup", "transcribing", "review"].includes(canvas.stage);
-  $("#canvasReadWritingButton").textContent = canvas.mode === "graph" ? "Review graph" : "Next";
+  $("#canvasReadWritingButton").textContent = canvas.mode === "graph" ? "Review graph"
+    : waitingForGraph ? `Review function ${(canvas.graphWorkflow?.functions?.length || 0) + 1}`
+      : canvas.mode === "composite" ? (canvas.graphWorkflow?.stage === "all-ready" ? "Select writing areas" : "Next") : "Next";
   if (selecting) $("#canvasHelpText").textContent = "Choose Words, Maths, or Drawings, then mark each area on the canvas. Select all the work you want reviewed.";
   else if (canvas.mode === "graph") $("#canvasHelpText").textContent = `Draw the graph with your phone or touch screen. The graph should contain ${canvas.graphFunctionCount} function${canvas.graphFunctionCount === 1 ? "" : "s"}.`;
+  else if (canvas.graphLayout) $("#canvasHelpText").textContent = `Write and sketch in the coloured sections. Add a Write or Function section whenever the question needs more work. The canvas grows in every direction.`;
   else $("#canvasHelpText").textContent = "Write or draw, select Next, then mark Words, Maths, or Drawings on this canvas before transcribing. On other devices, pair your phone.";
   const finishButton = $("#finishCanvas");
   finishButton.textContent = canvas.stage === "regions" ? "Transcribe"
     : canvas.stage === "transcribing" ? "Processing…"
       : canvas.stage === "review" && canvas.readingConfirmed ? "Add to answer"
-        : canvas.stage === "review" && canvas.mode === "graph" && canvas.graphWorkflow ? "Continue graph review"
+        : canvas.stage === "review" && (canvas.mode === "graph" || canvas.reviewingGraph) && canvas.graphWorkflow
+          ? canvas.mode === "graph" ? "Continue graph review" : "Continue function review"
         : "Review and use";
   finishButton.disabled = canvas.stage === "transcribing" || canvas.graphWorkflow?.stage === "reconstructing";
   drawCanvas();
@@ -6634,12 +7459,1058 @@ function enterCanvasRegionSelection() {
   renderCanvasRegionSnapshots();
   setCanvasReadingStatus("Choose Words, Maths, or Drawings, then mark each area on the computer canvas. Select all of the work you want transcribed.");
   updateCanvasStage();
+  requestAnimationFrame(() => $("#canvasReadingReview").scrollIntoView({ behavior: "smooth", block: "start" }));
 }
 
-function syncPhoneCanvasSetup() {
+function configureCanvasCompositeLayout(count, { questionTag = "", combine = false } = {}) {
+  const canvas = state.canvas;
+  const surface = workingCanvas.parentElement;
+  const viewport = workingCanvas.getBoundingClientRect();
+  const writingHeight = Math.max(320, viewport.height || surface?.clientHeight || 480);
+  const graphHeight = Math.max(320, Math.round(writingHeight * 0.82));
+  const width = Math.max(320, viewport.width || surface?.clientWidth || 640);
+  canvas.mode = "composite";
+  canvas.graphFunctionCount = count;
+  canvas.graphSketchIndex = 0;
+  const partitionHeights = [writingHeight, ...Array(count).fill(graphHeight)];
+  canvas.graphLayout = {
+    writingHeight, graphHeight, count, partitionHeights,
+    partitionKinds: ["writing", ...Array(count).fill("function")],
+    partitionFunctions: [0, ...Array.from({ length: count }, (_, index) => index + 1)],
+    partitionTags: ["", ...Array(count).fill(questionTag)],
+    functionGroups: [{ id: globalThis.crypto?.randomUUID?.() || `group-${Date.now()}`, startFunction: 1, count, questionTag, combine }],
+    totalWidth: width, totalHeight: partitionHeights.reduce((sum, height) => sum + height, 0),
+  };
+  canvas.activePartitionIndex = 1;
+  canvas.fitAll = false;
+  canvas.graphWorkflow = { stage: "sketches", functionCount: count, functionIndex: 1, functions: [], points: [], promptQueue: [], extraPointCount: 0 };
+  canvas.stage = "writing";
+  canvas.activePartitionIndex = 1;
+  canvas.scale = 1;
+  canvas.offsetX = 0;
+  canvas.offsetY = 0;
+  canvas.resizePreserveTop = false;
+  setCompositeCanvasDimensions();
+  requestAnimationFrame(() => {
+    resizeCanvas();
+    drawCanvas();
+    updateCanvasStage();
+    focusCanvasFunctionAxes(1, partitionHeights);
+    syncPhoneCanvasSetup(1, true);
+    persistCanvasDraft();
+  });
+  setStatus($("#canvasGraphCountStatus"), "");
+  $("#canvasGraphCountPanel").hidden = true;
+  if (combine && count > 1) showToast("Draw each function individually in its own partition. After each review, SharperTime will show them together on one set of axes.");
+}
+
+function compositeFallbackDimensions() {
+  const surface = workingCanvas.parentElement;
+  const width = Math.max(320, Math.min(2048, Number(surface?.clientWidth) || window.innerWidth || 640));
+  const writingHeight = Math.max(360, Math.min(1200, Number(surface?.clientHeight) || window.innerHeight || 480));
+  return { width, writingHeight, graphHeight: Math.max(320, Math.round(writingHeight * 0.82)) };
+}
+
+function compositeLayoutRawHeights(layout) {
+  if (Array.isArray(layout?.partitionHeights)) return layout.partitionHeights.map(Number);
+  const count = Math.max(0, Math.min(CANVAS_LAYOUT_MAX_FUNCTION_COUNT, Math.trunc(Number(layout?.count) || 0)));
+  if (count === 0 && Array.isArray(layout?.partitionKinds) && layout.partitionKinds.length === 0) return [];
+  const writingHeight = Number(layout?.writingHeight) || 480;
+  const graphHeight = Number(layout?.graphHeight) || Math.round(writingHeight * 0.82);
+  return [writingHeight, ...Array(count).fill(graphHeight)];
+}
+
+function compositeLayoutNeedsRepair(layout) {
+  if (!layout) return false;
+  const count = Math.trunc(Number(layout.count) || 0);
+  const width = Number(layout.totalWidth);
+  const heights = compositeLayoutRawHeights(layout);
+  const kindsLength = Array.isArray(layout.partitionKinds) ? layout.partitionKinds.length : count + 1;
+  const totalHeight = heights.reduce((sum, height) => sum + height, 0);
+  const isEmptyWorkspace = count === 0 && heights.length === 0 && kindsLength === 0;
+  return count < 0 || count > CANVAS_LAYOUT_MAX_FUNCTION_COUNT
+    || !Number.isFinite(width) || width < 1 || width > CANVAS_LAYOUT_MAX_WIDTH
+    || (!isEmptyWorkspace && heights.length < 1) || heights.length > CANVAS_LAYOUT_MAX_PARTITION_COUNT
+    || kindsLength > CANVAS_LAYOUT_MAX_PARTITION_COUNT
+    || heights.length !== kindsLength
+    || heights.some((height) => !Number.isFinite(height) || height < 320 || height > CANVAS_LAYOUT_MAX_PARTITION_HEIGHT)
+    || !Number.isFinite(totalHeight) || totalHeight > CANVAS_LAYOUT_MAX_TOTAL_HEIGHT;
+}
+
+function compositePartitionHeights(layout = state.canvas?.graphLayout) {
+  if (!layout) return [];
+  if (compositeLayoutNeedsRepair(layout)) {
+    const defaults = compositeFallbackDimensions();
+    const kinds = Array.isArray(layout.partitionKinds) && layout.partitionKinds.length >= 1 && layout.partitionKinds.length <= CANVAS_LAYOUT_MAX_PARTITION_COUNT
+      ? layout.partitionKinds
+      : ["writing", ...Array(Math.max(0, Math.min(CANVAS_LAYOUT_MAX_FUNCTION_COUNT, Math.trunc(Number(layout.count) || 0)))).fill("function")];
+    return kinds.map((kind) => kind === "function" ? defaults.graphHeight : defaults.writingHeight);
+  }
+  return compositeLayoutRawHeights(layout);
+}
+
+function normalizeCompositeLayout(layout) {
+  if (!layout || Number(layout.count) < 0) return null;
+  const needsRepair = compositeLayoutNeedsRepair(layout);
+  const defaults = compositeFallbackDimensions();
+  const count = Math.max(0, Math.min(CANVAS_LAYOUT_MAX_FUNCTION_COUNT, Math.trunc(Number(layout.count) || 0)));
+  const legacyKinds = ["writing", ...Array(count).fill("function")];
+  const explicitKinds = Array.isArray(layout.partitionKinds);
+  const sourceKinds = explicitKinds && layout.partitionKinds.length <= CANVAS_LAYOUT_MAX_PARTITION_COUNT
+    ? layout.partitionKinds
+    : legacyKinds;
+  const partitionKinds = sourceKinds.map((kind) => kind === "function" ? "function" : "writing");
+  const sourceFunctions = Array.isArray(layout.partitionFunctions) && layout.partitionFunctions.length === partitionKinds.length
+    ? layout.partitionFunctions
+    : (() => {
+      let functionNumber = 0;
+      return partitionKinds.map((kind) => kind === "function" ? ++functionNumber : 0);
+    })();
+  const partitionFunctions = sourceFunctions.map((value) => Math.max(0, Math.trunc(Number(value) || 0)));
+  const partitionTags = partitionKinds.map((_, index) => sanitizeLearnerFacingText(String(layout.partitionTags?.[index] || "")).trim().slice(0, 24));
+  const functionGroups = Array.isArray(layout.functionGroups)
+    ? layout.functionGroups.filter((group) => Number.isSafeInteger(Number(group?.startFunction)) && Number(group.startFunction) > 0 && Number.isSafeInteger(Number(group?.count)) && Number(group.count) > 0)
+      .map((group) => ({
+        id: String(group.id || `group-${group.startFunction}`),
+        startFunction: Number(group.startFunction),
+        count: Number(group.count),
+        questionTag: sanitizeLearnerFacingText(String(group.questionTag || "")).trim().slice(0, 24),
+        combine: Boolean(group.combine),
+      }))
+    : [{ id: "legacy-functions", startFunction: 1, count: Math.max(count, ...partitionFunctions), questionTag: "", combine: false }];
+  const partitionHeights = needsRepair
+    ? partitionKinds.map((kind) => kind === "function" ? defaults.graphHeight : defaults.writingHeight)
+    : compositeLayoutRawHeights(layout);
+  const functionCount = Math.max(count, ...partitionFunctions);
+  const totalHeight = partitionHeights.reduce((sum, height) => sum + height, 0);
+  return {
+    ...layout,
+    count: functionCount,
+    writingHeight: partitionHeights[partitionKinds.findIndex((kind) => kind === "writing")] ?? Math.max(320, Number(layout.writingHeight) || defaults.writingHeight),
+    graphHeight: partitionHeights[partitionKinds.findIndex((kind) => kind === "function")] ?? partitionHeights[1] ?? 320,
+    partitionHeights,
+    partitionKinds,
+    partitionFunctions,
+    partitionTags,
+    functionGroups,
+    totalWidth: needsRepair ? defaults.width : Math.max(320, Number(layout.totalWidth) || defaults.width),
+    totalHeight,
+  };
+}
+
+function setCompositeCanvasDimensions() {
+  const canvas = state.canvas;
+  const layout = canvas?.graphLayout;
+  if (!layout) return;
+  canvas.zoomBoundsCache = null;
+  const surface = workingCanvas.parentElement;
+  const width = canvas.fitAll ? Math.max(1, surface?.clientWidth || workingCanvas.clientWidth) : layout.totalWidth;
+  const height = canvas.fitAll
+    ? Math.max(1, surface?.clientHeight || workingCanvas.clientHeight)
+    : Math.max(320, Number(layout.totalHeight) || Number(layout.writingHeight) || 480);
+  workingCanvas.style.width = `${width}px`;
+  workingCanvas.style.height = `${height}px`;
+  $("#canvasRegionOverlay").style.width = `${width}px`;
+  $("#canvasRegionOverlay").style.height = `${height}px`;
+  $("#canvasDialog").classList.toggle("canvas-fit-all", Boolean(canvas.fitAll));
+  const rect = workingCanvas.getBoundingClientRect();
+  if (rect.width && rect.height) {
+    canvas.size = { width: rect.width, height: rect.height };
+    sizeCanvasBackingStore(workingCanvas, rect.width, rect.height);
+  }
+}
+
+function canvasBackingScale(width, height) {
+  const safeWidth = Math.max(1, Number(width) || 1);
+  const safeHeight = Math.max(1, Number(height) || 1);
+  const maxEdge = 4096;
+  const maxPixels = 2_000_000;
+  return Math.min(
+    Math.min(3, Math.max(1, Number(window.devicePixelRatio) || 1)),
+    maxEdge / safeWidth,
+    maxEdge / safeHeight,
+    Math.sqrt(maxPixels / (safeWidth * safeHeight)),
+  );
+}
+
+function sizeCanvasBackingStore(canvas, width, height) {
+  const ratio = canvasBackingScale(width, height);
+  const pixelWidth = Math.max(1, Math.round(width * ratio));
+  const pixelHeight = Math.max(1, Math.round(height * ratio));
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+  }
+  return ratio;
+}
+
+function drawCanvasFunctionAxes(context, width, top, height, displayScale = state.canvas?.scale) {
+  const scale = Math.max(0.0001, Number(displayScale) || 1);
+  const horizontalMargin = Math.min(width * 0.12, 28 / scale);
+  const verticalMargin = height * 0.2;
+  const left = horizontalMargin;
+  const right = width - horizontalMargin;
+  const axisTop = top + verticalMargin;
+  const bottom = top + height - verticalMargin;
+  if (right - left < 40 || bottom - axisTop < 40) return;
+
+  const originX = left + (right - left) * 0.42;
+  const originY = axisTop + (bottom - axisTop) * 0.56;
+  const arrowLength = 8 / scale;
+  const arrowHalfHeight = 4 / scale;
+  context.save();
+  context.strokeStyle = "#34536f";
+  context.fillStyle = "#34536f";
+  context.lineWidth = 2.2 / scale;
+  context.setLineDash([]);
+  context.beginPath();
+  context.moveTo(left, originY);
+  context.lineTo(right, originY);
+  context.moveTo(originX, bottom);
+  context.lineTo(originX, axisTop);
+  context.stroke();
+
+  context.beginPath();
+  context.moveTo(right, originY);
+  context.lineTo(right - arrowLength, originY - arrowHalfHeight);
+  context.lineTo(right - arrowLength, originY + arrowHalfHeight);
+  context.closePath();
+  context.fill();
+  context.beginPath();
+  context.moveTo(originX, axisTop);
+  context.lineTo(originX - arrowHalfHeight, axisTop + arrowLength);
+  context.lineTo(originX + arrowHalfHeight, axisTop + arrowLength);
+  context.closePath();
+  context.fill();
+
+  context.font = `600 ${14 / scale}px system-ui, sans-serif`;
+  context.fillText("x", right - 10 / scale, originY - 8 / scale);
+  context.fillText("y", originX + 8 / scale, axisTop + 14 / scale);
+  context.restore();
+}
+
+function canvasPartitionKind(index, layout = state.canvas?.graphLayout) {
+  return layout?.partitionKinds?.[index] || (index === 0 ? "writing" : "function");
+}
+
+function canvasPartitionForFunction(functionNumber, layout = state.canvas?.graphLayout) {
+  const target = Math.trunc(Number(functionNumber));
+  if (!Number.isSafeInteger(target) || target < 1 || !Array.isArray(layout?.partitionFunctions)) return -1;
+  const index = layout.partitionFunctions.findIndex((value, partition) =>
+    canvasPartitionKind(partition, layout) === "function" && Number(value) === target);
+  return index >= 0 ? index : -1;
+}
+
+function canvasPartitionIsWriting(index, layout = state.canvas?.graphLayout) {
+  return canvasPartitionKind(index, layout) === "writing";
+}
+
+function canvasQuestionTagIsValid(value) {
+  return /^\d+(?:\.\d+)*(?:\([a-z0-9ivxlcdm]+\))*$/i.test(String(value || "").trim());
+}
+
+function positionCanvasPromptDialog() {
+  const dialog = $("#canvasPromptDialog");
+  if (!dialog) return;
+  const viewport = window.visualViewport;
+  const height = Math.max(180, Number(viewport?.height) || window.innerHeight || 600);
+  const top = Math.max(0, Number(viewport?.offsetTop) || 0);
+  dialog.style.setProperty("--canvas-prompt-center-y", `${Math.round(top + height / 2)}px`);
+  dialog.style.setProperty("--canvas-prompt-max-height", `${Math.max(160, height - 24)}px`);
+}
+
+function openCanvasPromptDialog(message, options = {}) {
+  const dialog = $("#canvasPromptDialog");
+  if (!dialog || dialog.open) return Promise.resolve(null);
+  const form = $("#canvasPromptForm");
+  const messageNode = $("#canvasPromptMessage");
+  const inputLabel = $("#canvasPromptInputLabel");
+  const input = $("#canvasPromptInput");
+  const cancelButton = $("#canvasPromptCancel");
+  const acceptButton = $("#canvasPromptAccept");
+  const hasInput = Boolean(options.inputLabel);
+
+  messageNode.textContent = message;
+  inputLabel.textContent = options.inputLabel || "";
+  inputLabel.hidden = !hasInput;
+  input.hidden = !hasInput;
+  input.value = options.initialValue ?? "";
+  input.inputMode = options.inputMode || "text";
+  input.setAttribute("aria-label", options.inputLabel || "SharperTime response");
+  cancelButton.hidden = options.cancelLabel === null;
+  cancelButton.disabled = options.cancelLabel === null;
+  cancelButton.textContent = options.cancelLabel || "Cancel";
+  acceptButton.textContent = options.acceptLabel || "OK";
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const viewport = window.visualViewport;
+    const finish = (result) => {
+      if (settled) return;
+      settled = true;
+      form.removeEventListener("submit", onSubmit);
+      cancelButton.removeEventListener("click", onCancel);
+      dialog.removeEventListener("cancel", onDialogCancel);
+      window.removeEventListener("resize", positionCanvasPromptDialog);
+      viewport?.removeEventListener("resize", positionCanvasPromptDialog);
+      viewport?.removeEventListener("scroll", positionCanvasPromptDialog);
+      if (dialog.open) dialog.close();
+      dialog.style.removeProperty("--canvas-prompt-center-y");
+      dialog.style.removeProperty("--canvas-prompt-max-height");
+      resolve(result);
+    };
+    const onSubmit = (event) => {
+      event.preventDefault();
+      finish({ accepted: true, value: hasInput ? input.value : "" });
+    };
+    const onCancel = () => finish(options.cancelResult ?? null);
+    const onDialogCancel = (event) => {
+      event.preventDefault();
+      finish(options.cancelResult ?? null);
+    };
+    form.addEventListener("submit", onSubmit);
+    cancelButton.addEventListener("click", onCancel);
+    dialog.addEventListener("cancel", onDialogCancel);
+    positionCanvasPromptDialog();
+    window.addEventListener("resize", positionCanvasPromptDialog);
+    viewport?.addEventListener("resize", positionCanvasPromptDialog);
+    viewport?.addEventListener("scroll", positionCanvasPromptDialog);
+    dialog.scrollTop = 0;
+    dialog.showModal();
+    positionCanvasPromptDialog();
+    if (hasInput) {
+      input.focus({ preventScroll: true });
+      input.select();
+      requestAnimationFrame(positionCanvasPromptDialog);
+    } else acceptButton.focus({ preventScroll: true });
+  });
+}
+
+async function showCanvasMessage(message) {
+  await openCanvasPromptDialog(message, { inputLabel: "", cancelLabel: null });
+}
+
+async function askCanvasChoice(message, { acceptLabel = "Yes", cancelLabel = "No" } = {}) {
+  const result = await openCanvasPromptDialog(message, {
+    inputLabel: "",
+    acceptLabel,
+    cancelLabel,
+    cancelResult: { accepted: false, value: "" },
+  });
+  return Boolean(result?.accepted);
+}
+
+async function promptCanvasPartitionTag(kind) {
+  const kindLabel = kind === "function" ? "function" : "writing";
+  let previousValue = "";
+  while (true) {
+    const result = await openCanvasPromptDialog(
+      `Enter the question number if it has no subquestions, or the subquestion number for this ${kindLabel} partition (for example, 4 or 4.3). Complete only this one question or subquestion in this partition.`,
+      { inputLabel: "Question or subquestion number", initialValue: previousValue },
+    );
+    if (result === null) return null;
+    previousValue = result.value;
+    const tag = sanitizeLearnerFacingText(result.value).trim().slice(0, 24);
+    if (canvasQuestionTagIsValid(tag)) return tag;
+    await showCanvasMessage("Enter a question number such as 4, 4.3, or 4.3(a).");
+  }
+}
+
+async function promptCanvasFunctionGroup() {
+  const tag = await promptCanvasPartitionTag("function");
+  if (tag === null) return null;
+  const layout = state.canvas?.graphLayout;
+  const currentCount = Number(layout?.count) || 0;
+  const graphHeight = Number(layout?.graphHeight) || 400;
+  const currentPartitions = Array.isArray(layout?.partitionKinds) ? layout.partitionKinds.length : 1;
+  const maxBySize = Math.floor((CANVAS_LAYOUT_MAX_TOTAL_HEIGHT - (Number(layout?.totalHeight) || 0)) / Math.max(320, graphHeight));
+  const maxCount = Math.max(0, Math.min(
+    CANVAS_LAYOUT_MAX_FUNCTION_COUNT - currentCount,
+    CANVAS_LAYOUT_MAX_PARTITION_COUNT - currentPartitions,
+    maxBySize,
+  ));
+  if (maxCount < 1) {
+    showToast("There is not enough room to add another function partition. Review or submit the current work first.");
+    return null;
+  }
+  let count = 0;
+  while (count < 1 || count > maxCount) {
+    const result = await openCanvasPromptDialog(
+      `How many new functions does question ${tag} require? Enter a whole number greater than 0 (up to ${maxCount}). Each function will get its own partition.`,
+      { inputLabel: "Number of functions", initialValue: count ? String(count) : "1", inputMode: "numeric" },
+    );
+    if (result === null) return null;
+    const raw = result.value.trim();
+    if (!/^\d+$/.test(raw)) {
+      await showCanvasMessage("Enter a whole number greater than 0.");
+      continue;
+    }
+    count = Number(raw);
+    if (!Number.isSafeInteger(count) || count < 1 || count > maxCount) {
+      await showCanvasMessage(`Enter a whole number from 1 to ${maxCount}.`);
+      count = 0;
+    }
+  }
+  let combine = false;
+  if (count > 1) {
+    combine = await askCanvasChoice(`Should the ${count} functions for question ${tag} be combined on one set of axes after each has been reviewed?`, { acceptLabel: "Yes", cancelLabel: "No" });
+    await showCanvasMessage(combine
+      ? "Draw each function individually in its own partition. SharperTime will combine them on one set of axes after the function reviews."
+      : "Draw each function individually in its own partition. They will remain separate after review.");
+  }
+  return { count, questionTag: tag, combine };
+}
+
+function addCompositeWritePartition(questionTag, notifyPhone = true) {
+  const canvas = state.canvas;
+  const layout = canvas?.graphLayout ? normalizeCompositeLayout(canvas.graphLayout) : null;
+  if (!layout) return false;
+  canvas.graphLayout = layout;
+  if (canvas.fitAll) leaveCanvasFitAll();
+  const heights = compositePartitionHeights(layout);
+  const height = heights[layout.partitionKinds.findIndex((item) => item === "writing")] || layout.writingHeight || 480;
+  if (layout.partitionKinds.length >= CANVAS_LAYOUT_MAX_PARTITION_COUNT || layout.totalHeight + height > CANVAS_LAYOUT_MAX_TOTAL_HEIGHT) {
+    showToast("This canvas has reached its maximum workspace size. Review or submit the current work to continue.");
+    return true;
+  }
+  const newPartitionIndex = layout.partitionKinds.length;
+  layout.partitionHeights.push(height);
+  layout.partitionKinds.push("writing");
+  layout.partitionFunctions.push(0);
+  layout.partitionTags.push(questionTag);
+  layout.writingHeight = height;
+  layout.totalHeight += height;
+  canvas.stage = "writing";
+  canvas.activePartitionIndex = newPartitionIndex;
+  canvas.selectedPartitions = [];
+  canvas.fitAll = false;
+  canvas.drag = null;
+  canvas.pinch = null;
+  setCompositeCanvasDimensions();
+  canvas.resizePreserveWorld = true;
+  resizeCanvas();
+  drawCanvas();
+  updateCanvasStage();
+  scrollCanvasToPartition(newPartitionIndex, compositePartitionHeights(layout));
+  showToast(`A writing partition tagged ${questionTag} was added. Complete only that one question or subquestion in it.`);
+  if (notifyPhone) syncPhoneCanvasSetup(newPartitionIndex, true);
+  persistCanvasDraft();
+  return true;
+}
+
+function addCompositeFunctionGroup(count, questionTag, combine, notifyPhone = true) {
+  const canvas = state.canvas;
+  const layout = canvas?.graphLayout ? normalizeCompositeLayout(canvas.graphLayout) : null;
+  if (!layout || !Number.isSafeInteger(Number(count)) || Number(count) < 1) return false;
+  canvas.graphLayout = layout;
+  if (canvas.fitAll) leaveCanvasFitAll();
+  const functionCount = Number(count);
+  const heights = compositePartitionHeights(layout);
+  const functionHeight = heights[layout.partitionKinds.findIndex((item) => item === "function")] || layout.graphHeight || 400;
+  if (layout.count + functionCount > CANVAS_LAYOUT_MAX_FUNCTION_COUNT
+      || layout.partitionKinds.length + functionCount > CANVAS_LAYOUT_MAX_PARTITION_COUNT
+      || layout.totalHeight + functionHeight * functionCount > CANVAS_LAYOUT_MAX_TOTAL_HEIGHT) {
+    showToast("There is not enough room to add all of those function partitions. Choose a smaller number or review the current work.");
+    return true;
+  }
+  const insertionIndex = layout.partitionKinds.reduce((last, item, index) => item === "function" ? index + 1 : last, layout.partitionKinds[0] === "writing" ? 1 : 0);
+  const firstFunction = layout.count + 1;
+  const newPartitionIndex = insertionIndex;
+  for (let offset = 0; offset < functionCount; offset += 1) {
+    layout.partitionHeights.splice(insertionIndex + offset, 0, functionHeight);
+    layout.partitionKinds.splice(insertionIndex + offset, 0, "function");
+    layout.partitionFunctions.splice(insertionIndex + offset, 0, firstFunction + offset);
+    layout.partitionTags.splice(insertionIndex + offset, 0, questionTag);
+  }
+  for (const stroke of canvas.strokes) {
+    if (Number(stroke.partition) < insertionIndex) continue;
+    stroke.partition = Number(stroke.partition) + functionCount;
+    for (const point of stroke.points || []) point.y += functionHeight * functionCount;
+  }
+  layout.count += functionCount;
+  layout.functionGroups.push({
+    id: globalThis.crypto?.randomUUID?.() || `group-${Date.now()}`,
+    startFunction: firstFunction,
+    count: functionCount,
+    questionTag,
+    combine: Boolean(combine),
+  });
+  layout.writingHeight = layout.partitionHeights[layout.partitionKinds.findIndex((item) => item === "writing")] || layout.writingHeight;
+  layout.graphHeight = functionHeight;
+  layout.totalHeight = layout.partitionHeights.reduce((sum, height) => sum + height, 0);
+  canvas.graphFunctionCount = layout.count;
+  canvas.graphWorkflow ||= { stage: "sketches", functionCount: 0, functionIndex: 1, functions: [], points: [], promptQueue: [], extraPointCount: 0 };
+  canvas.graphWorkflow.functionCount = layout.count;
+  canvas.graphWorkflow.functionIndex = (canvas.graphWorkflow.functions?.length || 0) + 1;
+  canvas.graphWorkflow.stage = "sketches";
+  canvas.reviewingGraph = false;
+  canvas.readingConfirmed = false;
+  canvas.confirmedReading = null;
+  canvas.stage = "writing";
+  canvas.activePartitionIndex = newPartitionIndex;
+  canvas.selectedPartitions = [];
+  canvas.fitAll = false;
+  canvas.scale = 1;
+  canvas.offsetX = 0;
+  canvas.offsetY = 0;
+  canvas.pan = false;
+  canvas.zoom = false;
+  canvas.drag = null;
+  canvas.pinch = null;
+  setCompositeCanvasDimensions();
+  canvas.resizePreserveWorld = false;
+  canvas.ignoreResizeTransform = true;
+  resizeCanvas();
+  drawCanvas();
+  updateCanvasStage();
+  const combineNote = functionCount > 1 ? (combine ? " They will be combined after the reviews." : " They will remain separate after review.") : "";
+  $("#canvasHelpText").textContent = `Draw each function for question ${questionTag} in its own partition. Function ${firstFunction} is ready with x- and y-axes.${combineNote}`;
+  focusCanvasFunctionAxes(newPartitionIndex, compositePartitionHeights(layout));
+  showToast(`${functionCount} function partitions tagged ${questionTag} were added. Complete only this question or subquestion in them.`);
+  if (notifyPhone) syncPhoneCanvasSetup(newPartitionIndex, true);
+  persistCanvasDraft();
+  return true;
+}
+
+function addCompositePartition(kind, questionTag, notifyPhone = true) {
+  return kind === "writing"
+    ? addCompositeWritePartition(questionTag, notifyPhone)
+    : false;
+}
+
+function scrollCanvasToPartition(index, heights = compositePartitionHeights()) {
+  const surface = workingCanvas.parentElement;
+  if (!surface) return;
+  const top = Math.max(0, heights.slice(0, index).reduce((sum, height) => sum + height, 0) - 12);
+  const reveal = () => {
+    const canvasHeight = Math.max(workingCanvas.offsetHeight, Number.parseFloat(workingCanvas.style.height) || 0);
+    const maximum = Math.max(0, Math.max(surface.scrollHeight, canvasHeight) - surface.clientHeight);
+    surface.scrollTop = Math.min(top, maximum);
+    surface.scrollLeft = 0;
+  };
+  requestAnimationFrame(() => requestAnimationFrame(reveal));
+  window.setTimeout(reveal, 120);
+}
+
+function focusCanvasFunctionAxes(index, heights = compositePartitionHeights()) {
+  const canvas = state.canvas;
+  const layout = canvas?.graphLayout;
+  const surface = workingCanvas.parentElement;
+  if (!canvas || !layout || !surface || index < 0 || index >= heights.length || canvasPartitionKind(index, layout) !== "function") return;
+  const partitionTop = heights.slice(0, index).reduce((sum, height) => sum + height, 0);
+  const partitionHeight = Number(heights[index]) || layout.graphHeight || 400;
+  const headerHeight = Math.max(0, Math.min(partitionHeight - 80, CANVAS_PARTITION_HEADER_HEIGHT));
+  const axisAreaHeight = Math.max(1, partitionHeight - headerHeight);
+  const horizontalMargin = Math.min(layout.totalWidth * 0.12, 28);
+  const axisCenter = {
+    x: horizontalMargin + (layout.totalWidth - horizontalMargin * 2) * 0.42,
+    y: partitionTop + headerHeight + axisAreaHeight * 0.536,
+  };
+  canvas.activePartitionIndex = index;
+  canvas.fitAll = false;
+  canvas.scale = 1;
+  canvas.offsetX = 0;
+  canvas.offsetY = 0;
+  canvas.resizePreserveWorld = false;
+  canvas.ignoreResizeTransform = true;
+  setCompositeCanvasDimensions();
+  resizeCanvas();
+  drawCanvas();
+  updateCanvasNavigationButtons();
+
+  const reveal = () => {
+    const rect = workingCanvas.getBoundingClientRect();
+    const centerX = rect.width / 2 + canvas.offsetX + (axisCenter.x - rect.width / 2) * canvas.scale;
+    const centerY = rect.height / 2 + canvas.offsetY + (axisCenter.y - rect.height / 2) * canvas.scale;
+    const maxLeft = Math.max(0, Math.max(surface.scrollWidth, workingCanvas.offsetWidth) - surface.clientWidth);
+    const maxTop = Math.max(0, Math.max(surface.scrollHeight, workingCanvas.offsetHeight) - surface.clientHeight);
+    surface.scrollLeft = Math.max(0, Math.min(maxLeft, centerX - surface.clientWidth / 2));
+    surface.scrollTop = Math.max(0, Math.min(maxTop, centerY - surface.clientHeight / 2));
+  };
+  requestAnimationFrame(() => requestAnimationFrame(reveal));
+  window.setTimeout(reveal, 140);
+}
+
+function focusCanvasPartition(index, heights = compositePartitionHeights()) {
+  const canvas = state.canvas;
+  if (!canvas?.graphLayout) return;
+  canvas.activePartitionIndex = index;
+  canvas.fitAll = false;
+  canvas.scale = 1;
+  canvas.offsetX = 0;
+  canvas.offsetY = 0;
+  canvas.pinch = null;
+  canvas.drag = null;
+  canvas.pan = false;
+  canvas.zoom = false;
+  updateCanvasNavigationButtons();
+  canvas.resizePreserveWorld = true;
+  setCompositeCanvasDimensions();
+  resizeCanvas();
+  drawCanvas();
+  updateCanvasStage();
+  if (canvasPartitionKind(index) === "function") {
+    const functionNumber = canvas.graphLayout.partitionFunctions[index] || index;
+    $("#canvasHelpText").textContent = `Function ${functionNumber} is ready in the highlighted area. Its x- and y-axes are shown; sketch the function there.`;
+  } else {
+    $("#canvasHelpText").textContent = "Write words or maths in the highlighted writing area.";
+  }
+  scrollCanvasToPartition(index, heights);
+  syncPhoneCanvasSetup(index);
+  persistCanvasDraft();
+}
+
+function updateCanvasNavigationButtons() {
+  const canvas = state.canvas;
+  const panButton = $("#canvasPanButton");
+  const zoomButton = $("#canvasZoomButton");
+  if (!canvas || !panButton || !zoomButton) return;
+  panButton.setAttribute("aria-pressed", String(Boolean(canvas.pan)));
+  panButton.setAttribute("aria-label", canvas.pan ? "Disable pan mode" : "Enable pan mode");
+  $("#canvasPanLabel").textContent = canvas.pan ? "Pan on" : "Pan";
+  zoomButton.setAttribute("aria-pressed", String(Boolean(canvas.zoom)));
+  zoomButton.setAttribute("aria-label", canvas.zoom ? "Disable zoom" : "Enable zoom");
+  zoomButton.textContent = canvas.zoom ? "Zoom on" : "Zoom off";
+}
+
+function canvasPartitionIndex(y, layout = state.canvas?.graphLayout) {
+  if (!layout || y < 0) return 0;
+  const heights = compositePartitionHeights(layout);
+  let boundary = 0;
+  for (let index = 0; index < heights.length; index += 1) {
+    if (heights[index] <= 0) continue;
+    boundary += heights[index];
+    if (y < boundary) return index;
+  }
+  for (let index = heights.length - 1; index >= 0; index -= 1) {
+    if (heights[index] > 0) return index;
+  }
+  return 0;
+}
+
+function canvasPartitionBounds(index, layout = state.canvas?.graphLayout) {
+  if (!layout) return { top: 0, bottom: workingCanvas.clientHeight };
+  const heights = compositePartitionHeights(layout);
+  const partition = Math.max(0, Math.min(heights.length - 1, Math.trunc(index)));
+  if (partition === 0) return { top: 0, bottom: heights[0] ?? layout.writingHeight ?? workingCanvas.clientHeight };
+  const top = heights.slice(0, partition).reduce((sum, height) => sum + height, 0);
+  return { top, bottom: top + heights[partition] };
+}
+
+function clampCanvasPointToPartition(point, index) {
+  const bounds = canvasPartitionBounds(index);
+  return {
+    x: Math.max(0, Math.min(state.canvas?.graphLayout?.totalWidth || state.canvas?.size?.width || workingCanvas.clientWidth || 1, point.x)),
+    y: Math.max(bounds.top, Math.min(bounds.bottom, point.y)),
+  };
+}
+
+function expandCompositePartition(index, point) {
+  const canvas = state.canvas;
+  const layout = canvas?.graphLayout;
+  const pointX = Number(point?.x);
+  const pointY = Number(point?.y);
+  if (!layout || !Number.isFinite(pointY)) return { dx: 0, dy: 0 };
+  const heights = compositePartitionHeights(layout);
+  const partition = Math.max(0, Math.min(heights.length - 1, Math.trunc(index)));
+  const { top, bottom } = canvasPartitionBounds(partition, layout);
+  let dx = 0;
+  let dy = 0;
+  let growthDown = 0;
+  let growthUp = 0;
+  let leftGrowth = 0;
+  let rightGrowth = 0;
+  const width = Math.max(1, Number(layout.totalWidth) || workingCanvas.clientWidth || 640);
+  const chunk = 160;
+  const maxOvershoot = chunk * 3;
+
+  if (Number.isFinite(pointX) && pointX < 40) {
+    if (pointX >= -maxOvershoot) leftGrowth = chunk;
+    dx = leftGrowth;
+  } else if (Number.isFinite(pointX) && pointX >= width - 40) {
+    if (pointX <= width + maxOvershoot) rightGrowth = chunk;
+  }
+  if (Number.isFinite(pointY) && pointY < top + 40) {
+    if (pointY >= top - maxOvershoot) growthUp = chunk;
+    if (partition === 0) {
+      dy = growthUp;
+      heights[0] += growthUp;
+    } else {
+      let remaining = growthUp;
+      for (let previous = partition - 1; previous >= 0 && remaining > 0; previous -= 1) {
+        const reduction = Math.min(heights[previous], remaining);
+        heights[previous] -= reduction;
+        remaining -= reduction;
+      }
+      heights[partition] += growthUp;
+    }
+  } else if (Number.isFinite(pointY) && pointY >= bottom - 40) {
+    if (pointY <= bottom + maxOvershoot) growthDown = chunk;
+    heights[partition] += growthDown;
+  }
+  if (!growthUp && !growthDown && !leftGrowth && !rightGrowth) return { dx: 0, dy: 0 };
+
+  const nextWidth = width + leftGrowth + rightGrowth;
+  const nextHeight = heights.reduce((sum, height) => sum + height, 0);
+  if (nextWidth > CANVAS_LAYOUT_MAX_WIDTH || heights[partition] > CANVAS_LAYOUT_MAX_PARTITION_HEIGHT || nextHeight > CANVAS_LAYOUT_MAX_TOTAL_HEIGHT) {
+    showToast("This canvas section has reached its size limit. Add another Write or Function section to continue.");
+    return { dx: 0, dy: 0 };
+  }
+
+  layout.partitionHeights = heights;
+  layout.writingHeight = heights[layout.partitionKinds.findIndex((kind) => kind === "writing")] ?? heights[0];
+  layout.graphHeight = heights[layout.partitionKinds.findIndex((kind) => kind === "function")] ?? layout.graphHeight;
+  layout.totalWidth = nextWidth;
+  layout.totalHeight = nextHeight;
+  if (dx) {
+    for (const stroke of canvas.strokes) {
+      for (const item of stroke.points || []) item.x += dx;
+    }
+  }
+  if (dy) {
+    // The top writing area has no preceding partition, so make room above it
+    // by moving its ink and every section below it down together.
+    for (const stroke of canvas.strokes) {
+      for (const point of stroke.points || []) point.y += dy;
+    }
+  }
+  if (growthDown) {
+    for (const stroke of canvas.strokes) {
+      if (Number(stroke.partition) <= partition) continue;
+      for (const point of stroke.points || []) point.y += growthDown;
+    }
+  }
+
+  canvas.resizePreserveWorld = true;
+  setCompositeCanvasDimensions();
+  resizeCanvas();
+  drawCanvas();
+  if (!canvas.fitAll && (leftGrowth || rightGrowth || dy)) {
+    const surface = workingCanvas.parentElement;
+    if (surface) {
+      // Leave a writing buffer to the right. Scrolling to the new edge after
+      // every growth keeps the pointer on the threshold and would expand on
+      // every pointer sample, eventually exhausting the browser canvas.
+      const rightScroll = rightGrowth ? Math.max(0, rightGrowth - 128) : 0;
+      surface.scrollLeft += leftGrowth + rightScroll;
+      surface.scrollTop += dy;
+    }
+  }
+  syncPhoneCanvasLayout({ partition, growthDown, growthUp, leftGrowth, rightGrowth, topGrowth: dy });
+  persistCanvasDraft();
+  return { dx, dy };
+}
+
+function canvasStrokePoint(point) {
+  return {
+    x: Number(point.x),
+    y: Number(point.y),
+  };
+}
+
+function beginCompositeGraphReview() {
+  const canvas = state.canvas;
+  if (!canvas || canvas.stage !== "writing" || !canvas.graphLayout) return;
+  const functionIndex = (canvas.graphWorkflow?.functions?.length || 0) + 1;
+  if (functionIndex > canvas.graphLayout.count) {
+    const hasWrittenWork = canvas.strokes.some((stroke) => canvasPartitionIsWriting(stroke.partition) && stroke.points?.length);
+    if (hasWrittenWork) enterCanvasRegionSelection();
+    else if (canvas.graphWorkflow?.stage === "all-ready") {
+      canvas.readingConfirmed = true;
+      canvas.confirmedReading ||= {
+        words: "", formula: "", drawing: "", comment: "", answerLabel: canvasAnswerLabels(canvas),
+        graphType: (canvas.graphWorkflow.functions || []).map((item) => item.graphType).join("; "),
+        graphDetails: (canvas.graphWorkflow.functions || []).map((item, index) => `Function ${index + 1}: learner-confirmed family ${item.graphType}`).join("\n"),
+      };
+      $("#finishCanvas").click();
+    } else {
+      setCanvasReadingStatus("There are no unreviewed function partitions. Add a Function section or use the confirmed work.", "warning");
+    }
+    return;
+  }
+  const partition = canvasPartitionForFunction(functionIndex);
+  if (partition < 0) {
+    setCanvasReadingStatus(`Function ${functionIndex} does not have a canvas section. Add that Function section before reviewing.`, "error");
+    showToast(`Function ${functionIndex} has no canvas section to review.`);
+    return;
+  }
+  const strokes = canvas.strokes.filter((stroke) => stroke.partition === partition);
+  if (!strokes.length) {
+    focusCanvasPartition(partition);
+    setCanvasReadingStatus(`Draw Function ${functionIndex} in its highlighted area before reviewing it.`, "warning");
+    $("#canvasReadingReview").hidden = false;
+    requestAnimationFrame(() => $("#canvasReadingReview").scrollIntoView({ behavior: "smooth", block: "start" }));
+    showToast(`Draw Function ${functionIndex} in its highlighted area before reviewing it.`);
+    return;
+  }
+  canvas.graphSketchIndex = functionIndex - 1;
+  canvas.reviewingGraph = true;
+  canvas.scale = 1;
+  canvas.offsetX = 0;
+  canvas.offsetY = 0;
+  canvas.pan = false;
+  canvas.zoom = false;
+  $("#canvasPanButton").setAttribute("aria-pressed", "false");
+  $("#canvasPanButton").setAttribute("aria-label", "Enable pan mode");
+  $("#canvasPanLabel").textContent = "Pan";
+  $("#canvasZoomButton").setAttribute("aria-pressed", "false");
+  $("#canvasZoomButton").setAttribute("aria-label", "Enable zoom");
+  $("#canvasZoomButton").textContent = "Zoom off";
+  canvas.stage = "transcribing";
+  updateCanvasStage();
+  setCanvasReadingStatus(`Reading Function ${functionIndex} from its own partition…`, "", true);
+  void reviewCanvasReading().catch((error) => {
+    console.error("Function review could not start", error);
+    if (state.canvas === canvas) {
+      canvas.stage = "writing";
+      updateCanvasStage();
+      setCanvasReadingStatus("Function review could not start. Your drawing is still here; press Review function to try again.", "error");
+    }
+  });
+}
+
+function canvasDraftSnapshot() {
+  const canvas = state.canvas;
+  if (!canvas || !$("#canvasDialog").open || !state.canvasContext) return null;
+  return {
+    id: CANVAS_DRAFT_RECORD_KEY,
+    saved_at: Date.now(),
+    context: state.canvasContext,
+    question: state.canvasQuestion || null,
+    mode: canvas.mode,
+    stage: ["graph-setup", "regions"].includes(canvas.stage) ? canvas.stage : "writing",
+    canvasScrollTop: Number(workingCanvas.parentElement?.scrollTop) || 0,
+    graphFunctionCount: canvas.graphFunctionCount || 0,
+    graphLayout: canvas.graphLayout || null,
+    activePartitionIndex: Number.isInteger(canvas.activePartitionIndex) ? canvas.activePartitionIndex : 0,
+    fitAll: Boolean(canvas.fitAll),
+    graphSketchIndex: canvas.graphSketchIndex || 0,
+    graphWorkflow: canvas.graphWorkflow || null,
+    answerLabel: "",
+    answerMarkers: [],
+    strokes: (canvas.strokes || []).slice(-500).map((stroke) => ({
+      id: stroke.id || "",
+      source: stroke.source || "local",
+      color: stroke.color || "#162a29",
+      tool: stroke.tool || "pen",
+      width: Number(stroke.width) || 2.2,
+      partition: Number(stroke.partition) || 0,
+      answerLabel: String(stroke.answerLabel || "").slice(0, 24),
+      remoteFrame: stroke.remoteFrame || null,
+      remoteWidth: Number(stroke.remoteWidth) || 0,
+      remotePoints: (stroke.remotePoints || []).slice(-2000).map((point) => ({ x: Number(point.x) || 0, y: Number(point.y) || 0 })),
+      points: (stroke.points || []).slice(-2000).map(({ x, y }) => ({ x: Number(x) || 0, y: Number(y) || 0 })),
+    })).filter((stroke) => stroke.points.length),
+    regions: (canvas.regions || []).slice(-20).map((region) => ({
+      id: region.id, kind: region.kind, x: region.x, y: region.y, width: region.width, height: region.height,
+    })),
+  };
+}
+
+function rebaseCompositeDraftGeometry(strokes, answerMarkers, sourceLayout, targetLayout) {
+  const sourceHeights = compositeLayoutRawHeights(sourceLayout);
+  const targetHeights = compositePartitionHeights(targetLayout);
+  const transforms = new Map();
+  const groups = new Map();
+  for (const stroke of strokes || []) {
+    const partition = Math.max(0, Math.min(targetHeights.length - 1, Math.trunc(Number(stroke.partition) || 0)));
+    if (!groups.has(partition)) groups.set(partition, []);
+    for (const point of stroke.points || []) {
+      const x = Number(point.x);
+      const y = Number(point.y);
+      if (Number.isFinite(x) && Number.isFinite(y)) groups.get(partition).push({ x, y });
+    }
+  }
+  let sourceTop = 0;
+  const sourceTops = sourceHeights.map((height) => {
+    const top = sourceTop;
+    sourceTop += height;
+    return top;
+  });
+  let targetTop = 0;
+  const targetTops = targetHeights.map((height) => {
+    const top = targetTop;
+    targetTop += height;
+    return top;
+  });
+  for (const [partition, points] of groups) {
+    if (!points.length) continue;
+    const oldTop = sourceTops[partition] ?? 0;
+    const newTop = targetTops[partition] ?? 0;
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const point of points) {
+      const localY = point.y - oldTop;
+      minX = Math.min(minX, point.x);
+      maxX = Math.max(maxX, point.x);
+      minY = Math.min(minY, localY);
+      maxY = Math.max(maxY, localY);
+    }
+    const spanX = Math.max(1, maxX - minX);
+    const spanY = Math.max(1, maxY - minY);
+    const targetHeight = targetHeights[partition] || 400;
+    const availableWidth = Math.max(80, targetLayout.totalWidth - 48);
+    const availableHeight = Math.max(80, targetHeight - 72);
+    const scale = Math.min(1, availableWidth / spanX, availableHeight / spanY);
+    const x = 24;
+    const y = newTop + 52;
+    transforms.set(partition, { minX, minY, oldTop, scale, x, y });
+  }
+  const mapPoint = (point, partition) => {
+    const transform = transforms.get(partition);
+    if (!transform) return { x: Number(point.x) || 0, y: Number(point.y) || 0 };
+    return {
+      x: transform.x + (Number(point.x) - transform.minX) * transform.scale,
+      y: transform.y + (Number(point.y) - transform.oldTop - transform.minY) * transform.scale,
+    };
+  };
+  const repairedStrokes = (strokes || []).map((stroke) => {
+    const partition = Math.max(0, Math.min(targetHeights.length - 1, Math.trunc(Number(stroke.partition) || 0)));
+    return { ...stroke, partition, points: (stroke.points || []).map((point) => mapPoint(point, partition)) };
+  });
+  const repairedMarkers = (answerMarkers || []).map((marker) => {
+    const partition = Math.max(0, Math.min(targetHeights.length - 1, Math.trunc(Number(marker.partition) || 0)));
+    const point = mapPoint(marker, partition);
+    return { ...marker, ...point, partition };
+  });
+  return { strokes: repairedStrokes, answerMarkers: repairedMarkers };
+}
+
+function persistCanvasDraft() {
+  const draft = canvasDraftSnapshot();
+  if (draft) void saveWorkspaceRecord(draft).catch(() => {});
+}
+
+async function restoreCanvasDraft() {
+  let saved;
+  try { saved = await workspaceRecord(CANVAS_DRAFT_RECORD_KEY); }
+  catch { return; }
+  if (!saved || !saved.context || Date.now() - Number(saved.saved_at || 0) > 48 * 60 * 60 * 1000 || $("#canvasDialog").open) return;
+  const sourceLayout = saved.graphLayout;
+  const repairGeometry = compositeLayoutNeedsRepair(sourceLayout);
+  const question = saved.question || (String(saved.context).startsWith("ask-") ? state.selectedPaperQuestion : null);
+  openCanvas(saved.context, question);
+  const canvas = state.canvas;
+  canvas.mode = ["composite", "graph"].includes(saved.mode) ? saved.mode : "write";
+  canvas.stage = ["graph-setup", "regions"].includes(saved.stage) ? saved.stage : "writing";
+  canvas.graphFunctionCount = Number(saved.graphFunctionCount) || 0;
+  canvas.graphLayout = normalizeCompositeLayout(saved.graphLayout);
+  if (canvas.graphLayout) canvas.resizePreserveWorld = true;
+  canvas.activePartitionIndex = Number(saved.activePartitionIndex) || 0;
+  canvas.fitAll = Boolean(saved.fitAll && canvas.graphLayout);
+  canvas.graphSketchIndex = Number(saved.graphSketchIndex) || 0;
+  canvas.graphWorkflow = saved.graphWorkflow && typeof saved.graphWorkflow === "object" ? saved.graphWorkflow : null;
+  canvas.answerLabel = "";
+  canvas.answerMarkers = [];
+  canvas.strokes = Array.isArray(saved.strokes) ? saved.strokes : [];
+  if (repairGeometry && canvas.graphLayout) {
+    try {
+      await saveWorkspaceRecord({ ...saved, id: `canvas-layout-recovery-${saved.saved_at}` });
+    } catch {
+      // Continue with the repaired draft if the browser cannot create the local recovery copy.
+    }
+    const repaired = rebaseCompositeDraftGeometry(canvas.strokes, [], sourceLayout, canvas.graphLayout);
+    canvas.strokes = repaired.strokes;
+    canvas.answerMarkers = repaired.answerMarkers;
+    canvas.fitAll = false;
+    canvas.scale = 1;
+    canvas.offsetX = 0;
+    canvas.offsetY = 0;
+    canvas.pan = false;
+    canvas.zoom = false;
+  }
+  canvas.regions = Array.isArray(saved.regions) ? saved.regions.map((region) => ({ ...region, snapshotUrl: "", snapshotBlob: null, snapshotPromise: null })) : [];
+  canvas.reviewingGraph = false;
+  canvas.readingConfirmed = false;
+  canvas.confirmedReading = null;
+  canvas.revision = 1;
+  if (canvas.graphLayout) {
+    setCompositeCanvasDimensions();
+    $("#canvasGraphCountPanel").hidden = true;
+    if (repairGeometry) {
+      setCanvasReadingStatus("The saved canvas had grown beyond the phone's drawable area. Its original draft is kept in a local recovery copy, and this canvas has been resized so you can continue.", "warning");
+    }
+  }
+  renderCanvasRegionSnapshots();
+  canvas.regions.forEach((region) => void captureCanvasRegionSnapshot(region).catch(() => {}));
+  if (canvas.stage === "regions") enterCanvasRegionSelection();
+  requestAnimationFrame(() => {
+    if (canvas.graphLayout && canvas.stage !== "regions") {
+      canvas.fitAll = false;
+      canvas.scale = 1;
+      canvas.offsetX = 0;
+      canvas.offsetY = 0;
+      canvas.resizePreserveWorld = false;
+      canvas.resizePreserveTop = false;
+      canvas.ignoreResizeTransform = true;
+    }
+    resizeCanvas(); drawCanvas(); updateCanvasStage();
+    if (workingCanvas.parentElement && canvas.graphLayout && canvas.stage !== "regions") {
+      const nextFunction = (canvas.graphWorkflow?.functions?.length || 0) + 1;
+      const nextPartition = canvasPartitionForFunction(nextFunction, canvas.graphLayout);
+      if (nextPartition >= 0) {
+        canvas.activePartitionIndex = nextPartition;
+        canvas.scale = 1;
+        canvas.offsetX = 0;
+        canvas.offsetY = 0;
+        canvas.pan = false;
+        canvas.zoom = false;
+        updateCanvasNavigationButtons();
+        drawCanvas();
+        const functionNumber = canvas.graphLayout.partitionFunctions[nextPartition] || nextFunction;
+        $("#canvasHelpText").textContent = `Function ${functionNumber} is ready in the highlighted area. Its x- and y-axes are shown; sketch the function there.`;
+        scrollCanvasToPartition(nextPartition);
+        syncPhoneCanvasSetup(nextPartition);
+      } else {
+        workingCanvas.parentElement.scrollTop = Math.max(0, Number(saved.canvasScrollTop) || 0);
+      }
+    }
+    if (repairGeometry) persistCanvasDraft();
+  });
+  if (!repairGeometry) setCanvasReadingStatus("Your unfinished canvas and graph work have been restored.");
+}
+
+function syncPhoneCanvasSetup(focusPartition = null, clearPartitionSelection = false) {
   if (!phoneCanvasConnected) return;
   const regions = (state.canvas.regions || []).map((region) => canvasRegionSetupPayload(region));
-  phoneCanvasSend({ type: "setup", stage: state.canvas.stage, mode: state.canvas.mode, region_kind: state.canvas.regionKind, strokes: phoneCanvasSnapshot(), regions });
+  const payload = {
+    type: "setup", stage: state.canvas.stage, mode: state.canvas.mode, region_kind: state.canvas.regionKind,
+    canvas_frame: canvasHostFrame(), fit_all: Boolean(state.canvas.fitAll),
+    graph_layout: state.canvas.graphLayout || null,
+    active_partition: Number.isInteger(state.canvas.activePartitionIndex) ? state.canvas.activePartitionIndex : 0,
+    graph_functions_reviewed: state.canvas.graphWorkflow?.functions?.length || 0,
+    clear_partition_selection: Boolean(clearPartitionSelection),
+    strokes: phoneCanvasSnapshot(), regions,
+  };
+  if (Number.isInteger(focusPartition)) payload.focus_partition = focusPartition;
+  phoneCanvasSend(payload);
+}
+
+function canvasHostFrame() {
+  const layout = state.canvas?.graphLayout;
+  return {
+    width: Math.max(1, Number(layout?.totalWidth) || workingCanvas.clientWidth || 1),
+    height: Math.max(1, Number(layout?.totalHeight) || workingCanvas.clientHeight || 1),
+  };
+}
+
+function syncPhoneCanvasLayout(expansion = null) {
+  if (!phoneCanvasConnected || !state.canvas?.graphLayout) return;
+  phoneCanvasSend({
+    type: "layout_update",
+    canvas_frame: canvasHostFrame(),
+    graph_layout: state.canvas.graphLayout,
+    graph_functions_reviewed: state.canvas.graphWorkflow?.functions?.length || 0,
+    fit_all: Boolean(state.canvas.fitAll),
+    expanded_partition: Number.isInteger(expansion?.partition) ? expansion.partition : null,
+    partition_growth: Math.max(0, Number(expansion?.growthDown) || 0),
+    partition_growth_up: Math.max(0, Number(expansion?.growthUp) || 0),
+    left_growth: Math.max(0, Number(expansion?.leftGrowth) || 0),
+    right_growth: Math.max(0, Number(expansion?.rightGrowth) || 0),
+    top_growth: Math.max(0, Number(expansion?.topGrowth) || 0),
+  });
 }
 
 function canvasRegionSetupPayload(region) {
@@ -6696,9 +8567,16 @@ function drawCanvasRegionOverlay() {
   const overlay = $("#canvasRegionOverlay");
   const rect = workingCanvas.getBoundingClientRect();
   if (!overlay || !rect.width || !rect.height) return;
-  const ratio = Math.min(window.devicePixelRatio || 1, 3);
-  overlay.width = Math.round(rect.width * ratio);
-  overlay.height = Math.round(rect.height * ratio);
+  const regions = state.canvas?.regions || [];
+  const draftRegion = state.canvas?.draftRegion;
+  if (!regions.length && !draftRegion) {
+    if (overlay.width !== 1 || overlay.height !== 1) {
+      overlay.width = 1;
+      overlay.height = 1;
+    }
+    return;
+  }
+  const ratio = sizeCanvasBackingStore(overlay, rect.width, rect.height);
   const context = overlay.getContext("2d");
   context.setTransform(ratio, 0, 0, ratio, 0, 0);
   context.clearRect(0, 0, rect.width, rect.height);
@@ -6725,8 +8603,8 @@ function drawCanvasRegionOverlay() {
     context.fillText(region.kind === "maths" ? "Maths" : region.kind === "drawings" ? "Drawing" : "Words", x + 5, Math.max(14, y - 5));
     context.restore();
   };
-  (state.canvas.regions || []).forEach((region) => draw(region));
-  if (state.canvas.draftRegion) draw(state.canvas.draftRegion, true);
+  regions.forEach((region) => draw(region));
+  if (draftRegion) draw(draftRegion, true);
 }
 
 function canvasLocalRect(start, end) {
@@ -6846,7 +8724,7 @@ async function captureCanvasRegionSnapshot(region) {
   region.snapshotPromise = snapshotPromise;
   try {
     const blob = await snapshotPromise;
-    if (!(state.canvas?.regions || []).includes(region)) return null;
+    if (!region.transient && !(state.canvas?.regions || []).includes(region)) return null;
     region.snapshotBlob = blob;
     region.snapshotUrl = URL.createObjectURL(blob);
     renderCanvasRegionSnapshots();
@@ -6875,36 +8753,336 @@ function canvasPoint(event) {
   };
 }
 
+function canvasContentBounds(canvas = state.canvas) {
+  if (canvas?.zoomBoundsCache) return canvas.zoomBoundsCache;
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+  let strokePadding = 4;
+  for (const stroke of canvas?.strokes || []) {
+    strokePadding = Math.max(strokePadding, (Number(stroke.width) || 2.2) / 2 + 4);
+    for (const point of stroke.points || []) {
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) continue;
+      minX = Math.min(minX, point.x);
+      maxX = Math.max(maxX, point.x);
+      minY = Math.min(minY, point.y);
+      maxY = Math.max(maxY, point.y);
+    }
+  }
+  let bounds;
+  if (!Number.isFinite(minX) && canvas?.graphLayout) {
+    bounds = {
+      x: 0,
+      y: 0,
+      width: Math.max(1, Number(canvas.graphLayout.totalWidth) || 1),
+      height: Math.max(320, Number(canvas.graphLayout.totalHeight) || Number(canvas.graphLayout.writingHeight) || 480),
+    };
+  } else if (!Number.isFinite(minX)) {
+    const rect = workingCanvas.getBoundingClientRect();
+    bounds = { x: 0, y: 0, width: Math.max(1, rect.width), height: Math.max(1, rect.height) };
+  } else {
+    bounds = {
+      x: minX - strokePadding,
+      y: minY - strokePadding,
+      width: Math.max(16, maxX - minX + strokePadding * 2),
+      height: Math.max(16, maxY - minY + strokePadding * 2),
+    };
+  }
+  if (canvas) canvas.zoomBoundsCache = bounds;
+  return bounds;
+}
+
+function canvasMinimumZoomScale(canvas = state.canvas, rect = workingCanvas.getBoundingClientRect()) {
+  const viewport = workingCanvas.parentElement;
+  const width = Math.max(1, Number(viewport?.clientWidth) || rect.width);
+  const height = Math.max(1, Number(viewport?.clientHeight) || rect.height);
+  const bounds = canvasContentBounds(canvas);
+  const padding = 28;
+  const fitScale = Math.min((width - padding * 2) / Math.max(1, bounds.width), (height - padding * 2) / Math.max(1, bounds.height));
+  return Math.min(1, Math.max(0.0001, Number.isFinite(fitScale) ? fitScale : 1));
+}
+
+function clampCanvasScale(scale, canvas = state.canvas, rect = workingCanvas.getBoundingClientRect()) {
+  return Math.min(50, Math.max(canvasMinimumZoomScale(canvas, rect), Number(scale) || 1));
+}
+
+function canvasPartitionCheckboxTarget(event) {
+  const canvas = state.canvas;
+  const layout = canvas?.graphLayout;
+  if (!layout || canvas.stage !== "writing") return -1;
+  const point = canvasPoint(event);
+  const scale = Math.max(0.0001, Number(canvas.scale) || 1);
+  for (let index = 0; index < layout.partitionKinds.length; index += 1) {
+    const bounds = canvasPartitionBounds(index, layout);
+    const labelTop = bounds.top + 6 / scale;
+    if (point.x >= 5 / scale && point.x <= 31 / scale
+        && point.y >= labelTop + 3 / scale && point.y <= labelTop + 26 / scale) return index;
+  }
+  return -1;
+}
+
+function updateCanvasPartitionDeleteButton() {
+  const button = $("#canvasDeletePartitionsButton");
+  if (!button) return;
+  const selected = state.canvas?.selectedPartitions?.length || 0;
+  button.hidden = selected === 0 || !state.canvas?.graphLayout || state.canvas?.stage !== "writing";
+  button.textContent = selected ? `Delete (${selected})` : "Delete";
+  button.setAttribute("aria-label", selected ? `Delete ${selected} selected canvas partition${selected === 1 ? "" : "s"}` : "Delete selected canvas partitions");
+}
+
+function toggleCanvasPartitionSelection(index) {
+  const canvas = state.canvas;
+  if (!canvas?.graphLayout || index < 0 || index >= canvas.graphLayout.partitionKinds.length) return;
+  canvas.selectedPartitions ||= [];
+  canvas.selectedPartitions = canvas.selectedPartitions.includes(index)
+    ? canvas.selectedPartitions.filter((item) => item !== index)
+    : [...canvas.selectedPartitions, index].sort((a, b) => a - b);
+  updateCanvasPartitionDeleteButton();
+  drawCanvas();
+}
+
+function deleteCanvasPartitions(partitionIndexes) {
+  const canvas = state.canvas;
+  const layout = canvas?.graphLayout ? normalizeCompositeLayout(canvas.graphLayout) : null;
+  if (!canvas || canvas.stage !== "writing" || !layout || !Array.isArray(partitionIndexes)) return false;
+  const selected = new Set(partitionIndexes
+    .map((index) => Number(index))
+    .filter((index) => Number.isSafeInteger(index) && index >= 0 && index < layout.partitionKinds.length));
+  if (!selected.size) return false;
+  const deletedLastSection = selected.size === layout.partitionKinds.length;
+
+  const oldKinds = layout.partitionKinds.slice();
+  const oldFunctions = layout.partitionFunctions.slice();
+  const oldGroups = Array.isArray(layout.functionGroups) ? layout.functionGroups.slice() : [];
+  const oldHeights = compositePartitionHeights(layout);
+  const oldToNewPartition = new Map();
+  const removedHeightBefore = [];
+  let removedHeight = 0;
+  let nextPartition = 0;
+  let nextFunction = 0;
+  const retainedFunctions = [];
+  for (let index = 0; index < oldKinds.length; index += 1) {
+    removedHeightBefore[index] = removedHeight;
+    if (selected.has(index)) {
+      removedHeight += oldHeights[index] || 0;
+      continue;
+    }
+    oldToNewPartition.set(index, nextPartition++);
+    if (oldKinds[index] === "function") {
+      const oldFunction = Number(oldFunctions[index]) || 0;
+      const newFunction = ++nextFunction;
+      retainedFunctions.push({ oldFunction, newFunction });
+      oldFunctions[index] = newFunction;
+    } else {
+      oldFunctions[index] = 0;
+    }
+  }
+
+  canvas.strokes = (canvas.strokes || []).filter((stroke) => {
+    const oldPartition = Math.max(0, Math.trunc(Number(stroke.partition) || 0));
+    const nextIndex = oldToNewPartition.get(oldPartition);
+    if (!Number.isInteger(nextIndex)) return false;
+    stroke.partition = nextIndex;
+    const shift = removedHeightBefore[oldPartition] || 0;
+    for (const point of stroke.points || []) point.y -= shift;
+    return true;
+  });
+  canvas.zoomBoundsCache = null;
+  for (const region of canvas.regions || []) releaseCanvasRegionSnapshot(region);
+  canvas.regions = [];
+  layout.partitionKinds = oldKinds.filter((_, index) => !selected.has(index));
+  layout.partitionFunctions = oldFunctions.filter((_, index) => !selected.has(index));
+  layout.partitionTags = layout.partitionTags.filter((_, index) => !selected.has(index));
+  layout.partitionHeights = oldHeights.filter((_, index) => !selected.has(index));
+  layout.count = nextFunction;
+  layout.totalHeight = layout.partitionHeights.reduce((sum, height) => sum + height, 0);
+
+  const oldGroupForFunction = (functionNumber) => oldGroups.find((group) => {
+    const start = Number(group.startFunction) || 1;
+    const count = Number(group.count) || 0;
+    return functionNumber >= start && functionNumber < start + count;
+  });
+  const rebuiltGroups = [];
+  for (const group of oldGroups) {
+    const start = Number(group.startFunction) || 1;
+    const end = start + (Number(group.count) || 0);
+    const retained = retainedFunctions
+      .filter(({ oldFunction }) => oldFunction >= start && oldFunction < end)
+      .map(({ newFunction }) => newFunction)
+      .sort((a, b) => a - b);
+    if (!retained.length) continue;
+    let runStart = retained[0];
+    let runEnd = retained[0];
+    for (const number of retained.slice(1)) {
+      if (number === runEnd + 1) {
+        runEnd = number;
+        continue;
+      }
+      rebuiltGroups.push({ ...group, startFunction: runStart, count: runEnd - runStart + 1 });
+      runStart = runEnd = number;
+    }
+    rebuiltGroups.push({ ...group, startFunction: runStart, count: runEnd - runStart + 1 });
+  }
+  // Preserve metadata for legacy layouts whose function partitions predate group records.
+  if (retainedFunctions.length && !rebuiltGroups.length) {
+    const group = oldGroupForFunction(retainedFunctions[0].oldFunction) || {};
+    rebuiltGroups.push({
+      id: String(group.id || `group-${Date.now()}`),
+      startFunction: 1,
+      count: retainedFunctions.length,
+      questionTag: String(group.questionTag || ""),
+      combine: Boolean(group.combine) && retainedFunctions.length > 1,
+    });
+  }
+  layout.functionGroups = rebuiltGroups;
+  layout.writingHeight = layout.partitionHeights[layout.partitionKinds.findIndex((kind) => kind === "writing")] || layout.writingHeight;
+  layout.graphHeight = layout.partitionHeights[layout.partitionKinds.findIndex((kind) => kind === "function")] || layout.graphHeight;
+  canvas.graphLayout = normalizeCompositeLayout(layout);
+  canvas.graphFunctionCount = nextFunction;
+  canvas.graphWorkflow = null;
+  canvas.graphSketchIndex = 0;
+  canvas.reviewingGraph = false;
+  canvas.stage = "writing";
+  canvas.active = null;
+  canvas.drag = null;
+  canvas.pinch = null;
+  canvas.pointers?.clear();
+  canvas.selectedPartitions = [];
+  canvas.readingConfirmed = false;
+  canvas.readingApplied = false;
+  canvas.confirmedReading = null;
+  canvas.transcribedPhoto = null;
+  canvas.photoPromise = null;
+  canvas.revision = (canvas.revision || 0) + 1;
+  const activeOld = Number.isInteger(canvas.activePartitionIndex) ? canvas.activePartitionIndex : 0;
+  canvas.activePartitionIndex = canvas.graphLayout.partitionKinds.length
+    ? oldToNewPartition.get(activeOld) ?? Math.min(activeOld, canvas.graphLayout.partitionKinds.length - 1)
+    : -1;
+  // Keep an all-sections fit after deletion. This prevents the remaining
+  // partition from jumping into a close-up view when the layout shrinks.
+  canvas.fitAll = true;
+  setCompositeCanvasDimensions();
+  canvas.resizePreserveWorld = false;
+  canvas.ignoreResizeTransform = true;
+  resizeCanvas();
+  drawCanvas();
+  updateCanvasStage();
+  updateCanvasPartitionDeleteButton();
+  if (workingCanvas.parentElement) {
+    workingCanvas.parentElement.scrollTop = 0;
+    workingCanvas.parentElement.scrollLeft = 0;
+  }
+  syncPhoneCanvasSetup(canvas.activePartitionIndex, true);
+  persistCanvasDraft();
+  showToast(deletedLastSection
+    ? "The last canvas section was deleted. Your canvas is clear; add a new Write or Function section to continue."
+    : `${selected.size} canvas section${selected.size === 1 ? "" : "s"} deleted. The remaining work is shown at fit scale.`);
+  return true;
+}
+
 function resizeCanvas() {
+  if (state.canvas?.fitAll && state.canvas.graphLayout) setCompositeCanvasDimensions();
   const rect = workingCanvas.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
   const old = state.canvas.size || { width: 0, height: 0 };
   if (old.width && old.height && (old.width !== rect.width || old.height !== rect.height)) {
+    if (state.canvas.ignoreResizeTransform) {
+      state.canvas.ignoreResizeTransform = false;
+      state.canvas.resizePreserveWorld = false;
+      state.canvas.resizePreserveTop = false;
+    } else if (state.canvas.fitAll && state.canvas.graphLayout) {
+      state.canvas.resizePreserveWorld = false;
+      state.canvas.resizePreserveTop = false;
+    } else if (state.canvas.resizePreserveWorld) {
+      const widthDelta = rect.width - old.width;
+      const heightDelta = rect.height - old.height;
+      state.canvas.offsetX += (state.canvas.scale - 1) * widthDelta / 2;
+      state.canvas.offsetY += (state.canvas.scale - 1) * heightDelta / 2;
+      state.canvas.resizePreserveWorld = false;
+      state.canvas.resizePreserveTop = false;
+    } else if (state.canvas.graphLayout) {
+      // Composite canvases use a fixed world origin. A viewport or backing
+      // size change must not rescale that origin, or touches land in another
+      // partition and the axes move off the visible function section.
+      state.canvas.resizePreserveTop = false;
+    } else {
     // Keep all ink and selection boxes in one stable world coordinate system.
     // Re-project the view uniformly instead of rewriting every saved point;
     // rewriting points on each resize causes cumulative drift under browser zoom.
     const uniformScale = Math.min(rect.width / old.width, rect.height / old.height);
     const nextScale = state.canvas.scale * uniformScale;
     state.canvas.offsetX = uniformScale * state.canvas.offsetX + nextScale * (rect.width - old.width) / 2;
-    state.canvas.offsetY = uniformScale * state.canvas.offsetY + nextScale * (rect.height - old.height) / 2;
+    const heightDelta = rect.height - old.height;
+    state.canvas.offsetY = uniformScale * state.canvas.offsetY + nextScale * heightDelta / 2
+      - (state.canvas.resizePreserveTop ? heightDelta / 2 : 0);
+    state.canvas.resizePreserveTop = false;
     state.canvas.scale = nextScale;
+    }
   }
   state.canvas.size = { width: rect.width, height: rect.height };
-  const ratio = Math.min(window.devicePixelRatio || 1, 3);
-  workingCanvas.width = Math.round(rect.width * ratio);
-  workingCanvas.height = Math.round(rect.height * ratio);
+  sizeCanvasBackingStore(workingCanvas, rect.width, rect.height);
+  if (state.canvas.fitAll && state.canvas.graphLayout) {
+    const bounds = canvasContentBounds(state.canvas);
+    const margin = 28;
+    const fitScale = Math.min(1, (rect.width - margin * 2) / Math.max(1, bounds.width), (rect.height - margin * 2) / Math.max(1, bounds.height));
+    state.canvas.scale = Math.max(0.0001, fitScale);
+    state.canvas.offsetX = (rect.width / 2 - (bounds.x + bounds.width / 2)) * state.canvas.scale;
+    state.canvas.offsetY = (rect.height / 2 - (bounds.y + bounds.height / 2)) * state.canvas.scale;
+    if (workingCanvas.parentElement) {
+      workingCanvas.parentElement.scrollTop = 0;
+      workingCanvas.parentElement.scrollLeft = 0;
+    }
+  }
   drawCanvas();
+}
+
+function fitCanvasAll() {
+  const canvas = state.canvas;
+  if (!canvas?.graphLayout) {
+    fitCanvasToWriting();
+    return;
+  }
+  canvas.fitAll = true;
+  canvas.ignoreResizeTransform = true;
+  setCompositeCanvasDimensions();
+  resizeCanvas();
+  drawCanvas();
+  syncPhoneCanvasSetup();
+}
+
+function leaveCanvasFitAll() {
+  const canvas = state.canvas;
+  if (!canvas?.fitAll) return;
+  canvas.fitAll = false;
+  canvas.scale = 1;
+  canvas.offsetX = 0;
+  canvas.offsetY = 0;
+  canvas.ignoreResizeTransform = true;
+  setCompositeCanvasDimensions();
+  resizeCanvas();
+  if (workingCanvas.parentElement) {
+    workingCanvas.parentElement.scrollTop = 0;
+    workingCanvas.parentElement.scrollLeft = 0;
+  }
+  drawCanvas();
+  syncPhoneCanvasSetup();
+}
+
+let canvasDrawFrame = 0;
+function scheduleCanvasDraw() {
+  if (canvasDrawFrame) return;
+  canvasDrawFrame = requestAnimationFrame(() => {
+    canvasDrawFrame = 0;
+    drawCanvas();
+  });
 }
 
 function drawCanvas() {
   const context = workingCanvas.getContext("2d");
   const rect = workingCanvas.getBoundingClientRect();
   if (!context || !rect.width || !rect.height) return;
-  const ratio = Math.min(window.devicePixelRatio || 1, 3);
-  if (workingCanvas.width !== Math.round(rect.width * ratio) || workingCanvas.height !== Math.round(rect.height * ratio)) {
-    workingCanvas.width = Math.round(rect.width * ratio);
-    workingCanvas.height = Math.round(rect.height * ratio);
-  }
+  const ratio = sizeCanvasBackingStore(workingCanvas, rect.width, rect.height);
   context.setTransform(1, 0, 0, 1, 0, 0);
   context.clearRect(0, 0, workingCanvas.width, workingCanvas.height);
   context.fillStyle = "#fff";
@@ -6914,15 +9092,103 @@ function drawCanvas() {
   context.translate(-rect.width / 2, -rect.height / 2);
   context.lineCap = "round";
   context.lineJoin = "round";
+  if (state.canvas.graphLayout) {
+    const layout = state.canvas.graphLayout;
+    const heights = compositePartitionHeights(layout);
+    context.save();
+    let partitionTop = 0;
+    for (let index = 0; index < heights.length; index += 1) {
+      const height = heights[index];
+      const kind = canvasPartitionKind(index, layout);
+      const sectionColors = kind === "writing"
+        ? ["#eef6ff"]
+        : ["#fff7e8", "#fff0f2", "#eef9fc"];
+      const sameKindIndex = layout.partitionKinds.slice(0, index).filter((item) => item === kind).length;
+      context.fillStyle = sectionColors[sameKindIndex % sectionColors.length];
+      context.fillRect(0, partitionTop, layout.totalWidth, height);
+      const headerHeight = Math.min(height - 80, CANVAS_PARTITION_HEADER_HEIGHT / Math.max(0.0001, state.canvas.scale));
+      if (kind === "function" && height > headerHeight + 80) drawCanvasFunctionAxes(context, layout.totalWidth, partitionTop + headerHeight, height - headerHeight);
+      if (height >= 28) {
+        const functionNumber = layout.partitionFunctions[index];
+        const writingNumber = layout.partitionKinds.slice(0, index + 1).filter((item) => item === "writing").length;
+        const label = kind === "function" ? `Function ${functionNumber}` : (writingNumber === 1 ? "Words / maths" : `More words / maths ${writingNumber}`);
+        const labelScale = 1 / Math.max(0.0001, state.canvas.scale);
+        const tag = String(layout.partitionTags?.[index] || "").trim();
+        const tagLabel = tag ? "Q " + tag : "";
+        context.font = `700 ${18 * labelScale}px system-ui, sans-serif`;
+        const labelTop = partitionTop + 6 * labelScale;
+        const checkboxX = 8 * labelScale;
+        const checkboxY = labelTop + 4 * labelScale;
+        const checkboxSize = 20 * labelScale;
+        const isSelected = state.canvas.selectedPartitions?.includes(index);
+        context.fillStyle = "#ffffff";
+        context.fillRect(checkboxX, checkboxY, checkboxSize, checkboxSize);
+        context.strokeStyle = isSelected ? "#0759b5" : "#55718f";
+        context.lineWidth = 2 / Math.max(0.0001, state.canvas.scale);
+        context.strokeRect(checkboxX + 1 / state.canvas.scale, checkboxY + 1 / state.canvas.scale, checkboxSize - 2 / state.canvas.scale, checkboxSize - 2 / state.canvas.scale);
+        if (isSelected) {
+          context.strokeStyle = "#0759b5";
+          context.lineWidth = 2.5 / Math.max(0.0001, state.canvas.scale);
+          context.beginPath();
+          context.moveTo(checkboxX + 4 * labelScale, checkboxY + 10 * labelScale);
+          context.lineTo(checkboxX + 8 * labelScale, checkboxY + 14 * labelScale);
+          context.lineTo(checkboxX + 16 * labelScale, checkboxY + 5 * labelScale);
+          context.stroke();
+        }
+        context.font = `700 ${18 * labelScale}px system-ui, sans-serif`;
+        const tagWidth = tagLabel ? (() => {
+          context.font = `700 ${14 * labelScale}px system-ui, sans-serif`;
+          return context.measureText(tagLabel).width;
+        })() : 0;
+        const tagX = tagLabel ? Math.max(44 * labelScale, layout.totalWidth - tagWidth - 30 * labelScale) : layout.totalWidth;
+        context.font = `700 ${18 * labelScale}px system-ui, sans-serif`;
+        const maxLabelWidth = Math.max(44 * labelScale, tagLabel ? tagX - 46 * labelScale : layout.totalWidth - 52 * labelScale);
+        const labelWidth = Math.min(context.measureText(label).width, maxLabelWidth);
+        context.fillStyle = "#ffffff";
+        context.fillRect(34 * labelScale, labelTop, labelWidth + 18 * labelScale, 30 * labelScale);
+        context.fillStyle = "#123a66";
+        context.fillText(label, 42 * labelScale, labelTop + 21 * labelScale, Math.max(40 * labelScale, labelWidth));
+        if (tag) {
+          context.font = "700 " + (14 * labelScale) + "px system-ui, sans-serif";
+          context.fillStyle = "#ffffff";
+          context.fillRect(tagX, labelTop, tagWidth + 18 * labelScale, 30 * labelScale);
+          context.fillStyle = "#0759b5";
+          context.fillText(tagLabel, tagX + 9 * labelScale, labelTop + 20 * labelScale);
+        }
+      }
+      partitionTop += height;
+      context.strokeStyle = "#315f91";
+      context.lineWidth = 3.5 / Math.max(0.0001, state.canvas.scale);
+      context.setLineDash([]);
+      context.beginPath();
+      context.moveTo(0, partitionTop);
+      context.lineTo(layout.totalWidth, partitionTop);
+      context.stroke();
+    }
+    context.restore();
+  }
   state.canvas.strokes.forEach((stroke) => {
     if (!stroke.points.length) return;
+    const strokePartition = Math.max(0, Math.min(compositePartitionHeights(state.canvas.graphLayout).length - 1, Number(stroke.partition) || 0));
+    const strokeKind = state.canvas.graphLayout ? canvasPartitionKind(strokePartition) : "writing";
+    if (state.canvas.graphLayout) {
+      const bounds = canvasPartitionBounds(strokePartition);
+      const headerHeight = Math.min(bounds.bottom - bounds.top, CANVAS_PARTITION_HEADER_HEIGHT / Math.max(0.0001, state.canvas.scale));
+      context.save();
+      context.beginPath();
+      context.rect(0, bounds.top + headerHeight, state.canvas.graphLayout.totalWidth, Math.max(0, bounds.bottom - bounds.top - headerHeight));
+      context.clip();
+    }
     context.beginPath();
-    context.strokeStyle = stroke.tool === "eraser" ? "#fff" : (stroke.color || "#162a29");
+    const strokeKindIndex = state.canvas.graphLayout ? state.canvas.graphLayout.partitionKinds.slice(0, strokePartition).filter((item) => item === strokeKind).length : 0;
+    const eraserColors = strokeKind === "function" ? ["#fff7e8", "#fff0f2", "#eef9fc"] : ["#eef6ff"];
+    context.strokeStyle = stroke.tool === "eraser" ? (state.canvas.graphLayout ? eraserColors[strokeKindIndex % eraserColors.length] : "#fff") : (stroke.color || "#162a29");
     context.lineWidth = (stroke.width || 2.2) / state.canvas.scale;
     context.moveTo(stroke.points[0].x, stroke.points[0].y);
     if (stroke.points.length === 1) context.lineTo(stroke.points[0].x + 0.1, stroke.points[0].y + 0.1);
     stroke.points.slice(1).forEach((point) => context.lineTo(point.x, point.y));
     context.stroke();
+    if (state.canvas.graphLayout) context.restore();
   });
   context.setTransform(1, 0, 0, 1, 0, 0);
   drawCanvasRegionOverlay();
@@ -6931,12 +9197,16 @@ function drawCanvas() {
 function fitCanvasToWriting() {
   const rect = workingCanvas.getBoundingClientRect();
   if (!rect.width || !rect.height) return;
+  const writeHeight = state.canvas.graphLayout?.totalHeight || rect.height;
+  const strokes = state.canvas.graphLayout
+    ? state.canvas.strokes.filter((stroke) => canvasPartitionIsWriting(stroke.partition))
+    : state.canvas.strokes;
   let hasPoints = false;
   let minX = Infinity;
   let maxX = -Infinity;
   let minY = Infinity;
   let maxY = -Infinity;
-  state.canvas.strokes.forEach((stroke) => stroke.points.forEach((point) => {
+  strokes.forEach((stroke) => stroke.points.forEach((point) => {
     hasPoints = true;
     minX = Math.min(minX, point.x);
     maxX = Math.max(maxX, point.x);
@@ -6953,10 +9223,14 @@ function fitCanvasToWriting() {
   const padding = 28;
   const width = Math.max(8, maxX - minX);
   const height = Math.max(8, maxY - minY);
-  const fitScale = Math.min((rect.width - padding * 2) / width, (rect.height - padding * 2) / height);
+  const fitScale = Math.min((rect.width - padding * 2) / width, (writeHeight - padding * 2) / height);
   state.canvas.scale = Math.min(50, Math.max(.0001, fitScale));
   state.canvas.offsetX = (rect.width / 2 - (minX + maxX) / 2) * state.canvas.scale;
-  state.canvas.offsetY = (rect.height / 2 - (minY + maxY) / 2) * state.canvas.scale;
+  const centerY = (minY + maxY) / 2;
+  state.canvas.offsetY = state.canvas.graphLayout
+    ? (writeHeight - rect.height) / 2 + (rect.height / 2 - centerY) * state.canvas.scale
+    : (rect.height / 2 - centerY) * state.canvas.scale;
+  if (state.canvas.graphLayout && workingCanvas.parentElement) workingCanvas.parentElement.scrollTop = 0;
   drawCanvas();
 }
 
@@ -6983,14 +9257,155 @@ async function ensureCanvasPhoto(canvas, revision, onProgress = null) {
     // would upload as a handwriting photo.
     const exportCanvas = document.createElement("canvas");
     const maxEdge = 2200;
-    const scale = Math.min(1, maxEdge / Math.max(workingCanvas.width, workingCanvas.height));
-    exportCanvas.width = Math.max(1, Math.round(workingCanvas.width * scale));
-    exportCanvas.height = Math.max(1, Math.round(workingCanvas.height * scale));
+    const compositeLayout = canvas.mode === "composite" ? normalizeCompositeLayout(canvas.graphLayout) : null;
+    const worldWidth = compositeLayout?.totalWidth || workingCanvas.width;
+    const baseWorldHeight = compositeLayout?.totalHeight || workingCanvas.height;
+    const reviewedFunctions = canvas.graphWorkflow?.functions || [];
+    const combinedGroups = compositeLayout
+      ? (compositeLayout.functionGroups || []).filter((group) => group.combine)
+        .map((group) => ({
+          ...group,
+          functions: reviewedFunctions.filter((item) => Number(item.groupStartFunction) === Number(group.startFunction)),
+        }))
+        .filter((group) => group.functions.length === Number(group.count))
+      : [];
+    const combinedGraphHeight = compositeLayout ? Math.max(320, Number(compositeLayout.graphHeight) || 400) : 0;
+    const worldHeight = baseWorldHeight + combinedGraphHeight * combinedGroups.length;
+    const scale = Math.min(1, maxEdge / Math.max(worldWidth, worldHeight));
+    exportCanvas.width = Math.max(1, Math.round(worldWidth * scale));
+    exportCanvas.height = Math.max(1, Math.round(worldHeight * scale));
     const exportContext = exportCanvas.getContext("2d", { alpha: false });
     if (!exportContext) throw new Error("The canvas image could not be created.");
     exportContext.fillStyle = "#ffffff";
     exportContext.fillRect(0, 0, exportCanvas.width, exportCanvas.height);
-    exportContext.drawImage(workingCanvas, 0, 0, exportCanvas.width, exportCanvas.height);
+    if (!compositeLayout) {
+      exportContext.drawImage(workingCanvas, 0, 0, exportCanvas.width, exportCanvas.height);
+    } else {
+      const heights = compositePartitionHeights(compositeLayout);
+      const colors = { writing: ["#eef6ff"], function: ["#fff7e8", "#fff0f2", "#eef9fc"] };
+      const sameKindCounts = { writing: 0, function: 0 };
+      let top = 0;
+      for (let index = 0; index < heights.length; index += 1) {
+        const kind = canvasPartitionKind(index, compositeLayout);
+        const sameKindIndex = sameKindCounts[kind]++;
+        const sectionHeight = heights[index];
+        const sectionTop = top;
+        exportContext.fillStyle = colors[kind][sameKindIndex % colors[kind].length];
+        exportContext.fillRect(0, sectionTop * scale, exportCanvas.width, sectionHeight * scale);
+        exportContext.save();
+        exportContext.scale(scale, scale);
+        exportContext.fillStyle = "#123a66";
+        exportContext.font = `700 ${18 / scale}px system-ui, sans-serif`;
+        const functionNumber = compositeLayout.partitionFunctions[index];
+        const writingNumber = compositeLayout.partitionKinds.slice(0, index + 1).filter((item) => item === "writing").length;
+        const label = kind === "function" ? `Function ${functionNumber}` : (writingNumber === 1 ? "Words / maths" : `More words / maths ${writingNumber}`);
+        exportContext.fillText(label, 14 / scale, sectionTop + 26 / scale);
+        const questionTag = String(compositeLayout.partitionTags?.[index] || "").trim();
+        if (questionTag) {
+          exportContext.textAlign = "right";
+          exportContext.font = `700 ${14 / scale}px system-ui, sans-serif`;
+          exportContext.fillStyle = "#0759b5";
+          exportContext.fillText("Q " + questionTag, worldWidth - 14 / scale, sectionTop + 24 / scale);
+          exportContext.textAlign = "left";
+        }
+        exportContext.restore();
+
+        if (kind === "function") {
+          const graph = canvas.graphWorkflow?.functions?.[Math.max(0, functionNumber - 1)];
+          const svg = graph ? renderCanvasGraphPreview([graph]) : "";
+          const headerHeight = Math.min(sectionHeight - 80, CANVAS_PARTITION_HEADER_HEIGHT);
+          const graphTop = sectionTop + headerHeight;
+          const graphHeight = Math.max(0, sectionHeight - headerHeight);
+          if (svg) {
+            const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
+            try {
+              const image = new Image();
+              await new Promise((resolve, reject) => {
+                image.onload = resolve;
+                image.onerror = () => reject(new Error(`The clean graph for function ${functionNumber} could not be rendered.`));
+                image.src = url;
+              });
+              exportContext.drawImage(image, 0, graphTop * scale, exportCanvas.width, graphHeight * scale);
+            } finally {
+              URL.revokeObjectURL(url);
+            }
+          } else {
+            exportContext.save();
+            exportContext.scale(scale, scale);
+            drawCanvasFunctionAxes(exportContext, compositeLayout.totalWidth, graphTop, graphHeight, 1);
+            exportContext.restore();
+            for (const stroke of canvas.strokes.filter((item) => Number(item.partition) === index)) {
+              if (!stroke.points?.length) continue;
+              exportContext.save();
+              exportContext.beginPath();
+              exportContext.rect(0, graphTop * scale, exportCanvas.width, graphHeight * scale);
+              exportContext.clip();
+              exportContext.beginPath();
+              exportContext.strokeStyle = stroke.tool === "eraser" ? colors.function[sameKindIndex % colors.function.length] : (stroke.color || "#162a29");
+              exportContext.lineWidth = Math.max(1, Number(stroke.width) || 2.2) * scale;
+              exportContext.lineCap = "round";
+              exportContext.lineJoin = "round";
+              exportContext.moveTo(stroke.points[0].x * scale, stroke.points[0].y * scale);
+              stroke.points.slice(1).forEach((point) => exportContext.lineTo(point.x * scale, point.y * scale));
+              exportContext.stroke();
+              exportContext.restore();
+            }
+          }
+        } else {
+          for (const stroke of canvas.strokes.filter((item) => Number(item.partition) === index)) {
+            if (!stroke.points?.length) continue;
+            const headerHeight = Math.min(sectionHeight - 24, CANVAS_PARTITION_HEADER_HEIGHT);
+            exportContext.save();
+            exportContext.beginPath();
+            exportContext.rect(0, (sectionTop + headerHeight) * scale, exportCanvas.width, Math.max(0, (sectionHeight - headerHeight) * scale));
+            exportContext.clip();
+            exportContext.beginPath();
+            exportContext.strokeStyle = stroke.tool === "eraser" ? colors.writing[sameKindIndex % colors.writing.length] : (stroke.color || "#162a29");
+            exportContext.lineWidth = Math.max(1, Number(stroke.width) || 2.2) * scale;
+            exportContext.lineCap = "round";
+            exportContext.lineJoin = "round";
+            exportContext.moveTo(stroke.points[0].x * scale, stroke.points[0].y * scale);
+            stroke.points.slice(1).forEach((point) => exportContext.lineTo(point.x * scale, point.y * scale));
+            exportContext.stroke();
+            exportContext.restore();
+          }
+        }
+        top += sectionHeight;
+        exportContext.strokeStyle = "#315f91";
+        exportContext.lineWidth = 3.5;
+        exportContext.beginPath();
+        exportContext.moveTo(0, top * scale);
+        exportContext.lineTo(exportCanvas.width, top * scale);
+        exportContext.stroke();
+      }
+      let combinedTop = baseWorldHeight;
+      for (const group of combinedGroups) {
+        const svg = renderCanvasGraphPreview(group.functions);
+        exportContext.fillStyle = "#f8fbff";
+        exportContext.fillRect(0, combinedTop * scale, exportCanvas.width, combinedGraphHeight * scale);
+        exportContext.save();
+        exportContext.scale(scale, scale);
+        exportContext.fillStyle = "#123a66";
+        exportContext.font = `700 ${18 / scale}px system-ui, sans-serif`;
+        exportContext.fillText("Combined functions · Question " + group.questionTag, 14 / scale, combinedTop + 26 / scale);
+        exportContext.restore();
+        if (svg) {
+          const url = URL.createObjectURL(new Blob([svg], { type: "image/svg+xml;charset=utf-8" }));
+          try {
+            const image = new Image();
+            await new Promise((resolve, reject) => {
+              image.onload = resolve;
+              image.onerror = () => reject(new Error("The combined clean graph could not be rendered."));
+              image.src = url;
+            });
+            exportContext.drawImage(image, 0, (combinedTop + CANVAS_PARTITION_HEADER_HEIGHT) * scale, exportCanvas.width, Math.max(0, (combinedGraphHeight - CANVAS_PARTITION_HEADER_HEIGHT) * scale));
+          } finally {
+            URL.revokeObjectURL(url);
+          }
+        }
+        combinedTop += combinedGraphHeight;
+      }
+    }
     const blob = await new Promise((resolve, reject) => exportCanvas.toBlob(
       (value) => value ? resolve(value) : reject(new Error("The canvas image could not be created.")),
       "image/jpeg",
@@ -7054,7 +9469,68 @@ function setCanvasReadingStatus(message, kind = "", loading = false) {
 
 function currentCanvasQuestionText() {
   const question = state.canvasQuestion || ((state.canvasContext || "").startsWith("ask-") ? state.selectedPaperQuestion : null);
-  return question?.question_text_latex || question?.accessible_text || question?.question_text || question?.text || "";
+  if (!question) return "";
+  const pieces = [];
+  const allowed = /question|subquestion|context|preamble|instruction|prompt|stem|accessible|text|part|body|parent|main|sibling|related|children/i;
+  const excluded = /answer|memo|solution|marking|feedback|explanation|hint|rubric/i;
+  const collect = (value, key = "", depth = 0) => {
+    if (depth > 5 || !key || excluded.test(key)) return;
+    if (typeof value === "string") {
+      if (allowed.test(key) && value.trim()) pieces.push(value.trim());
+      return;
+    }
+    if (Array.isArray(value)) {
+      value.forEach((item) => collect(item, key, depth + 1));
+      return;
+    }
+    if (!value || typeof value !== "object") return;
+    Object.entries(value).forEach(([childKey, child]) => {
+      if (excluded.test(childKey)) return;
+      if (allowed.test(childKey) || depth === 0) collect(child, childKey, depth + 1);
+    });
+  };
+  collect(question, "question", 0);
+  const fallback = question.question_text_latex || question.accessible_text || question.question_text || question.text || "";
+  if (!pieces.length && fallback) pieces.push(String(fallback).trim());
+  return [...new Set(pieces)].join("\n").slice(0, 12_000);
+}
+
+function canvasGraphQuestionScope(questionText, answerLabel) {
+  const full = String(questionText || "").trim();
+  const label = String(answerLabel || "").trim();
+  if (!full || (!label.includes(".") && !label.includes("("))) return full;
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const lines = full.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  const target = new RegExp(`^(?:\\(?${escaped}\\)?)(?:[.)/:;\\s]|$)`, "i");
+  const nextSubquestion = /^\(?\d+(?:\.\d+)*(?:\([a-z]+\))?\)?[.)/:;\s]/i;
+  const start = lines.findIndex((line) => target.test(line));
+  if (start < 0) return full;
+  const selected = [lines[start]];
+  for (let index = start + 1; index < lines.length; index += 1) {
+    if (nextSubquestion.test(lines[index])) break;
+    selected.push(lines[index]);
+  }
+  return selected.join("\n").slice(0, 4000) || full;
+}
+
+function canvasAnswerLabels(canvas) {
+  const labels = [...new Set((canvas?.graphLayout?.partitionTags || []).map((tag) => String(tag || "").trim()).filter(Boolean))];
+  return labels.join(", ");
+}
+
+function canvasAnswerLabelForRegion(canvas, region) {
+  const partition = Math.trunc(Number(region?.partition) || 0);
+  return String(canvas?.graphLayout?.partitionTags?.[partition] || "").trim();
+}
+
+function canvasQuestionTagForFunction(canvas, functionNumber) {
+  const partition = canvasPartitionForFunction(functionNumber, canvas?.graphLayout);
+  return partition >= 0 ? String(canvas?.graphLayout?.partitionTags?.[partition] || "").trim() : "";
+}
+
+function canvasFunctionGroupForFunction(canvas, functionNumber) {
+  return (canvas?.graphLayout?.functionGroups || []).find((group) =>
+    functionNumber >= Number(group.startFunction) && functionNumber < Number(group.startFunction) + Number(group.count)) || null;
 }
 
 function canvasRegionNormalizedBounds(region) {
@@ -7083,18 +9559,58 @@ async function uploadCanvasRegionCrop(photo, region, signal, revision) {
   return photoId;
 }
 
-function canvasRegionContext(kind, questionText, functionCount) {
+function canvasRegionContext(kind, questionText, functionCount, answerLabel = "", partition = 0) {
   const instruction = kind === "words"
     ? "Read only the handwritten words in this selected area. Do not transcribe equations, solve, correct, or add content. For a genuinely uncertain handwritten word, include the best whole-word reading in the uncertainty's observed field and 2 to 5 plausible whole-word replacements in alternatives. Do not invent alternatives for clear words."
     : kind === "maths"
       ? "Recognize only the handwritten mathematical expressions in this selected area as editable LaTeX. Do not solve, correct, or add steps."
-      : "Describe only the visible drawing, graph, shape or diagram in this selected area, including its labels and relationships. Do not solve the question or invent missing labels or coordinates.";
+      : "Describe only visible drawing structure: distinguish the x-axis and y-axis from curves, and report visible labels, points, branches, edges, faces, terms, or relationships. For a function graph, do not name or guess its family unless the learner wrote it. Do not calculate, solve, infer exact coordinates, or invent missing labels.";
   return [
     `Handwriting canvas. ${instruction}`,
     "This step reads or describes the learner's work only. Do not provide an answer or mark the work.",
     functionCount ? `The learner expects ${functionCount} function${functionCount === 1 ? "" : "s"} in the graph.` : "",
+    answerLabel ? `Learner's answer label: ${answerLabel}.` : "",
+    functionCount && canvasPartitionKind(partition) === "function"
+      ? `This is function ${state.canvas?.graphLayout?.partitionFunctions?.[partition] || (state.canvas?.graphSketchIndex || 0) + 1} of the shared response.`
+      : "",
     questionText ? `Current question (context only): ${questionText}` : "",
   ].filter(Boolean).join("\n");
+}
+
+function canvasStructuredObservationSummary(observations, answerLabel = "") {
+  if (!observations || typeof observations !== "object") return "";
+  const typeNames = {
+    coordinate_graph: "coordinate graph",
+    multiple_function_graph: "coordinate graph with multiple curves",
+    tree_diagram: "tree diagram",
+    venn_diagram: "Venn diagram",
+    sequence_or_series: "sequence or series layout",
+    two_dimensional_geometry: "2D geometry drawing",
+    three_dimensional_geometry: "3D geometry drawing",
+    geometry: "geometry drawing",
+    table: "table",
+    diagram: "diagram",
+    circuit: "circuit",
+  };
+  const parts = [];
+  if (answerLabel) parts.push(`Answer ${answerLabel}`);
+  const type = typeNames[observations.drawing_type];
+  if (type) parts.push(`recognized structure: ${type}`);
+  const axes = observations.axes && typeof observations.axes === "object" ? observations.axes : {};
+  if (observations.drawing_type === "coordinate_graph" || observations.drawing_type === "multiple_function_graph" || axes.visible) {
+    parts.push(`axes: x-axis ${axes.x_axis_visible ? "visible" : "not clearly visible"}; y-axis ${axes.y_axis_visible ? "visible" : "not clearly visible"}`);
+    if (axes.scale_or_tick_labels) parts.push(`visible scale/ticks: ${axes.scale_or_tick_labels}`);
+  }
+  const shapes = Array.isArray(observations.curves_or_shapes) ? observations.curves_or_shapes : [];
+  const shapeLabels = shapes.map((item) => [item?.label, item?.shape, item?.orientation].filter(Boolean).join(" ")).filter(Boolean);
+  if (shapeLabels.length) parts.push(`visible components: ${shapeLabels.slice(0, 12).join("; ")}`);
+  const labels = Array.isArray(observations.visible_labels) ? observations.visible_labels.filter(Boolean) : [];
+  if (labels.length) parts.push(`visible labels: ${labels.slice(0, 20).join(", ")}`);
+  const coordinates = Array.isArray(observations.visible_coordinates) ? observations.visible_coordinates.filter(Boolean) : [];
+  if (coordinates.length) parts.push(`written coordinates: ${coordinates.slice(0, 20).join(", ")}`);
+  const uncertain = Array.isArray(observations.unreadable_parts) ? observations.unreadable_parts.filter(Boolean) : [];
+  if (uncertain.length) parts.push(`unclear: ${uncertain.slice(0, 8).join("; ")}`);
+  return parts.join(". ").slice(0, 1800);
 }
 
 async function reviewCanvasReading() {
@@ -7109,9 +9625,17 @@ async function reviewCanvasReading() {
     setCanvasReadingStatus("Write or draw something on the canvas first.", "error");
     return;
   }
-  const graphMode = canvas.mode === "graph";
+  const graphMode = canvas.mode === "graph" || canvas.reviewingGraph;
+  const graphRegion = canvas.reviewingGraph && canvas.graphLayout
+    ? (() => {
+      const functionNumber = canvas.graphSketchIndex + 1;
+      const partition = canvasPartitionForFunction(functionNumber);
+      const bounds = canvasPartitionBounds(partition);
+      return { id: `graph-sketch-${functionNumber}`, kind: "drawings", partition, x: 0, y: bounds.top, width: canvas.graphLayout.totalWidth, height: bounds.bottom - bounds.top, transient: true };
+    })()
+    : null;
   const regions = graphMode
-    ? [{ id: "graph-sketch", kind: "drawings", x: 0, y: 0, width: workingCanvas.clientWidth, height: workingCanvas.clientHeight }]
+    ? [graphRegion || { id: "graph-sketch", kind: "drawings", x: 0, y: 0, width: workingCanvas.clientWidth, height: workingCanvas.clientHeight, transient: true }]
     : canvas.regions.slice();
   if (!graphMode && !regions.length) {
     setCanvasReadingStatus("Mark at least one area first. Choose Words, Maths, or Drawings.", "error");
@@ -7142,7 +9666,8 @@ async function reviewCanvasReading() {
   $("#canvasReadingConfirm").disabled = true;
   $("#canvasReadingImageOnly").disabled = true;
   $("#canvasReadingImageOnly").hidden = graphMode;
-  setCanvasReadingStatus("Preparing your canvas…", "", true);
+  setCanvasReadingStatus(graphMode ? "Preparing your function review…" : "Preparing your canvas review…", "", true);
+  requestAnimationFrame(() => $("#canvasReadingReview").scrollIntoView({ behavior: "smooth", block: "start" }));
   try {
     const photo = await ensureCanvasPhoto(canvas, revision, (message) => setCanvasReadingStatus(message, "", true));
     canvas.readingPhoto = photo;
@@ -7150,21 +9675,25 @@ async function reviewCanvasReading() {
     const questionText = currentCanvasQuestionText();
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 180_000);
-    const collected = { words: [], formulas: [], drawings: [], uncertainties: [], wordAlternatives: [], hasUncertainty: false };
+    const collected = { words: [], formulas: [], drawings: [], visualObservations: [], graphTypeEstimate: "", uncertainties: [], wordAlternatives: [], hasUncertainty: false };
+    let graphPhotoId = "";
     try {
       for (let index = 0; index < regions.length; index += 1) {
         const region = regions[index];
+        const regionAnswerLabel = canvasAnswerLabelForRegion(canvas, region);
         const label = region.kind === "maths" ? "maths" : region.kind === "drawings" ? "drawing" : "words";
         setCanvasReadingStatus(`Reading ${label} area ${index + 1} of ${regions.length}…`, "", true);
-        const bounds = graphMode
+        const graphCrop = Boolean(canvas.reviewingGraph && canvas.graphLayout);
+        const bounds = graphMode && !graphCrop
           ? { x: 0, y: 0, width: 1, height: 1 }
           : canvasRegionNormalizedBounds(region);
-        if (!graphMode && (bounds.width < 0.002 || bounds.height < 0.002)) {
+        if ((!graphMode || graphCrop) && (bounds.width < 0.002 || bounds.height < 0.002)) {
           throw new Error("A selected box is outside the visible canvas. Redraw it around the writing you want transcribed.");
         }
-        const photoId = graphMode
+        const photoId = graphMode && !graphCrop
           ? photo.photoId
           : await uploadCanvasRegionCrop(photo, region, controller.signal, revision);
+        if (graphCrop) graphPhotoId = photoId;
         const requestBounds = { x: 0, y: 0, width: 1, height: 1 };
         assertCanvasSnapshotCurrent(canvas, revision);
         const result = await postJson("/api/education/photo/transcribe-math", {
@@ -7172,7 +9701,7 @@ async function reviewCanvasReading() {
           photo_id: photoId,
           subject: "Mathematics",
           grade: Math.max(8, Math.min(12, Number(state.grade) || 12)),
-          context: canvasRegionContext(region.kind, questionText, canvas.graphFunctionCount),
+          context: canvasRegionContext(region.kind, questionText, canvas.graphFunctionCount, regionAnswerLabel, region.partition),
           // Read the selected snapshot with the vision transcriber in one pass.
           // Canvas transcription does not use the slower local formula service.
           ai_tier: "luna",
@@ -7185,7 +9714,7 @@ async function reviewCanvasReading() {
           : [];
         if (region.kind === "words") {
           const words = sanitizeLearnerFacingText(String(result.transcription || result.recognized_text || segments.join("\n")).trim());
-          if (words) collected.words.push(words);
+          if (words) collected.words.push(regionAnswerLabel ? `Answer ${regionAnswerLabel}:\n${words}` : words);
           if (Array.isArray(result.uncertainties)) {
             for (const item of result.uncertainties) {
               const observed = typeof item?.observed === "string" ? item.observed.trim() : "";
@@ -7209,6 +9738,13 @@ async function reviewCanvasReading() {
         } else {
           const drawing = sanitizeLearnerFacingText(String(result.drawing_description || result.transcription || "").trim());
           if (drawing) collected.drawings.push(drawing);
+          if (result.visual_observations && typeof result.visual_observations === "object") {
+            collected.visualObservations.push(result.visual_observations);
+            const estimate = String(result.visual_observations.graph_type_estimate || "").trim();
+            if (estimate && estimate !== "not_applicable") collected.graphTypeEstimate = estimate;
+            const structured = canvasStructuredObservationSummary(result.visual_observations, regionAnswerLabel);
+            if (structured) collected.drawings.push(structured);
+          }
         }
         if (Array.isArray(result.uncertainties)) collected.uncertainties.push(...result.uncertainties.map(formatCanvasUncertainty).filter(Boolean));
         collected.hasUncertainty ||= Boolean(result.has_uncertainty);
@@ -7219,6 +9755,7 @@ async function reviewCanvasReading() {
     } finally {
       clearTimeout(timeout);
     }
+    if (canvas.reviewingGraph && graphPhotoId) canvas.readingPhoto = { ...photo, photoId: graphPhotoId };
     assertCanvasSnapshotCurrent(canvas, revision);
     const recognizedText = collected.words.join("\n");
     $("#canvasReadingWords").value = recognizedText;
@@ -7228,8 +9765,10 @@ async function reviewCanvasReading() {
     renderCanvasReadingAlternatives(canvas);
     const drawingDescription = collected.drawings.join("\n");
     $("#canvasReadingDrawing").value = drawingDescription;
-    const graphType = drawingDescription.match(/\bGraph type\s*:\s*([^\n;,.]+)/i)?.[1]?.trim() || "";
-    $("#canvasGraphType").value = graphMode ? graphType : "";
+    // Give the learner Luna's visual estimate as an editable hypothesis.
+    // The optional equation remains blank unless the learner enters it.
+    const estimatedGraphType = String(collected.graphTypeEstimate || "unclear").replace(/_/g, " ");
+    $("#canvasGraphType").value = graphMode ? estimatedGraphType : "";
     $("#canvasGraphDetails").value = "";
     $("#canvasReadingComment").value = "";
     const recognizedFormula = collected.formulas.join("\\\\");
@@ -7247,20 +9786,28 @@ async function reviewCanvasReading() {
     }
     canvas.readingResult = collected;
     if (graphMode) {
+      // The canvas may have been restored as a general writing layout before
+      // its function partition is reviewed, so do not rely on openCanvas()
+      // having made these confirmation fields visible.
+      $("#canvasGraphReviewFields").hidden = false;
+      const priorWorkflow = canvas.graphWorkflow || {};
+      const graphFunctionCount = canvas.graphLayout?.count || canvas.graphFunctionCount || 1;
+      const functionIndex = canvas.graphLayout ? canvas.graphSketchIndex + 1 : 1;
       canvas.graphWorkflow = {
+        ...priorWorkflow,
         stage: "confirm-type",
-        functionCount: canvas.graphFunctionCount,
-        functionIndex: 1,
+        functionCount: graphFunctionCount,
+        functionIndex,
         currentType: "",
         points: [],
         promptQueue: [],
         activePrompt: null,
         extraPointCount: 0,
         currentResult: null,
-        functions: [],
+        functions: Array.isArray(priorWorkflow.functions) ? priorWorkflow.functions : [],
       };
-      $("#canvasGraphFunctionHeading").textContent = `Function 1 of ${canvas.graphFunctionCount}: confirm its type`;
-      $("#canvasGraphGuidedStatus").textContent = "Confirm or correct the type for this function. You will then enter exact key values.";
+      $("#canvasGraphFunctionHeading").textContent = `Function ${functionIndex} of ${graphFunctionCount}: confirm its type`;
+      $("#canvasGraphGuidedStatus").textContent = "Choose the graph family you are working on. Then enter the exact features requested by the question and the key points for that family.";
       $("#canvasGraphPointPrompt").textContent = "Confirm the graph type above to begin collecting key points.";
       $("#canvasGraphPointHistory").replaceChildren();
       $("#canvasGraphPointInput").value = "";
@@ -7268,10 +9815,9 @@ async function reviewCanvasReading() {
       $("#canvasGraphPreviewPanel").hidden = true;
       $("#canvasReadingConfirm").textContent = "Confirm type";
       $("#canvasGraphType").disabled = false;
-      $("#canvasGraphDetails").disabled = canvas.questionAwareGraph;
-      const equationLabel = $("#canvasGraphEquationLabel");
-      if (equationLabel) equationLabel.hidden = canvas.questionAwareGraph;
-      $("#canvasGraphDetails").hidden = canvas.questionAwareGraph;
+      $("#canvasGraphDetails").disabled = false;
+      $("#canvasGraphEquationLabel").hidden = false;
+      $("#canvasGraphDetails").hidden = false;
     } else {
       $("#canvasGraphGuidedPanel").hidden = true;
       $("#canvasGraphPreviewPanel").hidden = true;
@@ -7403,7 +9949,18 @@ $("#canvasReadingAlternatives").addEventListener("click", (event) => {
 });
 
 function parseCanvasGraphExpression(equation) {
-  let source = String(equation || "").trim().replace(/^\s*(?:y|f\s*\(\s*x\s*\))\s*=\s*/i, "");
+  let source = String(equation || "")
+    .replace(/[−–]/g, "-")
+    .replace(/[×·]/g, "*")
+    .replace(/\\(?:cdot|times)\b/gi, "*")
+    .replace(/\\(?:d?frac)\s*\{([^{}]+)\}\s*\{([^{}]+)\}/gi, "($1)/($2)")
+    .replace(/\^\s*\{([^{}]+)\}/g, "^($1)")
+    .replace(/π/g, "pi")
+    .replace(/(\d|\))\s*(?=(?:x|pi|e)\b|\()/gi, "$1*")
+    .replace(/\b(x|pi|e)\s*(?=\d|\()/gi, "$1*")
+    .replace(/\)\s*(?=\d|x\b|pi\b|e\b)/gi, ")*")
+    .trim()
+    .replace(/^\s*(?:y|f\s*\(\s*x\s*\))\s*=\s*/i, "");
   if (!source) return null;
   const tokens = [];
   const tokenPattern = /\s*(?:((?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?)|([a-z][a-z0-9_]*)|([()+\-*/^]))/iy;
@@ -7502,10 +10059,14 @@ function renderCanvasGraphPreview(functions) {
   const evaluators = functions.map((item) => item.result.circle ? null : parseCanvasGraphExpression(item.result.equation));
   if (!evaluators.length || evaluators.some((evaluate, index) => !evaluate && !functions[index].result.circle)) return "";
   const results = functions.map((item) => item.result);
-  let xMin = Math.min(...results.map((item) => Number(item.x_min)));
-  let xMax = Math.max(...results.map((item) => Number(item.x_max)));
-  let yMin = Math.min(...results.map((item) => Number(item.y_min)));
-  let yMax = Math.max(...results.map((item) => Number(item.y_max)));
+  const asymptotes = confirmedCanvasGraphAsymptotes(functions);
+  const bounds = includeCanvasGraphAsymptotes({
+    xMin: Math.min(...results.map((item) => Number(item.x_min))),
+    xMax: Math.max(...results.map((item) => Number(item.x_max))),
+    yMin: Math.min(...results.map((item) => Number(item.y_min))),
+    yMax: Math.max(...results.map((item) => Number(item.y_max))),
+  }, asymptotes);
+  let { xMin, xMax, yMin, yMax } = bounds;
   if (![xMin, xMax, yMin, yMax].every(Number.isFinite) || xMax <= xMin || yMax <= yMin) return "";
   const width = 720; const height = 390;
   const plot = { left: 60, right: 690, top: 24, bottom: 340 };
@@ -7515,7 +10076,7 @@ function renderCanvasGraphPreview(functions) {
   const yTicks = canvasGraphTickLabels(yMin, yMax);
   const colors = ["#0e5fae", "#168363", "#7c3aed", "#c2410c", "#be185d", "#475569", "#0891b2", "#4d7c0f"];
   const parts = [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Reconstructed graph preview">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-label="Reconstructed graph preview${asymptotes.length ? " with confirmed asymptotes" : ""}">`,
     `<rect width="${width}" height="${height}" fill="#fff"/>`,
     `<defs><clipPath id="canvas-graph-plot-clip"><rect x="${plot.left}" y="${plot.top}" width="${plot.right - plot.left}" height="${plot.bottom - plot.top}"/></clipPath></defs>`,
   ];
@@ -7535,6 +10096,7 @@ function renderCanvasGraphPreview(functions) {
   parts.push(`<line x1="${yAxisX}" y1="${plot.top}" x2="${yAxisX}" y2="${plot.bottom}" stroke="#142d48" stroke-width="2"/>`);
   parts.push(`<text x="${plot.right - 2}" y="${Math.min(height - 4, xAxisY + 17)}" text-anchor="end" font-size="13" fill="#142d48">x</text>`);
   parts.push(`<text x="${yAxisX + 7}" y="${plot.top + 13}" font-size="13" fill="#142d48">y</text>`);
+  parts.push(...renderCanvasGraphAsymptoteSvg(asymptotes, mapX, mapY, plot));
   functions.forEach((item, functionIndex) => {
     const evaluate = evaluators[functionIndex];
     if (item.result.circle) {
@@ -7580,54 +10142,102 @@ function renderCanvasGraphPreview(functions) {
   return parts.join("");
 }
 
-function canvasGraphInitialPrompts(graphType) {
+function canvasGraphInitialPrompts(graphType, questionText = "") {
   const type = String(graphType || "").toLowerCase();
-  if (type.includes("circle")) return [
+  let prompts;
+  if (type.includes("circle")) prompts = [
     { label: "Centre", prompt: "Enter the circle centre coordinates (x, y).", kind: "coordinate" },
     { label: "Radius", prompt: "Enter the positive circle radius.", kind: "scalar" },
   ];
-  if (type.includes("parabola") || type.includes("quadratic")) return [
+  else if (type.includes("parabola") || type.includes("quadratic")) prompts = [
     { label: "Vertex", prompt: "Enter the vertex coordinates (x, y). Use exact values from the question or your working; do not estimate from an unscaled sketch.", kind: "coordinate" },
     { label: "Point on curve", prompt: "Enter one other known point on the curve (x, y).", kind: "coordinate" },
   ];
-  if (type.includes("line") || type.includes("linear")) return [
+  else if (type.includes("line") || type.includes("linear")) prompts = [
     { label: "Point 1", prompt: "Enter the first known point on the line (x, y).", kind: "coordinate" },
     { label: "Point 2", prompt: "Enter a different known point on the line (x, y).", kind: "coordinate" },
   ];
-  if (type.includes("cubic")) return [
+  else if (type.includes("cubic")) prompts = [
     { label: "Inflection point", prompt: "Enter the cubic's point of inflection (x, y).", kind: "coordinate" },
     { label: "Point on curve 1", prompt: "Enter a known point on the curve, preferably a turning point (x, y).", kind: "coordinate" },
     { label: "Point on curve 2", prompt: "Enter a second distinct point on the curve (x, y).", kind: "coordinate" },
   ];
-  if (type.includes("exponential")) return [
+  else if (type.includes("exponential")) prompts = [
     { label: "Horizontal asymptote", prompt: "Enter the horizontal asymptote as y = c.", kind: "scalar" },
     { label: "Y-intercept", prompt: "Enter the y-intercept coordinates (x, y).", kind: "coordinate" },
     { label: "Point on curve", prompt: "Enter another known point on the curve (x, y).", kind: "coordinate" },
   ];
-  if (type.includes("hyperbola") || type.includes("hyperbolic") || type.includes("reciprocal")) return [
+  else if (type.includes("hyperbola") || type.includes("hyperbolic") || type.includes("reciprocal")) prompts = [
     { label: "Vertical asymptote", prompt: "Enter the vertical asymptote as x = a.", kind: "scalar" },
     { label: "Horizontal asymptote", prompt: "Enter the horizontal asymptote as y = b.", kind: "scalar" },
     { label: "Point on curve", prompt: "Enter a known point on one branch (x, y).", kind: "coordinate" },
   ];
-  if (type.includes("tangent")) return [
+  else if (type.includes("tangent")) prompts = [
     { label: "Asymptote 1", prompt: "Enter the x-coordinate of the first vertical asymptote.", kind: "scalar" },
     { label: "Asymptote 2", prompt: "Enter the x-coordinate of the next vertical asymptote.", kind: "scalar" },
     { label: "Centre crossing", prompt: "Enter the point where the curve crosses its midline (x, y).", kind: "coordinate" },
   ];
-  if (type.includes("sine") || type.includes("cosine") || type.includes("trigonometric")) return [
+  else if (type.includes("sine") || type.includes("cosine") || type.includes("trigonometric")) prompts = [
     { label: "Midline point", prompt: "Enter a point on the sinusoid's midline (x, y).", kind: "coordinate" },
     { label: "Maximum or minimum", prompt: "Enter a neighbouring maximum or minimum (x, y).", kind: "coordinate" },
     { label: "Period", prompt: "Enter the period of one full cycle.", kind: "scalar" },
   ];
-  if (type.includes("absolute")) return [
+  else if (type.includes("absolute")) prompts = [
     { label: "Vertex", prompt: "Enter the absolute-value graph's vertex (x, y).", kind: "coordinate" },
     { label: "Point on graph", prompt: "Enter one other point on the graph (x, y).", kind: "coordinate" },
   ];
-  if (type.includes("square-root") || type.includes("square root")) return [
+  else if (type.includes("square-root") || type.includes("square root") || type.includes("radical")) prompts = [
     { label: "Endpoint", prompt: "Enter the square-root graph's endpoint (x, y).", kind: "coordinate" },
     { label: "Point on graph", prompt: "Enter one other point on the graph (x, y).", kind: "coordinate" },
   ];
-  return [1, 2, 3].map((index) => ({ label: `Key point ${index}`, prompt: `Enter key point ${index} as coordinates (x, y).`, kind: "coordinate" }));
+  else prompts = [1, 2, 3].map((index) => ({ label: `Key point ${index}`, prompt: `Enter key point ${index} as coordinates (x, y).`, kind: "coordinate" }));
+
+  const scope = String(questionText || "").toLowerCase();
+  const hasXIntercept = /x[\s-]*intercepts?|\b(?:roots?|zeroes?)\b|cross(?:es|ing)?\s+(?:the\s+)?x[- ]axis/i.test(scope);
+  const hasYIntercept = /y[\s-]*intercepts?|cross(?:es|ing)?\s+(?:the\s+)?y[- ]axis/i.test(scope);
+  const hasAnyIntercept = /\bintercepts?\b|intersects?\s+(?:the\s+)?axes|cross(?:es|ing)?\s+(?:the\s+)?axes/i.test(scope);
+  const hasAsymptote = /\basymptotes?\b/i.test(scope);
+  const asksVerticalAsymptote = /\bvertical\s+asymptotes?\b/i.test(scope);
+  const asksHorizontalAsymptote = /\bhorizontal\s+asymptotes?\b/i.test(scope);
+  const asksLimits = /\blimits?\b|end[-\s]*behaviou?r|\bas\s+[a-z]\s*(?:tends?|approaches?)\s*(?:to\s*)?(?:[+−-]?\s*infinity|∞)|\b[+−-]?infinity\b/i.test(scope);
+  const asksCritical = /\bcritical\s*points?\b|\bstationary\s*points?\b|\bturning\s*points?\b|\bextrema\b|\b(?:local\s+)?(?:maximum|minimum)\b|\bvertex\b/i.test(scope);
+  const addIfMissing = (prompt) => {
+    const key = prompt.label.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+    if (!prompts.some((item) => item.label.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim() === key)) prompts.push(prompt);
+  };
+  const interceptPrompt = (axis) => ({
+    label: `${axis.toUpperCase()}-intercepts`,
+    prompt: `Enter the ${axis.toUpperCase()}-intercept coordinate${axis === "x" ? "s" : ""} you found (use (x, y); separate multiple points with semicolons), or type none if there is no ${axis.toUpperCase()}-intercept.`,
+    kind: "coordinate-list-or-none",
+  });
+  if (hasAnyIntercept || hasXIntercept) addIfMissing(interceptPrompt("x"));
+  if (hasAnyIntercept || hasYIntercept) addIfMissing(interceptPrompt("y"));
+  if (hasAsymptote && !asksVerticalAsymptote && !asksHorizontalAsymptote && !prompts.some((item) => /asymptote/i.test(item.label))) {
+    addIfMissing({ label: "Asymptotes", prompt: "Enter each asymptote required by the question, or type none if this graph has none.", kind: "text-or-none" });
+  }
+  if (asksVerticalAsymptote && !prompts.some((item) => /vertical\s+asymptote/i.test(`${item.label} ${item.prompt}`))) {
+    addIfMissing({ label: "Vertical asymptote", prompt: "Enter the vertical asymptote value(s) requested by the question, or type none if there is none.", kind: "text-or-none" });
+  }
+  if (asksHorizontalAsymptote && !prompts.some((item) => /horizontal\s+asymptote/i.test(`${item.label} ${item.prompt}`))) {
+    addIfMissing({ label: "Horizontal asymptote", prompt: "Enter the horizontal asymptote value(s) requested by the question, or type none if there is none.", kind: "text-or-none" });
+  }
+  if (asksLimits && !prompts.some((item) => /\blimits?\b|end[-\s]*behaviou?r/i.test(`${item.label} ${item.prompt}`))) {
+    addIfMissing({
+      label: "Limits / end behaviour",
+      prompt: "Enter the exact limit or end behaviour requested by the question, for example as x tends to positive or negative infinity. Use your own established result, or type none if the question does not ask for it.",
+      kind: "text-or-none",
+    });
+  }
+  if (asksCritical) {
+    const hasCriticalFeature = prompts.some((item) => /vertex|turning|critical|stationary|maximum|minimum/i.test(item.label));
+    if (!hasCriticalFeature) {
+      addIfMissing({ label: "Critical/stationary points", prompt: "Enter the critical or stationary point coordinates you found, separated by semicolons, or type none if there are none.", kind: "coordinate-list-or-none" });
+    }
+    if (type.includes("cubic") && !prompts.some((item) => /turning point/i.test(item.label))) {
+      addIfMissing({ label: "Turning points", prompt: "Enter the cubic's turning-point coordinates, separated by semicolons, or type none if it has none.", kind: "coordinate-list-or-none" });
+    }
+  }
+  return prompts;
 }
 
 function parseCanvasGraphNumber(raw) {
@@ -7650,10 +10260,25 @@ function parseCanvasGraphCoordinate(value) {
   return x === null || y === null ? null : { x, y };
 }
 
+function parseCanvasGraphCoordinateList(value) {
+  const text = String(value || "").trim();
+  if (/^(?:none|no|n\/a|not applicable)$/i.test(text)) return [];
+  if (!text) return null;
+  const wrapped = text.match(/\([^()]+\)/g);
+  if (wrapped?.length) {
+    const remainder = text.replace(/\([^()]+\)/g, "").replace(/[\s;,]+/g, "");
+    if (remainder) return null;
+    const points = wrapped.map(parseCanvasGraphCoordinate);
+    return points.every(Boolean) ? points : null;
+  }
+  const point = parseCanvasGraphCoordinate(text);
+  return point ? [point] : null;
+}
+
 function placeCanvasGraphConfirmButton(canvas = state.canvas) {
   const button = $("#canvasReadingConfirm");
   const home = $("#canvasReadingConfirmHome");
-  const workflow = canvas?.mode === "graph" ? canvas.graphWorkflow : null;
+  const workflow = canvas && (canvas.mode === "graph" || canvas.reviewingGraph) ? canvas.graphWorkflow : null;
   let target = home;
   if (workflow?.stage === "confirm-type") target = $("#canvasGraphTypeAction");
   else if (["collecting", "retry"].includes(workflow?.stage)) target = $("#canvasGraphPointAction");
@@ -7665,18 +10290,27 @@ function canvasGraphEquationMatchesPoints(equation, points) {
   const evaluate = parseCanvasGraphExpression(equation);
   if (!evaluate) return false;
   for (const point of points) {
-    const coordinate = parseCanvasGraphCoordinate(point.value);
-    if (!coordinate) continue;
-    const actual = evaluate(coordinate.x);
-    const tolerance = Math.max(1e-4, Math.abs(coordinate.y) * 1e-3);
-    if (actual === null || Math.abs(actual - coordinate.y) > tolerance) return false;
+    const coordinates = parseCanvasGraphCoordinateList(point.value);
+    if (!coordinates?.length) continue;
+    for (const coordinate of coordinates) {
+      const actual = evaluate(coordinate.x);
+      const tolerance = Math.max(1e-4, Math.abs(coordinate.y) * 1e-3);
+      if (actual === null || Math.abs(actual - coordinate.y) > tolerance) return false;
+    }
   }
   return true;
 }
 
 function validateCanvasGraphEntry(prompt, rawValue) {
   const value = String(rawValue || "").trim();
-  if (prompt.kind === "coordinate") {
+  const explicitlyNone = /^(?:none|no|n\/a|not applicable)$/i.test(value);
+  if (prompt.kind === "coordinate-list-or-none") {
+    if (!parseCanvasGraphCoordinateList(value)) return "Enter the exact coordinate point(s) you found, for example (1, 0); (3, 0), or type none if none exist.";
+  } else if (prompt.kind === "coordinate-or-none") {
+    if (!explicitlyNone && !parseCanvasGraphCoordinate(value)) return "Enter one exact coordinate pair, for example (2, -4), or type none if the feature does not exist.";
+  } else if (prompt.kind === "text-or-none") {
+    if (!value) return "Enter the exact feature requested, or type none if it does not apply.";
+  } else if (prompt.kind === "coordinate") {
     if (!parseCanvasGraphCoordinate(value)) return "Enter one finite coordinate pair, for example (2, -4).";
   } else if (parseCanvasGraphNumber(value.replace(/^[xy]\s*=\s*/i, "")) === null) {
     return "Enter one finite number, such as 2 or -3/4.";
@@ -7715,17 +10349,61 @@ function updateCanvasGraphHistory(canvas) {
 
 function renderConfirmedCanvasGraph(canvas, includeCurrent = false) {
   const workflow = canvas.graphWorkflow;
-  const functions = workflow.functions.slice();
-  if (includeCurrent && workflow.currentResult) functions.push({ graphType: workflow.currentType, result: workflow.currentResult });
+  const group = canvasFunctionGroupForFunction(canvas, workflow.functionIndex);
+  let functions = workflow.functions.slice();
+  if (includeCurrent && workflow.currentResult) {
+    functions.push({
+      graphType: workflow.currentType,
+      points: workflow.points.slice(),
+      result: workflow.currentResult,
+      userEquation: workflow.userEquation || "",
+    });
+  }
+  if (canvas.mode === "composite" && group) {
+    functions = includeCurrent && workflow.currentResult
+      ? [{ graphType: workflow.currentType, points: workflow.points.slice(), result: workflow.currentResult, userEquation: workflow.userEquation || "" }]
+      : functions.slice(-1);
+  } else if (group) {
+    const start = Number(group.startFunction) - 1;
+    const end = start + Number(group.count);
+    functions = functions.slice(start, end);
+    if (!group.combine) functions = functions.slice(-1);
+  }
   const svg = renderCanvasGraphPreview(functions);
   const panel = $("#canvasGraphPreviewPanel");
   const target = $("#canvasGraphPreview");
   panel.hidden = !svg;
   target.innerHTML = svg;
   $("#canvasGraphPreviewStatus").textContent = svg
-    ? "Review the reconstructed curve and the key points you confirmed."
+    ? "Review this function's reconstructed curve and the key points you confirmed. Functions are combined only after all reviews are complete."
     : "The graph details were reconstructed, but this preview could not be displayed. Check the type and points before continuing.";
   return Boolean(svg);
+}
+
+function renderCanvasCombinedGroupPreviews(canvas) {
+  const target = $("#canvasGraphPreview");
+  const panel = $("#canvasGraphPreviewPanel");
+  const functions = canvas.graphWorkflow?.functions || [];
+  const completedGroups = (canvas.graphLayout?.functionGroups || []).filter((group) =>
+    group.combine && functions.filter((item) => Number(item.groupStartFunction) === Number(group.startFunction)).length === Number(group.count));
+  target.replaceChildren();
+  completedGroups.forEach((group) => {
+    const groupFunctions = functions.filter((item) => Number(item.groupStartFunction) === Number(group.startFunction));
+    const section = document.createElement("section");
+    section.className = "canvas-combined-graph-group";
+    const heading = document.createElement("h4");
+    heading.textContent = "Combined functions · Question " + group.questionTag;
+    section.append(heading);
+    const graph = document.createElement("div");
+    graph.innerHTML = renderCanvasGraphPreview(groupFunctions);
+    section.append(graph);
+    target.append(section);
+  });
+  panel.hidden = completedGroups.length === 0;
+  $("#canvasGraphPreviewStatus").textContent = completedGroups.length
+    ? "Each combined graph contains only the functions for its question. The functions were reviewed separately first."
+    : "The function reviews are complete. The functions remain in their separate partitions.";
+  return completedGroups.length > 0;
 }
 
 async function reconstructCanvasGraphFunction(canvas) {
@@ -7768,6 +10446,7 @@ async function reconstructCanvasGraphFunction(canvas) {
       photo_id: photo.photoId,
       grade: Math.max(1, Math.min(12, Number(state.grade) || 12)),
       context: [
+        canvasQuestionTagForFunction(canvas, workflow.functionIndex) ? `Learner's selected question/subquestion: ${canvasQuestionTagForFunction(canvas, workflow.functionIndex)}.` : "",
         currentCanvasQuestionText(),
         `This is function ${workflow.functionIndex} of ${workflow.functionCount} on one shared graph. Use only the confirmed function type and learner-supplied key points. Never estimate exact coordinates from the sketch.`,
         canvas.questionAwareGraph ? "This is a learner task. Do not disclose or add a requested equation to the answer; return the graph preview only." : "",
@@ -7775,7 +10454,8 @@ async function reconstructCanvasGraphFunction(canvas) {
       confirmed_graph_type: workflow.currentType,
       drawing_description: $("#canvasReadingDrawing").value.trim(),
       points: workflow.points.map(({ label, value }) => ({ label, value })),
-      user_equation: canvas.questionAwareGraph ? "" : $("#canvasGraphDetails").value.trim(),
+      required_features: workflow.requiredFeatures || [],
+      user_equation: workflow.userEquation || "",
     });
     workflow.currentResult = result;
     if (String(result.status || "").toLowerCase() === "needs_point") {
@@ -7865,7 +10545,12 @@ async function advanceCanvasGraphWorkflow() {
     $("#canvasGraphType").disabled = true;
     $("#canvasGraphPointHistory").replaceChildren();
     $("#canvasGraphGuidedStatus").textContent = "Enter exact values given in the question or already established in your work. Do not estimate from an unnumbered sketch.";
-    const prompts = canvasGraphInitialPrompts(graphType);
+    const prompts = canvasGraphInitialPrompts(
+      graphType,
+      canvasGraphQuestionScope(currentCanvasQuestionText(), canvasQuestionTagForFunction(canvas, canvas.graphSketchIndex + 1)),
+    );
+    workflow.requiredFeatures = prompts.map((prompt) => prompt.label);
+    workflow.userEquation = $("#canvasGraphDetails").value.trim();
     workflow.promptQueue = prompts.slice(1);
     setCanvasGraphPrompt(canvas, prompts[0]);
     return;
@@ -7904,11 +10589,49 @@ async function advanceCanvasGraphWorkflow() {
     return;
   }
   if (workflow.stage === "preview") {
-    workflow.functions.push({ graphType: workflow.currentType, points: workflow.points.slice(), result: workflow.currentResult });
+    const functionGroup = canvasFunctionGroupForFunction(canvas, workflow.functionIndex);
+    workflow.functions.push({
+      graphType: workflow.currentType,
+      points: workflow.points.slice(),
+      result: workflow.currentResult,
+      userEquation: workflow.userEquation || "",
+      questionTag: functionGroup?.questionTag || "",
+      groupStartFunction: Number(functionGroup?.startFunction) || workflow.functionIndex,
+    });
     if (workflow.functionIndex < workflow.functionCount) {
+      if (canvas.mode === "composite" && canvas.graphLayout) {
+        const nextFunctionIndex = workflow.functionIndex + 1;
+        const nextPartition = canvasPartitionForFunction(nextFunctionIndex);
+        const nextFunctionIsDrawn = canvas.strokes.some((stroke) => stroke.partition === nextPartition && stroke.points?.length);
+        if (nextFunctionIsDrawn) {
+          beginCompositeGraphReview();
+          return;
+        }
+        workflow.functionIndex += 1;
+        workflow.stage = "sketches";
+        workflow.currentType = "";
+        workflow.userEquation = "";
+        workflow.currentResult = null;
+        workflow.points = [];
+        workflow.promptQueue = [];
+        workflow.activePrompt = null;
+        canvas.graphSketchIndex = workflow.functionIndex - 1;
+        canvas.reviewingGraph = false;
+        canvas.stage = "writing";
+        $("#canvasReadingReview").hidden = true;
+        const bounds = canvasPartitionBounds(workflow.functionIndex);
+        const surface = workingCanvas.parentElement;
+        if (surface) surface.scrollTop = Math.max(0, bounds.top - 20);
+        setCanvasReadingStatus(`Function ${workflow.functionIndex - 1} is confirmed. Sketch function ${workflow.functionIndex} in its own area, then review it.`);
+        updateCanvasStage();
+        syncPhoneCanvasSetup();
+        persistCanvasDraft();
+        return;
+      }
       workflow.functionIndex += 1;
       workflow.stage = "confirm-type";
       workflow.currentType = "";
+      workflow.userEquation = "";
       workflow.currentResult = null;
       workflow.points = [];
       workflow.promptQueue = [];
@@ -7917,7 +10640,7 @@ async function advanceCanvasGraphWorkflow() {
       $("#canvasGraphDetails").value = "";
       $("#canvasGraphGuidedPanel").hidden = false;
       $("#canvasGraphFunctionHeading").textContent = `Function ${workflow.functionIndex} of ${workflow.functionCount}: confirm its type`;
-      $("#canvasGraphGuidedStatus").textContent = "Choose or correct this function's graph type. Then enter its exact key details.";
+    $("#canvasGraphGuidedStatus").textContent = "Choose or correct your graph family. Enter the exact features requested by the question and the key points you have found; the app will not calculate missing answers.";
       $("#canvasGraphPointHistory").replaceChildren();
       $("#canvasGraphPointPrompt").textContent = "Confirm the graph type above to begin collecting key points.";
       $("#canvasGraphPointInput").value = "";
@@ -7930,19 +10653,38 @@ async function advanceCanvasGraphWorkflow() {
     }
     const summary = workflow.functions.map((item, index) => {
       const details = item.points.map((point) => `${point.label}: ${point.value}`).join(", ");
-      return `Function ${index + 1}: ${item.graphType}${details ? `; confirmed details: ${details}` : ""}`;
+      const equation = item.userEquation ? `; learner-provided equation: ${item.userEquation}` : "";
+      return `Function ${index + 1}: learner-confirmed family ${item.graphType}${equation}${details ? `; learner-confirmed features: ${details}` : ""}`;
     }).join("\n");
     canvas.confirmedReading = {
       words: "",
       formula: "",
       drawing: $("#canvasReadingDrawing").value.trim(),
       comment: $("#canvasReadingComment").value.trim(),
+      answerLabel: canvasAnswerLabels(canvas),
       graphType: workflow.functions.map((item) => item.graphType).join("; "),
       graphDetails: summary,
     };
+    renderCanvasCombinedGroupPreviews(canvas);
+    workflow.stage = "all-ready";
+    if (canvas.mode === "composite" && canvas.graphLayout) {
+      canvas.reviewingGraph = false;
+      canvas.readingConfirmed = false;
+      canvas.transcribedPhoto = null;
+      canvas.photoPromise = null;
+      const hasWrittenWork = canvas.strokes.some((stroke) => canvasPartitionIsWriting(stroke.partition) && stroke.points?.length);
+      if (hasWrittenWork) {
+        enterCanvasRegionSelection();
+        setCanvasReadingStatus("All clean graph previews are confirmed. Now box the words and maths in any writing section.", "success");
+      } else {
+        canvas.readingConfirmed = true;
+        $("#finishCanvas").click();
+      }
+      persistCanvasDraft();
+      return;
+    }
     canvas.readingConfirmed = true;
     $("#canvasReadingConfirm").textContent = "Use graph";
-    workflow.stage = "all-ready";
     placeCanvasGraphConfirmButton(canvas);
     updateCanvasStage();
     setCanvasReadingStatus("All function previews are confirmed. Use the graph to attach it to your work.", "success");
@@ -7981,10 +10723,11 @@ function appendConfirmedCanvasReading(reading) {
     current += `${current ? "\n" : ""}${text}`;
     added = true;
   };
+  addPart(reading.answerLabel ? `Answer label: ${reading.answerLabel}` : "");
   addPart(reading.words);
   addPart(reading.formula, "insertLatex");
   addPart(reading.graphType ? `Learner-confirmed graph type: ${reading.graphType}` : "");
-  addPart(reading.graphDetails ? `Learner-confirmed equation and key graph information: ${reading.graphDetails}` : "");
+  addPart(reading.graphDetails ? `Learner-confirmed graph details: ${reading.graphDetails}` : "");
   addPart(reading.drawing ? `Confirmed drawing description: ${reading.drawing}` : "");
   addPart(reading.comment ? `Learner's note: ${reading.comment}` : "");
   state.canvas.readingApplied = true;
@@ -7992,10 +10735,21 @@ function appendConfirmedCanvasReading(reading) {
 
 $("#canvasReadWritingButton").addEventListener("click", (event) => {
   const canvas = state.canvas;
-  if (!canvas || canvas.readingConfirmed) return;
+  if (!canvas) return;
+  if (canvas.readingConfirmed) {
+    if (canvas.graphWorkflow?.stage === "all-ready") $("#finishCanvas").click();
+    else showToast("This canvas has already been confirmed. Select Review and use to attach it.");
+    event.stopImmediatePropagation();
+    return;
+  }
   if (canvas.stage === "graph-setup") {
-    setStatus($("#canvasGraphCountStatus"), "Enter a whole number greater than 0 before drawing the graph.", "error");
+    setStatus($("#canvasGraphCountStatus"), "Enter a whole number from 1 to 128 before continuing.", "error");
     $("#canvasGraphFunctionCount").focus({ preventScroll: true });
+    event.stopImmediatePropagation();
+    return;
+  }
+  if (canvas.stage === "writing" && canvas.mode === "composite") {
+    beginCompositeGraphReview();
     event.stopImmediatePropagation();
     return;
   }
@@ -8008,7 +10762,7 @@ $("#canvasReadWritingButton").addEventListener("click", (event) => {
     event.stopImmediatePropagation();
     return;
   }
-  if (canvas.stage === "regions" && !canvas.regions.length) {
+  if (canvas.stage === "regions" && !canvas.regions.length && canvas.mode !== "composite") {
     setCanvasReadingStatus("Mark at least one area first. Choose Words, Maths, or Drawings.", "error");
     event.stopImmediatePropagation();
     return;
@@ -8026,6 +10780,26 @@ $("#canvasReadWritingButton").addEventListener("click", (event) => {
   event.stopImmediatePropagation();
   void reviewCanvasReading();
 });
+async function addCanvasFunctionGroupFromControl() {
+  const canvas = state.canvas;
+  if (!canvas || canvas.stage !== "writing") return;
+  const setup = await promptCanvasFunctionGroup();
+  if (!setup) return;
+  if (canvas.graphLayout) addCompositeFunctionGroup(setup.count, setup.questionTag, setup.combine);
+  else configureCanvasCompositeLayout(setup.count, setup);
+}
+
+async function addCanvasWritePartitionFromControl() {
+  const canvas = state.canvas;
+  if (!canvas || canvas.stage !== "writing" || !canvas.graphLayout) return;
+  const questionTag = await promptCanvasPartitionTag("writing");
+  if (questionTag !== null) addCompositeWritePartition(questionTag);
+}
+
+$("#canvasDrawGraphsButton").addEventListener("click", () => {
+  void addCanvasFunctionGroupFromControl();
+});
+
 $$('.canvas-region-tool').forEach((button) => button.addEventListener("click", () => {
   state.canvas.regionKind = button.dataset.canvasRegionKind;
   setStatus($("#canvasReadingStatus"), `Mark the ${state.canvas.regionKind} area on the canvas.`);
@@ -8045,19 +10819,23 @@ $("#canvasBackWritingButton").addEventListener("click", () => {
 $("#canvasGraphStartButton").addEventListener("click", () => {
   const input = $("#canvasGraphFunctionCount");
   const count = input.valueAsNumber;
-  if (!Number.isSafeInteger(count) || count < 1) {
-    setStatus($("#canvasGraphCountStatus"), "Enter a whole number greater than 0.", "error");
+  if (!Number.isSafeInteger(count) || count < 1 || count > CANVAS_LAYOUT_MAX_FUNCTION_COUNT) {
+    setStatus($("#canvasGraphCountStatus"), "Enter a whole number from 1 to 128.", "error");
     input.focus({ preventScroll: true });
     return;
   }
-  setStatus($("#canvasGraphCountStatus"), "");
-  state.canvas.graphFunctionCount = count;
-  state.canvas.stage = "writing";
-  updateCanvasStage();
+  void (async () => {
+    const questionTag = await promptCanvasPartitionTag("function");
+    if (questionTag === null) return;
+    const combine = count > 1
+      ? await askCanvasChoice(`Should the ${count} functions for question ${questionTag} be combined on one set of axes after each has been reviewed?`, { acceptLabel: "Yes", cancelLabel: "No" })
+      : false;
+    configureCanvasCompositeLayout(count, { questionTag, combine });
+  })();
 });
 
 $("#canvasReadingConfirm").addEventListener("click", async () => {
-  if (state.canvas?.mode === "graph" && state.canvas.graphWorkflow) {
+  if ((state.canvas?.mode === "graph" || state.canvas?.reviewingGraph) && state.canvas.graphWorkflow) {
     await advanceCanvasGraphWorkflowSafely();
     return;
   }
@@ -8066,9 +10844,19 @@ $("#canvasReadingConfirm").addEventListener("click", async () => {
     formula: getMathEditorLatex("canvasMath").trim(),
     drawing: $("#canvasReadingDrawing").value.trim(),
     comment: $("#canvasReadingComment").value.trim(),
+    answerLabel: canvasAnswerLabels(state.canvas),
     graphType: $("#canvasGraphType").value.trim(),
     graphDetails: $("#canvasGraphDetails").value.trim(),
   };
+  if (state.canvas?.mode === "composite" && state.canvas.graphWorkflow?.functions?.length) {
+    const functions = state.canvas.graphWorkflow.functions;
+    reading.graphType = functions.map((item) => item.graphType).join("; ");
+    reading.graphDetails = functions.map((item, index) => {
+      const details = (item.points || []).map((point) => `${point.label}: ${point.value}`).join(", ");
+      const equation = item.userEquation ? `; learner-provided equation: ${item.userEquation}` : "";
+      return `Function ${index + 1}: learner-confirmed family ${item.graphType}${equation}${details ? `; learner-confirmed features: ${details}` : ""}`;
+    }).join("\n");
+  }
   if (!reading.words && !reading.formula && !reading.drawing && !reading.comment) {
     setStatus($("#canvasReadingStatus"), "There is no confirmed reading to use. Edit a field or choose Use image as drawn.", "error");
     return;
@@ -8104,6 +10892,12 @@ $("#canvasReadingClose").addEventListener("click", () => {
 });
 
 workingCanvas.addEventListener("pointerdown", (event) => {
+  const partitionCheckbox = canvasPartitionCheckboxTarget(event);
+  if (partitionCheckbox >= 0) {
+    event.preventDefault();
+    toggleCanvasPartitionSelection(partitionCheckbox);
+    return;
+  }
   if (!canvasSupportsDirectInput() && !canvasCanSelectWithMouse(event)) {
     event.preventDefault();
     return;
@@ -8122,24 +10916,36 @@ workingCanvas.addEventListener("pointerdown", (event) => {
     current.draftRegion = null;
     current.drag = null;
     const pair = [...current.pointers.values()];
-    current.pinch = current.zoom ? { distance: canvasDistance(pair[0], pair[1]), scale: current.scale, offsetX: current.offsetX, offsetY: current.offsetY, midpoint: canvasMidpoint(pair[0], pair[1]) } : null;
+    current.pinch = current.zoom ? { distance: canvasDistance(pair[0], pair[1]), scale: current.scale, minScale: canvasMinimumZoomScale(current, workingCanvas.getBoundingClientRect()), offsetX: current.offsetX, offsetY: current.offsetY, midpoint: canvasMidpoint(pair[0], pair[1]) } : null;
     return;
   }
   if (current.pan) {
     current.drag = { x: event.clientX, y: event.clientY, offsetX: current.offsetX, offsetY: current.offsetY };
     return;
   }
+  if (current.zoom) return;
   if (current.stage === "regions") {
     const point = canvasPoint(event);
+    const partition = current.graphLayout ? canvasPartitionIndex(point.y) : 0;
+    if (current.graphLayout && !canvasPartitionIsWriting(partition)) {
+      setCanvasReadingStatus("Words and maths boxes must stay inside a writing section. Function sections are reviewed separately.", "warning");
+      return;
+    }
     const rect = workingCanvas.getBoundingClientRect();
     const screenPoint = { x: event.clientX - rect.left, y: event.clientY - rect.top };
-    current.draftRegion = { id: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`, kind: current.regionKind, start: point, end: point, screenStart: screenPoint, screenEnd: screenPoint };
+    current.draftRegion = { id: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`, kind: current.regionKind, partition, start: point, end: point, screenStart: screenPoint, screenEnd: screenPoint };
     drawCanvasRegionOverlay();
     return;
   }
   invalidateCanvasTranscription();
   const eraser = current.eraser;
-  const stroke = { points: [canvasPoint(event)], color: eraser ? "#fff" : "#162a29", tool: eraser ? "eraser" : "pen", width: eraser ? 24 : (event.pointerType === "pen" ? 2.5 : 2.2) };
+  const firstPoint = canvasPoint(event);
+  const partition = canvasPartitionIndex(firstPoint.y);
+  const expansion = expandCompositePartition(partition, firstPoint);
+  firstPoint.x += expansion.dx;
+  firstPoint.y += expansion.dy;
+  Object.assign(firstPoint, clampCanvasPointToPartition(firstPoint, partition));
+  const stroke = { points: [canvasStrokePoint(firstPoint)], partition, color: eraser ? "#fff" : "#162a29", tool: eraser ? "eraser" : "pen", width: eraser ? 24 : (event.pointerType === "pen" ? 2.5 : 2.2) };
   current.strokes.push(stroke);
   current.active = stroke;
   drawCanvas();
@@ -8153,25 +10959,32 @@ workingCanvas.addEventListener("pointermove", (event) => {
   const rect = workingCanvas.getBoundingClientRect();
   if (pair.length >= 2 && current.pinch) {
     const midpoint = canvasMidpoint(pair[0], pair[1]);
-    const scale = Math.min(50, Math.max(.0001, current.pinch.scale * canvasDistance(pair[0], pair[1]) / Math.max(1, current.pinch.distance)));
+    const scale = Math.min(50, Math.max(current.pinch.minScale, current.pinch.scale * canvasDistance(pair[0], pair[1]) / Math.max(1, current.pinch.distance)));
     const fx = current.pinch.midpoint.x - rect.left - rect.width / 2;
     const fy = current.pinch.midpoint.y - rect.top - rect.height / 2;
     current.offsetX = fx - (fx - current.pinch.offsetX) * scale / current.pinch.scale + midpoint.x - current.pinch.midpoint.x;
     current.offsetY = fy - (fy - current.pinch.offsetY) * scale / current.pinch.scale + midpoint.y - current.pinch.midpoint.y;
     current.scale = scale;
-    drawCanvas();
+    scheduleCanvasDraw();
   } else if (current.drag) {
     current.offsetX = current.drag.offsetX + event.clientX - current.drag.x;
     current.offsetY = current.drag.offsetY + event.clientY - current.drag.y;
-    drawCanvas();
+    scheduleCanvasDraw();
   } else if (current.draftRegion && pair.length === 1) {
-    current.draftRegion.end = canvasPoint(event);
+    current.draftRegion.end = current.graphLayout
+      ? clampCanvasPointToPartition(canvasPoint(event), current.draftRegion.partition)
+      : canvasPoint(event);
     const rect = workingCanvas.getBoundingClientRect();
     current.draftRegion.screenEnd = { x: event.clientX - rect.left, y: event.clientY - rect.top };
     drawCanvasRegionOverlay();
   } else if (current.active && pair.length === 1) {
-    current.active.points.push(canvasPoint(event));
-    drawCanvas();
+    const point = canvasPoint(event);
+    const expansion = expandCompositePartition(current.active.partition || 0, point);
+    point.x += expansion.dx;
+    point.y += expansion.dy;
+    Object.assign(point, clampCanvasPointToPartition(point, current.active.partition || 0));
+    current.active.points.push(canvasStrokePoint(point));
+    scheduleCanvasDraw();
   }
 });
 ["pointerup", "pointercancel", "lostpointercapture"].forEach((eventName) => workingCanvas.addEventListener(eventName, (event) => {
@@ -8188,7 +11001,7 @@ workingCanvas.addEventListener("pointermove", (event) => {
     if (current.draftRegion) {
       const draft = current.draftRegion;
         if (event.type === "pointerup") {
-          draft.end = canvasPoint(event);
+          draft.end = current.graphLayout ? clampCanvasPointToPartition(canvasPoint(event), draft.partition) : canvasPoint(event);
           const rect = workingCanvas.getBoundingClientRect();
           draft.screenEnd = { x: event.clientX - rect.left, y: event.clientY - rect.top };
         }
@@ -8197,6 +11010,7 @@ workingCanvas.addEventListener("pointermove", (event) => {
       drawCanvasRegionOverlay();
       syncPhoneCanvasSetup();
     }
+      persistCanvasDraft();
   }
 }));
 workingCanvas.addEventListener("wheel", (event) => {
@@ -8207,7 +11021,7 @@ workingCanvas.addEventListener("wheel", (event) => {
   const fx = event.clientX - rect.left - rect.width / 2;
   const fy = event.clientY - rect.top - rect.height / 2;
   const oldScale = current.scale;
-  current.scale = Math.min(50, Math.max(.0001, oldScale * (event.deltaY < 0 ? 1.12 : 0.89)));
+  current.scale = clampCanvasScale(oldScale * (event.deltaY < 0 ? 1.12 : 0.89), current, rect);
   current.offsetX = fx - (fx - current.offsetX) * current.scale / oldScale;
   current.offsetY = fy - (fy - current.offsetY) * current.scale / oldScale;
   drawCanvas();
@@ -8215,16 +11029,15 @@ workingCanvas.addEventListener("wheel", (event) => {
 
 $("#canvasPanButton").addEventListener("click", (event) => {
   state.canvas.pan = !state.canvas.pan;
-  event.currentTarget.setAttribute("aria-pressed", String(state.canvas.pan));
-  event.currentTarget.setAttribute("aria-label", state.canvas.pan ? "Disable pan mode" : "Enable pan mode");
-  $("#canvasPanLabel").textContent = state.canvas.pan ? "Pan on" : "Pan";
+  state.canvas.pinch = null;
+  state.canvas.drag = null;
+  updateCanvasNavigationButtons();
 });
 $("#canvasZoomButton").addEventListener("click", (event) => {
   state.canvas.zoom = !state.canvas.zoom;
   state.canvas.pinch = null;
-  event.currentTarget.setAttribute("aria-pressed", String(state.canvas.zoom));
-  event.currentTarget.setAttribute("aria-label", state.canvas.zoom ? "Disable zoom" : "Enable zoom");
-  event.currentTarget.textContent = state.canvas.zoom ? "Zoom on" : "Zoom off";
+  state.canvas.drag = null;
+  updateCanvasNavigationButtons();
 });
 $("#canvasEraserButton").addEventListener("click", (event) => {
   state.canvas.eraser = !state.canvas.eraser;
@@ -8237,7 +11050,12 @@ $("#canvasDialog").addEventListener("close", () => {
   document.body.classList.remove("canvas-dialog-open");
   if (state.canvasReturnFocus instanceof HTMLElement) state.canvasReturnFocus.focus({ preventScroll: true });
 });
-$("#canvasFitButton").addEventListener("click", fitCanvasToWriting);
+$("#canvasFitButton").addEventListener("click", () => state.canvas?.graphLayout ? fitCanvasAll() : fitCanvasToWriting());
+$("#canvasAddWritePartitionButton").addEventListener("click", () => void addCanvasWritePartitionFromControl());
+$("#canvasAddFunctionPartitionButton").addEventListener("click", () => void addCanvasFunctionGroupFromControl());
+$("#canvasDeletePartitionsButton").addEventListener("click", () => {
+  deleteCanvasPartitions(state.canvas?.selectedPartitions || []);
+});
 $("#undoCanvas").addEventListener("click", () => {
   if (state.canvas.stage === "regions") {
     if (state.canvas.regions.length) {
@@ -8252,6 +11070,7 @@ $("#undoCanvas").addEventListener("click", () => {
   if (state.canvas.strokes.length) invalidateCanvasTranscription();
   state.canvas.strokes.pop();
   drawCanvas();
+  persistCanvasDraft();
   if (phoneCanvasSession) phoneCanvasSend({ type: "setup", strokes: phoneCanvasSnapshot() });
 });
 $("#clearCanvas").addEventListener("click", () => {
@@ -8268,6 +11087,7 @@ $("#clearCanvas").addEventListener("click", () => {
   if (state.canvas.strokes.length) invalidateCanvasTranscription();
   state.canvas.strokes = [];
   drawCanvas();
+  persistCanvasDraft();
   if (phoneCanvasSession) phoneCanvasSend({ type: "setup", strokes: [] });
 });
 $("#toggleQuestionSidebar").addEventListener("click", () => {
@@ -8285,7 +11105,9 @@ $("#canvasDialog").addEventListener("close", () => {
   if (state.canvasReturnFocus instanceof HTMLElement) state.canvasReturnFocus.focus({ preventScroll: true });
 });
 if (window.ResizeObserver) {
-  new ResizeObserver(() => { if ($("#canvasDialog").open) resizeCanvas(); }).observe($(".drawing-surface"));
+  const canvasResizeObserver = new ResizeObserver(() => { if ($("#canvasDialog").open) resizeCanvas(); });
+  canvasResizeObserver.observe($(".drawing-surface"));
+  canvasResizeObserver.observe(workingCanvas);
 } else {
   window.addEventListener("resize", () => { if ($("#canvasDialog").open) resizeCanvas(); });
 }
@@ -8293,7 +11115,7 @@ window.addEventListener("resize", () => { if ($("#canvasDialog").open) resizeCan
 
 $("#usePhoneCanvas").addEventListener("click", async () => {
   if (state.canvas?.mode === "graph" && (!Number.isSafeInteger(state.canvas.graphFunctionCount) || state.canvas.graphFunctionCount < 1)) {
-    setStatus($("#canvasGraphCountStatus"), "Enter a whole number greater than 0 before opening the phone canvas.", "error");
+    setStatus($("#canvasGraphCountStatus"), "Enter a whole number from 1 to 128 before opening the phone canvas.", "error");
     $("#canvasGraphFunctionCount").focus({ preventScroll: true });
     return;
   }
@@ -8325,11 +11147,14 @@ $("#finishCanvas").addEventListener("click", async () => {
   const canvas = state.canvas;
   const revision = canvas.revision;
   if (canvas.stage === "graph-setup") {
-    setStatus($("#canvasGraphCountStatus"), "Enter a whole number greater than 0 before drawing the graph.", "error");
+    setStatus($("#canvasGraphCountStatus"), "Enter a whole number from 1 to 128 before drawing the graph.", "error");
     $("#canvasGraphFunctionCount").focus({ preventScroll: true });
     return;
   }
   if (!canvas.strokes.length) {
+    $("#canvasReadingReview").hidden = false;
+    setCanvasReadingStatus("Write or draw something on the canvas first, then select Review function or Review and use.", "warning");
+    requestAnimationFrame(() => $("#canvasReadingReview").scrollIntoView({ behavior: "smooth", block: "start" }));
     showToast("Write or draw something before using the canvas.");
     if (phoneCanvasSession) phoneCanvasSend({ type: "submission_error", message: "Write or draw something before using the canvas." });
     return;
@@ -8349,10 +11174,32 @@ $("#finishCanvas").addEventListener("click", async () => {
     if (phoneCanvasSession) phoneCanvasSend({ type: "submission_error", message: `This question already has ${MAX_UPLOAD_ITEMS} photos attached.` });
     return;
   }
+  if (!canvas.readingConfirmed && canvas.stage === "writing" && canvas.mode === "composite"
+      && canvas.graphLayout?.count > 0
+      && (canvas.graphWorkflow?.functions?.length || 0) >= canvas.graphLayout.count
+      && canvas.graphWorkflow?.stage === "all-ready") {
+    const hasWrittenWork = canvas.strokes.some((stroke) => canvasPartitionIsWriting(stroke.partition) && stroke.points?.length);
+    if (hasWrittenWork) {
+      enterCanvasRegionSelection();
+      setCanvasReadingStatus("All function reviews are complete. Now select the written work you want included.", "success");
+      return;
+    }
+    canvas.readingConfirmed = true;
+    canvas.confirmedReading ||= {
+      words: "", formula: "", drawing: "", comment: "", answerLabel: canvasAnswerLabels(canvas),
+      graphType: (canvas.graphWorkflow.functions || []).map((item) => item.graphType).join("; "),
+      graphDetails: (canvas.graphWorkflow.functions || []).map((item, index) => `Function ${index + 1}: learner-confirmed family ${item.graphType}`).join("\n"),
+    };
+  }
   if (!canvas.readingConfirmed) {
     if (canvas.stage === "graph-setup") {
-      setStatus($("#canvasGraphCountStatus"), "Enter a whole number greater than 0 before drawing the graph.", "error");
+      setStatus($("#canvasGraphCountStatus"), "Enter a whole number from 1 to 128 before drawing the graph.", "error");
       $("#canvasGraphFunctionCount").focus({ preventScroll: true });
+      return;
+    }
+    if (canvas.stage === "writing" && canvas.mode === "composite" && canvas.graphLayout
+        && (canvas.graphWorkflow?.functions?.length || 0) < canvas.graphLayout.count) {
+      beginCompositeGraphReview();
       return;
     }
     if (canvas.stage === "writing" && canvas.mode !== "graph") {
@@ -8362,11 +11209,13 @@ $("#finishCanvas").addEventListener("click", async () => {
     if (canvas.stage === "review") {
       $("#canvasReadingReview").hidden = false;
       $("#canvasReadingResults").hidden = false;
-      if (canvas.mode === "graph" && canvas.graphWorkflow) {
+      if ((canvas.mode === "graph" || canvas.reviewingGraph) && canvas.graphWorkflow) {
         await advanceCanvasGraphWorkflowSafely();
         return;
       }
       $("#canvasReadingReview").scrollIntoView({ behavior: "smooth", block: "start" });
+      setCanvasReadingStatus("Check the transcription below, make any edits, then select Confirm and use to attach it.", "success");
+      requestAnimationFrame(() => $("#canvasReadingConfirm").focus({ preventScroll: true }));
       return;
     }
     if (canvas.stage === "transcribing") return;
@@ -8427,6 +11276,7 @@ $("#finishCanvas").addEventListener("click", async () => {
       phoneCanvasSend({ type: "submitted" });
     }
     $("#canvasDialog").close();
+    void deleteWorkspaceRecord(CANVAS_DRAFT_RECORD_KEY).catch(() => {});
   } catch {
     canvas.readingConfirmed = true;
     $("#canvasReadingConfirm").disabled = false;

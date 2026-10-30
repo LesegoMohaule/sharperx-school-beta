@@ -19,6 +19,15 @@ export function buildLiveTutorPayload(context, latestText) {
   if (context.question_text) details.push(`Relevant maths question:\n${String(context.question_text).slice(0, 3000)}`);
   if (context.learner_working?.trim()) details.push(`Learner's working for coaching context only:\n${context.learner_working.slice(0, 2500)}`);
   if (context.hints_used) details.push(`Hints already shown in this practice question: ${context.hints_used}.`);
+  const conversationHistory = (context.conversation_history || []).slice(-6).map((turn) => ({
+    role: turn.role === "tutor" ? "tutor" : "learner",
+    text: String(turn.text || "").trim().slice(0, 800),
+  })).filter((turn) => turn.text);
+  if (conversationHistory.length) {
+    details.push(`Recent conversation for context:\n${conversationHistory
+      .map((turn) => `${turn.role === "tutor" ? "Tutor" : "Learner"}: ${turn.text}`)
+      .join("\n")}`);
+  }
   const activePage = context.app_context || {};
   const pageNotes = [
     activePage.page_status && `Current page status: ${activePage.page_status}`,

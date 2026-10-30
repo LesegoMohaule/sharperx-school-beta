@@ -168,6 +168,7 @@ function createHarness({ getUserMedia } = {}) {
     addEventListener() {},
   };
   const document = {
+    documentElement: { classList: { contains() { return false; } } },
     querySelectorAll(selector) {
       if (selector === "[data-live-panel]") return panels;
       if (selector === "[data-live-start]") return launchButtons;
@@ -184,6 +185,7 @@ function createHarness({ getUserMedia } = {}) {
     window,
     navigator,
     document,
+    performance: { now() { return simulatedNow; } },
     Date: clock,
     Blob,
     setInterval(callback) { const id = ++intervalId; intervalCallbacks.set(id, callback); return id; },
@@ -254,11 +256,30 @@ test("live tutor prefers the server's mathematics-normalized transcript", () => 
 test("tutor speech renders textbook mathematics naturally without speaking punctuation names", () => {
   const harness = createHarness();
   const speak = (value) => harness.context.RealtimeTutor.mathTextForSpeech(value);
-  assert.match(speak("Solve \\(2x + 3 = 7\\)."), /2x plus 3 equals 7/);
+  assert.match(speak("Solve \\(2x + 3 = 7\\)."), /two x plus three equals seven/);
   assert.doesNotMatch(speak("Solve \\(2x + 3 = 7\\)."), /open parenthesis|close parenthesis|forward slash/i);
-  assert.match(speak("\\(\\frac{2x+3}{7} = 1\\)"), /fraction with numerator 2x plus 3 and denominator 7 equals 1/);
-  assert.match(speak("x = 3/4"), /x equals 3 over 4/);
-  assert.match(speak("2(x+1)"), /2 times the quantity x plus 1/);
+  assert.match(speak("\\(\\frac{2x+3}{7} = 1\\)"), /fraction with numerator two x plus three and denominator seven equals one/);
+  assert.match(speak("x = 3/4"), /ex equals three over four/);
+  assert.match(speak("2(x+1)"), /two times the quantity ex plus one/);
+  const intercepts = speak("Show the x-intercept and y-intercepts.");
+  assert.match(intercepts, /x intercept and y intercepts/i);
+  assert.doesNotMatch(intercepts, /x minus intercept|y minus intercept/i);
+});
+
+test("tutor reads graph derivations and labelled coordinates as natural mathematics", () => {
+  const harness = createHarness();
+  const speak = (value) => harness.context.RealtimeTutor.mathTextForSpeech(value);
+  const derivation = speak(String.raw`Substitute the point B\left(2;- \frac{5}{9}\right). Then \(a^{2}-1=-\frac{5}{9}\), so \(a^{2}=\frac{4}{9}\). Since \(a>0\), \(a=\frac{2}{3}\).`);
+  assert.match(derivation, /point bee with coordinates two and negative five over nine/i);
+  assert.match(derivation, /ay squared equals four over nine/i);
+  assert.match(derivation, /ay squared minus one equals negative five over nine/i);
+  assert.match(derivation, /ay is greater than zero/i);
+  assert.match(derivation, /ay equals two over three/i);
+  assert.doesNotMatch(derivation, /semicolon|a squared equals|a equals/i);
+
+  const equation = speak(String.raw`\(f\left(x\right)=\left(\frac{2}{3}\right)^x-1\)`);
+  assert.match(equation, /f of ex equals the quantity two over three to the power of ex minus one/i);
+  assert.doesNotMatch(equation, /equals times|f times/i);
 });
 
 test("tutor speaks each line slowly and inserts a pause between lines", async () => {
@@ -274,7 +295,7 @@ test("tutor speaks each line slowly and inserts a pause between lines", async ()
   assert.equal(harness.utterances.at(-1)?.rate, 0.84);
   harness.finishSpeech();
   harness.tutor.speakReply("2.5 + 1.5 = 4.", "ask");
-  assert.equal(harness.speech.at(-1), "2.5 plus 1.5 equals 4.", "decimal points stay inside textbook numbers rather than splitting the spoken line");
+  assert.equal(harness.speech.at(-1), "two point five plus one point five equals four.", "decimal points stay inside textbook numbers and are spoken naturally");
   assert.equal(harness.pendingSpeechPauseMs, 0, "a decimal value stays in one utterance");
 });
 

@@ -9,10 +9,11 @@
   <meta name="apple-mobile-web-app-title" content="SharperTime">
   <meta name="robots" content="noindex, nofollow">
   <meta name="description" content="SharperTime mathematics learning workspace.">
+  <meta name="sharpertime-build" content="0b3151ada988d499">
   <link rel="manifest" href="./manifest.webmanifest">
   <link rel="icon" href="./icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="./icon.svg">
-  <link rel="stylesheet" href="./styles.css?v=80">
+  <link rel="stylesheet" href="./styles.css?release=0b3151ada988d499">
   <script>
     try {
       if (/[?&](email|password)=/i.test(window.location.search) && window.history && window.history.replaceState) {
@@ -23,7 +24,49 @@
       }
     } catch (error) { /* The login form remains available when browser storage is disabled. */ }
   </script>
-  <script>window.MathJax = { tex: { inlineMath: [["\\(", "\\)"], ["$", "$"]], displayMath: [["\\[", "\\]"], ["$$", "$$"]] }, options: { skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"] }, svg: { fontCache: "local" } };</script>
+  <script>
+    (function () {
+      if (!("serviceWorker" in navigator) || !/^https?:$/.test(location.protocol)) return;
+      var buildMeta = document.querySelector('meta[name="sharpertime-build"]');
+      var buildId = buildMeta && buildMeta.content;
+      if (!buildId || buildId === "__BUILD_ID__") return;
+
+      function showUpdateNotice() {
+        var notice = document.getElementById("appUpdateNotice");
+        if (notice) {
+          notice.hidden = false;
+          return;
+        }
+        document.addEventListener("DOMContentLoaded", showUpdateNotice, { once: true });
+      }
+
+      if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.addEventListener("controllerchange", showUpdateNotice);
+      }
+
+      var workerUrl = new URL("./service-worker.js", document.baseURI);
+      workerUrl.searchParams.set("build", buildId);
+      navigator.serviceWorker.register(workerUrl.href, { scope: "./", updateViaCache: "none" }).then(function (registration) {
+        function checkForUpdate() { registration.update().catch(function () {}); }
+        checkForUpdate();
+        window.addEventListener("focus", checkForUpdate);
+        document.addEventListener("visibilitychange", function () {
+          if (document.visibilityState === "visible") checkForUpdate();
+        });
+      }).catch(function () {});
+
+      document.addEventListener("DOMContentLoaded", function () {
+        var reloadButton = document.getElementById("appUpdateReload");
+        var dismissButton = document.getElementById("appUpdateDismiss");
+        if (reloadButton) reloadButton.addEventListener("click", function () { location.reload(); });
+        if (dismissButton) dismissButton.addEventListener("click", function () {
+          var notice = document.getElementById("appUpdateNotice");
+          if (notice) notice.hidden = true;
+        });
+      }, { once: true });
+    }());
+  </script>
+  <script>window.MathJax = { tex: { inlineMath: [["\\(", "\\)"], ["$", "$"]], displayMath: [["\\[", "\\]"], ["$$", "$$"]] }, options: { skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"] }, output: { displayOverflow: "linebreak", linebreaks: { inline: true, width: "100%" } }, svg: { fontCache: "local", linebreaks: { inline: true, width: "100%" } } };</script>
   <title>SharperTime workspace</title>
 </head>
 <body>
@@ -91,6 +134,7 @@
               </div>
               <section id="paperTools" class="paper-tools" hidden aria-label="Uploaded question paper">
                 <div class="paper-tools-heading"><div><strong id="paperFileName">Question paper ready</strong><small id="paperStatus">Select a question number to preview its page.</small></div><button id="clearPaperButton" class="icon-button" type="button" aria-label="Clear paper from this session">×</button></div>
+                <p class="source-note">Upload the complete paper, including instructions, information/formula sheet, and every referenced answer or diagram sheet. If a question requires a separate handwritten answer or graph, complete it on the required sheet and upload a clear photo of the finished page.</p>
                 <div class="paper-question-row"><label>Question number<input id="paperQuestionNumber" type="text" placeholder="For example 2(b)" maxlength="20"></label><button id="showPaperQuestionButton" class="button secondary" type="button">Show question</button></div>
                 <div id="paperSnapshotCard" class="paper-snapshot-card" hidden>
                   <div class="snapshot-heading"><strong id="paperSnapshotTitle">Selected question</strong><button id="openPaperSnapshot" class="button subtle" type="button">View full page</button></div>
@@ -184,6 +228,11 @@
               <div id="practiceHints" class="hint-content" hidden></div>
               <section class="practice-response" aria-label="Your working and answer">
                 <div class="practice-response-heading"><strong>Your working and answer</strong><span class="muted">Enter steps on separate lines; keep your final answer last.</span></div>
+                <div class="practice-paper-reference-tools">
+                  <p class="source-note">For a question from a test or exam paper, attach the full paper instructions, information/formula sheet, and any answer or diagram sheet required by the question. Upload clear photos of handwritten answers when a separate sheet is required.</p>
+                  <div class="exam-upload-actions"><button id="practiceReferenceUploadButton" class="button subtle" type="button">Upload paper instructions / sheets</button><button id="practiceReferenceTakePhotoButton" class="button subtle" type="button">Take page photo</button><input id="practiceReferenceInput" type="file" accept=".pdf,.doc,.docx,.docm,.xls,.xlsx,.xlsm,.ppt,.pptx,.pptm,.jpg,.jpeg,.png,.webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp" multiple hidden><input id="practiceReferenceCameraInput" type="file" accept="image/*" capture="environment" multiple hidden></div>
+                  <div id="practiceReferenceAttachments" class="practice-answer-attachments" aria-live="polite"></div>
+                </div>
                 <div class="practice-response-tools">
                   <button id="practiceCanvasButton" class="tool-button" type="button" aria-label="Write or draw your working, and add graphs on the canvas">✎ / ☝<span>Write/Draw</span></button>
                   <button id="practiceHandwritingButton" class="tool-button" type="button" aria-label="Choose PDF, Word, Excel, PowerPoint, or image answer files from this device">▧<span>Choose files / photos</span></button>
@@ -257,7 +306,7 @@
             <p id="examStatus" class="status" role="status" aria-live="polite"></p>
             <section class="exam-source-section" aria-labelledby="examPaperLinksTitle">
               <h2 id="examPaperLinksTitle">Past papers by term</h2>
-              <p class="source-note">Open a paper link in your browser, download it, then return here and upload its PDF, Word (.doc/.docx/.docm), Excel (.xls/.xlsx/.xlsm), PowerPoint (.ppt/.pptx/.pptm), or clear page photos. Upload up to 20 source files/photos. To write on paper with a timer, open Strict Mock Exam; upload the memo there if it is available.</p>
+              <p class="source-note">Open a paper link in your browser, download it, then upload the complete paper, including instructions, information/formula sheet, and all answer/diagram sheets it references. Upload up to 20 source files/photos. If a question requires a separate handwritten answer or graph, complete it on the required sheet and upload a clear photo of the finished page. To write on paper with a timer, open Strict Mock Exam; upload the memo there if it is available.</p>
               <div id="examPaperLinks" class="exam-paper-term-groups" aria-live="polite"></div>
               <div class="exam-upload-panel">
                 <div class="exam-upload-actions">
@@ -279,11 +328,11 @@
             <header class="strict-mock-heading"><p class="eyebrow">Paper-based assessment</p><h2 id="strictMockTitle">Strict Mock Exam</h2><p>Choose a paper from the links, download and print it, then upload the question paper. Have the printed paper, pen, answer paper and calculator ready. Upload the memo if it is available. Prepare everything first, then start the timer when you are ready to write.</p></header>
             <div class="filter-card strict-mock-filters"><label>Grade<select id="strictMockGrade"><option>8</option><option>9</option><option>10</option><option>11</option><option selected>12</option></select></label><label>Term<select id="strictMockTerm"><option value="1" selected>Term 1 · March test</option><option value="2">Term 2 · June exam</option><option value="3">Term 3 · September test / trial exam</option><option value="4">Term 4 · October / November / December exam</option></select></label><label>Assessment<select id="strictMockType" disabled><option value="test">Test</option><option value="exam">Examination</option></select></label></div>
             <p id="strictMockDurationNote" class="exam-target-note" aria-live="polite"></p>
-            <section id="strictMockLinksSection" class="exam-source-section" aria-labelledby="strictMockPaperLinksTitle"><h3 id="strictMockPaperLinksTitle">Past papers by term</h3><p class="source-note">Stanmore and DBE links open in your browser. Download the paper, then return here to upload it.</p><div id="strictMockPaperLinks" class="exam-paper-term-groups" aria-live="polite"></div></section>
+            <section id="strictMockLinksSection" class="exam-source-section" aria-labelledby="strictMockPaperLinksTitle"><h3 id="strictMockPaperLinksTitle">Past papers by term</h3><p class="source-note">Stanmore and DBE links open in your browser. Download the complete paper, including instructions, information/formula sheet, and any answer/diagram sheets, then return here to upload it.</p><div id="strictMockPaperLinks" class="exam-paper-term-groups" aria-live="polite"></div></section>
             <section id="strictMockUploads" class="exam-upload-panel strict-mock-uploads" aria-label="Strict mock exam files">
               <h3>Prepare the paper</h3>
               <div class="exam-upload-actions"><button id="strictMockUploadPaper" class="button secondary" type="button">Upload question paper / page photos</button><button id="strictMockUploadMemo" class="button subtle" type="button">Upload memo / page photos (if available)</button><input id="strictMockPaperInput" type="file" accept=".pdf,.doc,.docx,.docm,.xls,.xlsx,.xlsm,.ppt,.pptx,.pptm,.jpg,.jpeg,.png,.webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp" multiple hidden><input id="strictMockMemoInput" type="file" accept=".pdf,.doc,.docx,.docm,.xls,.xlsx,.xlsm,.ppt,.pptx,.pptm,.jpg,.jpeg,.png,.webp,application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,image/jpeg,image/png,image/webp" multiple hidden></div>
-              <p id="strictMockPaperStatus" class="status" role="status" aria-live="polite">Upload a question paper as a PDF, Word, Excel, or PowerPoint document to begin.</p>
+              <p id="strictMockPaperStatus" class="status" role="status" aria-live="polite">Upload the complete question paper, including its instructions, information/formula sheet, and any answer/diagram sheets. If the paper requires a separate handwritten response, upload clear photos of the completed sheet after writing.</p>
               <button id="prepareStrictMock" class="button secondary" type="button" disabled>Prepare paper</button>
               <p id="strictMockReadyStatus" class="status" role="status" aria-live="polite"></p>
               <button id="startStrictMockTimer" class="button primary" type="button" hidden>Start timer when ready</button>
@@ -423,7 +472,7 @@
   </dialog>
 
   <dialog id="canvasDialog" class="canvas-dialog" aria-label="Writing canvas">
-    <div class="dialog-toolbar canvas-toolbar"><strong id="canvasTitle">Canvas</strong><div class="canvas-actions"><button id="undoCanvas" class="button subtle" type="button">Undo</button><button id="clearCanvas" class="button subtle" type="button">Clear</button><button id="canvasEraserButton" class="button subtle" type="button" aria-pressed="false" aria-label="Enable eraser">Eraser</button><button id="canvasRegionWordsButton" class="button subtle canvas-region-tool" type="button" data-canvas-region-kind="words" hidden>Words</button><button id="canvasRegionMathButton" class="button subtle canvas-region-tool" type="button" data-canvas-region-kind="maths" hidden>Maths</button><button id="canvasRegionDrawingButton" class="button subtle canvas-region-tool" type="button" data-canvas-region-kind="drawings" hidden>Drawings</button><button id="canvasBackWritingButton" class="button subtle" type="button" hidden>Back to writing</button><button id="canvasDrawGraphsButton" class="button subtle" type="button" hidden>Draw graphs</button><button id="canvasReadWritingButton" class="button subtle" type="button">Next</button><button id="toggleQuestionSidebar" class="button subtle" type="button" hidden>Show Q</button><button id="canvasPanButton" class="button subtle phone-pan-control" type="button" aria-pressed="false" aria-label="Enable pan mode"><span class="pan-hand-badge" aria-hidden="true"><svg class="pan-hand-icon" viewBox="0 0 24 24"><path d="M23.5 12.5c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V6c0-.83-.67-1.5-1.5-1.5S17.5 5.17 17.5 6v6c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V4c0-.83-.67-1.5-1.5-1.5S11.5 3.17 11.5 4v8c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V8c0-.83-.67-1.5-1.5-1.5S5.5 7.17 5.5 8v9l-2.27-2.28c-.29-.29-.68-.44-1.06-.44s-.77.15-1.06.44c-.59.59-.59 1.54 0 2.12L6.5 23.5c.94.94 2.22 1.5 3.54 1.5H19c1.66 0 3-1.34 3-3v-9.5z"/></svg></span><span id="canvasPanLabel">Pan</span></button><button id="canvasZoomButton" class="button subtle" type="button" aria-pressed="false" aria-label="Enable zoom">Zoom off</button><button id="canvasFitButton" class="button subtle" type="button">Fit</button><button id="usePhoneCanvas" class="button secondary" type="button" aria-expanded="false" aria-controls="phoneCanvasPairPanel">Use phone</button><button class="button subtle" type="button" data-close-dialog>Cancel</button><button id="finishCanvas" class="button primary" type="button">Review and use</button></div></div>
+    <div class="dialog-toolbar canvas-toolbar"><strong id="canvasTitle">Canvas</strong><div class="canvas-actions"><button id="undoCanvas" class="button subtle" type="button">Undo</button><button id="clearCanvas" class="button subtle" type="button">Clear</button><button id="canvasEraserButton" class="button subtle" type="button" aria-pressed="false" aria-label="Enable eraser">Eraser</button><button id="canvasRegionWordsButton" class="button subtle canvas-region-tool" type="button" data-canvas-region-kind="words" hidden>Words</button><button id="canvasRegionMathButton" class="button subtle canvas-region-tool" type="button" data-canvas-region-kind="maths" hidden>Maths</button><button id="canvasRegionDrawingButton" class="button subtle canvas-region-tool" type="button" data-canvas-region-kind="drawings" hidden>Drawings</button><button id="canvasBackWritingButton" class="button subtle" type="button" hidden>Back to writing</button><button id="canvasDrawGraphsButton" class="button subtle" type="button" hidden>+ Function</button><button id="canvasAddWritePartitionButton" class="button subtle" type="button" hidden>+ Write</button><button id="canvasAddFunctionPartitionButton" class="button subtle" type="button" hidden>+ Function</button><button id="canvasDeletePartitionsButton" class="button subtle" type="button" aria-label="Delete selected canvas partitions" hidden>Delete</button><button id="canvasReadWritingButton" class="button subtle" type="button">Next</button><button id="toggleQuestionSidebar" class="button subtle" type="button" hidden>Show Q</button><button id="canvasPanButton" class="button subtle phone-pan-control" type="button" aria-pressed="false" aria-label="Enable pan mode"><span class="pan-hand-badge" aria-hidden="true"><svg class="pan-hand-icon" viewBox="0 0 24 24"><path d="M23.5 12.5c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V6c0-.83-.67-1.5-1.5-1.5S17.5 5.17 17.5 6v6c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V4c0-.83-.67-1.5-1.5-1.5S11.5 3.17 11.5 4v8c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V8c0-.83-.67-1.5-1.5-1.5S5.5 7.17 5.5 8v9l-2.27-2.28c-.29-.29-.68-.44-1.06-.44s-.77.15-1.06.44c-.59.59-.59 1.54 0 2.12L6.5 23.5c.94.94 2.22 1.5 3.54 1.5H19c1.66 0 3-1.34 3-3v-9.5z"/></svg></span><span id="canvasPanLabel">Pan</span></button><button id="canvasZoomButton" class="button subtle" type="button" aria-pressed="false" aria-label="Enable zoom">Zoom off</button><button id="canvasFitButton" class="button subtle" type="button">Fit</button><button id="usePhoneCanvas" class="button secondary" type="button" aria-expanded="false" aria-controls="phoneCanvasPairPanel">Use phone</button><button class="button subtle" type="button" data-close-dialog>Cancel</button><button id="finishCanvas" class="button primary" type="button">Review and use</button></div></div>
     <section id="phoneCanvasPairPanel" class="phone-canvas-pair-panel" aria-label="Connect a phone for drawing" hidden>
       <div id="phoneCanvasPairQr" class="phone-canvas-pair-qr" aria-label="Phone connection QR code"></div>
       <div class="phone-canvas-pair-details"><strong>Draw on your phone</strong><p>Scan the QR code to open the companion with the code and address filled in. If you enter the code manually, enter the computer address shown here too.</p><div class="phone-canvas-code">Pairing code <strong id="phoneCanvasPairCode">------</strong></div><div id="phoneCanvasPairServerRow" class="phone-canvas-server-address" hidden>Computer address <code id="phoneCanvasPairServerAddress"></code><button id="copyPhoneCanvasPairServer" class="button subtle" type="button">Copy</button></div><a id="phoneCanvasRemoteLink" href="./canvas-remote.html" target="_blank" rel="noopener">Open the phone canvas page</a><a href="./canvas-install.html">Download the Android canvas app</a><div id="phoneCanvasPairStatus" class="status" role="status" aria-live="polite">Waiting for your phone…</div><button id="stopPhoneCanvas" class="button subtle" type="button">Disconnect phone</button></div>
@@ -443,17 +492,18 @@
           <textarea id="canvasReadingWords" rows="5" spellcheck="false" placeholder="Recognized words appear here"></textarea>
           <div id="canvasReadingAlternatives" class="canvas-reading-alternatives" aria-label="Alternative handwriting readings" hidden></div>
           <section id="canvasTranscriptionPanel" class="canvas-math-review" aria-label="Review recognized maths" hidden><div class="canvas-transcription-label">Recognized maths</div><div class="math-editor-frame canvas-math-editor-frame"><iframe id="canvasTranscriptionText" title="Recognized maths editor" src="./math-editor.html?v=17"></iframe></div><div id="canvasMathKeyboardMount" class="math-keyboard-mount"></div><div id="canvasTranscriptionStatus" class="status" role="status" aria-live="polite"></div></section>
-          <label for="canvasReadingDrawing">Graph, shape, or diagram description</label>
+            <label for="canvasReadingDrawing">Recognized drawing structure</label>
           <textarea id="canvasReadingDrawing" rows="3" spellcheck="false" placeholder="Visible features and labels appear here"></textarea>
           <div id="canvasGraphReviewFields" hidden>
-            <label for="canvasGraphType">Graph type (confirm or correct)</label>
-            <div class="canvas-graph-entry-row"><input id="canvasGraphType" type="text" autocomplete="off" placeholder="For example: parabola, straight line, or unclear"><div id="canvasGraphTypeAction" class="canvas-graph-inline-action"></div></div>
-            <label id="canvasGraphEquationLabel" for="canvasGraphDetails">Equation (optional)</label>
-            <textarea id="canvasGraphDetails" rows="2" placeholder="Enter an equation only if it is given or already known"></textarea>
+            <label for="canvasGraphType">Graph family (confirm the type you are working on)</label>
+            <div class="canvas-graph-entry-row"><input id="canvasGraphType" type="text" autocomplete="off" placeholder="For example: exponential, quadratic, or reciprocal"><div id="canvasGraphTypeAction" class="canvas-graph-inline-action"></div></div>
+            <p class="muted">Luna’s visual estimate is editable. Check it against the question and your work before continuing.</p>
+            <label id="canvasGraphEquationLabel" for="canvasGraphDetails">Equation (optional; only one given or already worked out)</label>
+            <input id="canvasGraphDetails" type="text" autocomplete="off" placeholder="Optional — leave blank if no equation is given or worked out">
           </div>
           <section id="canvasGraphGuidedPanel" class="canvas-graph-guided-panel" aria-live="polite" hidden>
             <h3 id="canvasGraphFunctionHeading">Function 1</h3>
-            <p id="canvasGraphGuidedStatus" class="muted">Confirm the function type, then enter the exact key details you know.</p>
+            <p id="canvasGraphGuidedStatus" class="muted">Confirm your graph family. Then enter only exact features you have found or that the question requires.</p>
             <div id="canvasGraphPointHistory" class="canvas-graph-point-history" aria-label="Confirmed graph details"></div>
             <p id="canvasGraphPointPrompt" class="canvas-graph-point-prompt"></p>
             <label id="canvasGraphPointInputLabel" for="canvasGraphPointInput">Key point or value</label>
@@ -472,9 +522,22 @@
         <button id="canvasReadingClose" class="button subtle" type="button">Back to canvas</button>
       </section>
 
-    <section id="canvasGraphCountPanel" class="canvas-graph-count-panel" aria-label="Set up graph" hidden><label for="canvasGraphFunctionCount">How many functions should be on this graph?</label><p class="muted">Enter a whole number greater than 0. Each function gets its own graph area below your written work.</p><div class="canvas-graph-count-controls"><input id="canvasGraphFunctionCount" type="number" min="1" max="12" step="1" inputmode="numeric" aria-describedby="canvasGraphCountStatus" placeholder="Enter a whole number"><button id="canvasGraphStartButton" class="button primary" type="button">Add graph areas</button></div><div id="canvasGraphCountStatus" class="status" role="status" aria-live="polite"></div></section>
+    <section id="canvasGraphCountPanel" class="canvas-graph-count-panel" aria-label="Set up graph" hidden><label for="canvasGraphFunctionCount">How many functions should be on this graph?</label><p class="muted">Enter a whole number greater than 0. Each function gets its own graph area below your written work.</p><div class="canvas-graph-count-controls"><input id="canvasGraphFunctionCount" type="number" min="1" max="128" step="1" inputmode="numeric" aria-describedby="canvasGraphCountStatus" placeholder="Enter a whole number greater than 0"><button id="canvasGraphStartButton" class="button primary" type="button">Add graph areas</button></div><div id="canvasGraphCountStatus" class="status" role="status" aria-live="polite"></div></section>
     <div class="canvas-layout"><div class="drawing-surface"><canvas id="workingCanvas" aria-label="Write or draw your answer"></canvas><canvas id="canvasRegionOverlay" aria-hidden="true"></canvas><div id="canvasPhoneOnlyNotice" class="canvas-phone-only-notice" role="status" hidden><strong>Use your phone to write or draw</strong><p>This device does not have a touch screen. Pair your phone to use the canvas.</p><button id="canvasPhoneOnlyConnect" class="button primary" type="button">Pair phone to draw</button></div></div><aside id="canvasQuestionSidebar" class="canvas-question-sidebar" hidden><button id="closeCanvasQuestion" class="icon-button" type="button" aria-label="Hide question">×</button><h2>Question</h2><div id="canvasQuestionText" class="math-content"></div><img id="canvasQuestionImage" alt="Question page" hidden></aside></div>
     <p id="canvasHelpText" class="image-help">Write or draw with a finger or stylus on a touch screen. On other devices, pair your phone. Use Pan to move; turn Zoom on before pinching or scrolling to zoom.</p>
+  </dialog>
+
+  <dialog id="canvasPromptDialog" class="canvas-prompt-dialog" aria-labelledby="canvasPromptTitle" aria-describedby="canvasPromptMessage">
+    <form id="canvasPromptForm" class="canvas-prompt-content" novalidate>
+      <h2 id="canvasPromptTitle">SharperTime says</h2>
+      <p id="canvasPromptMessage"></p>
+      <label id="canvasPromptInputLabel" for="canvasPromptInput" hidden></label>
+      <input id="canvasPromptInput" class="canvas-prompt-input" type="text" autocomplete="off" hidden>
+      <div class="canvas-prompt-actions">
+        <button id="canvasPromptCancel" class="button subtle" type="button">Cancel</button>
+        <button id="canvasPromptAccept" class="button primary" type="submit">OK</button>
+      </div>
+    </form>
   </dialog>
 
   <dialog id="deviceRemoteDialog" class="device-remote-dialog" aria-labelledby="deviceRemoteTitle">
@@ -486,6 +549,11 @@
     <p class="muted device-remote-note">This remote controls SharperTime in this browser tab. It does not control other TV apps.</p>
   </dialog>
 
+  <div id="appUpdateNotice" class="app-update-notice" role="status" aria-live="polite" hidden>
+    <span>A new SharperTime version is ready.</span>
+    <button id="appUpdateReload" type="button">Reload app</button>
+    <button id="appUpdateDismiss" type="button" aria-label="Dismiss update notice">×</button>
+  </div>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
   <script>
     (function () {
@@ -502,9 +570,9 @@
       var appScript = document.createElement("script");
       if (supportsModules && supportsModernSyntax) {
         appScript.type = "module";
-        appScript.src = "./app.bundle.js?v=87";
+        appScript.src = "./app.bundle.js?release=0b3151ada988d499";
       } else {
-        appScript.src = "./legacy-app.js?v=92";
+        appScript.src = "./legacy-app.js?release=0b3151ada988d499";
       }
       appScript.onload = function () {
         loginButton.disabled = false;

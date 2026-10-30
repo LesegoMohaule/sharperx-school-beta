@@ -159,9 +159,45 @@ function normalizeAlgebraLetterNames(value) {
   return value
     .replace(/\bax\b/gi, "ay times ex")
     .replace(/\ba\s+x\b/gi, "ay times ex")
-    .replace(/(^|\b(?:equals|plus|minus|times|over|divided by)\s+)a(?=\s+(?:squared|cubed|to the power|plus|minus|times|over|equals)\b|\s*[,.;!?]|$)/gi, "$1ay")
+    .replace(/\ba(?=\s*(?:\^|squared\b|cubed\b|to the power\b|equals\b|is greater than\b|is less than\b|=|>|<))/g, "ay")
+    .replace(/\b(?:equals|plus|minus|times|over|divided by)\s+a\b/gi, (match) => match.replace(/a$/i, "ay"))
     .replace(/\bthe point\s+a\b/gi, "the point ay")
     .replace(/\b([xyq])\b/gi, (letter) => LETTER_NAMES[letter.toLowerCase()]);
+}
+
+function coordinateValueForSpeech(value) {
+  const compact = String(value || "").replace(/\s+/g, "");
+  const fraction = compact.match(/^([+-]?)\\frac\{(\d+)\}\{(\d+)\}$/);
+  const plainFraction = compact.match(/^([+-]?)(\d+)\/(\d+)$/);
+  const matchedFraction = fraction || plainFraction;
+  if (matchedFraction) {
+    const sign = matchedFraction[1] === "-" ? "negative " : matchedFraction[1] === "+" ? "positive " : "";
+    return `${sign}${integerToSpeechWords(Number(matchedFraction[2]))} over ${integerToSpeechWords(Number(matchedFraction[3]))}`;
+  }
+  if (!/^[+-]?\d+(?:\.\d+)?$/.test(compact)) return "";
+  const negative = compact.startsWith("-");
+  const positive = compact.startsWith("+");
+  const magnitude = compact.replace(/^[+-]/, "");
+  return `${negative ? "negative " : positive ? "positive " : ""}${numberToSpeechWords(magnitude)}`;
+}
+
+function normalizeMathCoordinatePairs(value) {
+  return String(value || "").replace(
+    /\b([A-Z])\s*(?:\\left)?\(\s*([^(),;]+)\s*[;,]\s*([^();]+?)\s*(?:\\right)?\)/g,
+    (match, label, xValue, yValue) => {
+      const x = coordinateValueForSpeech(xValue);
+      const y = coordinateValueForSpeech(yValue);
+      if (!x || !y) return match;
+      return `${LETTER_NAMES[label.toLowerCase()] || label} with coordinates ${x} and ${y}`;
+    },
+  );
+}
+
+function normalizeMathFunctionNotation(value) {
+  return String(value || "").replace(
+    /\b([fghp])\s*(?:\\left)?\(\s*([A-Za-z])\s*(?:\\right)?\)/gi,
+    (_, name, argument) => `${name} of ${argument}`,
+  );
 }
 
 function normalizeEquationCalls(value) {
@@ -194,7 +230,7 @@ function normalizeEquationCalls(value) {
 }
 
 export function mathTextForSpeech(value) {
-  let text = normalizeRecurringDecimals(String(value || "")
+  let text = normalizeRecurringDecimals(normalizeMathCoordinatePairs(String(value || ""))
     .replace(/```[\s\S]*?```/g, " ")
     .replace(/`([^`]*)`/g, "$1")
     .replace(/\[([^\]]+)\]\((?:https?:\/\/)[^)]+\)/g, "$1")
@@ -205,7 +241,10 @@ export function mathTextForSpeech(value) {
     .replace(/\bsection\s+([a-z])\b/gi, (_, letter) => `Section ${LETTER_NAMES[letter.toLowerCase()] || letter}`)
     .replace(/(^|\n)\s*([a-z])\.\s*(?=(?:solve|find|calculate|determine|simplify|factorise|factorize|show|prove)\b)/gi,
       (_, prefix, letter) => `${prefix}Part ${LETTER_NAMES[letter.toLowerCase()] || letter}. `)
-    .replace(/\bheads\s*\/\s*tails\b/gi, "heads or tails");
+    .replace(/\b([xy])\s*(?:minus\s+|[-‐‑‒–—]\s*)(intercepts?)\b/gi, "$1 $2")
+    .replace(/\(\s*([+-]?\d+(?:\.\d+|\/\d+)?)\s*;\s*([+-]?\d+(?:\.\d+|\/\d+)?)\s*\)/g, "($1, $2)")
+    .replace(/\bheads\s*(?:\/|slash|forward\s+slash)\s*tails\b/gi, "heads or tails");
+  text = normalizeMathFunctionNotation(text);
   text = normalizeEquationCalls(text);
   text = speakLatex(text)
     .replace(/\*\*(.*?)\*\*/g, "$1")
@@ -266,14 +305,26 @@ export function mathTextForSpeech(value) {
       .replace(/([\w)])\s*[×*]\s*([\w(])/g, "$1 times $2")
       .replace(/([\w)])\s*÷\s*([\w(])/g, "$1 divided by $2")
       .replace(/([\w)])\s*\/\s*([\w(])/g, "$1 over $2")
+      .replace(/([\w)])\s*=\s*-\s*(?=[\w(])/g, "$1 equals negative ")
+      .replace(/([\w)])\s*=\s*\+\s*(?=[\w(])/g, "$1 equals positive ")
       .replace(/([\w)])\s*=\s*([\w(])/g, "$1 equals $2")
       .replace(/([\w)])\s*<\s*([\w(])/g, "$1 is less than $2")
       .replace(/([\w)])\s*>\s*([\w(])/g, "$1 is greater than $2")
       .replace(/²/g, " squared")
       .replace(/³/g, " cubed"));
-    return normalizeSpeechNumbers(normalizeAlgebraLetterNames(spoken.replace(/([A-Za-z0-9])\s+(?=the quantity|the fraction|square root of)/g, "$1 times ")));
+    const withImpliedMultiplication = spoken.replace(/\b(\d+|[A-Za-z])\s+(?=the quantity|the fraction|square root of)/g, (match, token) =>
+      /^[A-Za-z]$/i.test(token) && /^(?:a|an|the|of|to|and|or|is|be|by|as|at|in|on|for|from|with|then|that|this|since|therefore|equals|plus|minus|times|over|divided|negative|positive)$/i.test(token)
+        ? match
+        : `${token} times `,
+    );
+    return normalizeSpeechNumbers(normalizeAlgebraLetterNames(withImpliedMultiplication));
   });
-  return lines.join("\n").replace(/[{}$#&]/g, " ").replace(/[ \t]+/g, " ").replace(/\n\s*\n+/g, "\n").trim();
+  return lines.join("\n")
+    .replace(/[{}$#&]/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\s+([,.;!?])/g, "$1")
+    .replace(/\n\s*\n+/g, "\n")
+    .trim();
 }
 
 function splitSpeechChunks(text) {
@@ -798,7 +849,13 @@ export function installRealtimeTutor({ ensureInspection, getContext, transcribeA
     if (!transcribeAudio || !askTutorTurn) throw new Error("Live transcription is not configured. Use the Voice note button instead.");
     setStatus(contextType, "Transcribing your speech…");
     const language = selectedLanguage();
-    const transcript = String(await transcribeAudio(blob, language) || "").trim();
+    const currentContext = await getContext(contextType, inspectionId);
+    const speechContext = {
+      grade: currentContext?.grade || currentContext?.app_context?.grade || "",
+      topic: currentContext?.topic || currentContext?.app_context?.topic || "",
+      question_text: currentContext?.question_text || currentContext?.app_context?.current_question || "",
+    };
+    const transcript = String(await transcribeAudio(blob, language, speechContext) || "").trim();
     if (generation !== startGeneration || activeContext !== contextType) return;
     if (!transcript) {
       setStatus(contextType, "I couldn't hear clear words. Please speak a little closer to the microphone and try again.", "error");

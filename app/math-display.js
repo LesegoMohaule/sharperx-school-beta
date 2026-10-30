@@ -28,6 +28,30 @@ function isMathOnly(value) {
     || /^[A-Za-z]$/.test(text);
 }
 
+function normalizeTextbookLayout(value) {
+  let text = String(value || "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/[\\]{2,}(?=[()[\]])/g, (slashes) => slashes.slice(-1))
+    .replace(/(^|\n)[ \t]{0,3}#{1,6}[ \t]+(.+?)[ \t]*#*[ \t]*(?=\n|$)/g, "$1$2")
+    .replace(/```[A-Za-z0-9_-]*[ \t]*\n|```/g, "")
+    .replace(/`([^`\n]+)`/g, "$1")
+    .replace(/\*\*([^*\n]+)\*\*/g, "$1");
+
+  const headingPattern = /(^|[\s.])(CAPS topic and subtopic|What the question asks|Relevant formulae or theorem|Relevant formulas or theorem|Steps to take|Formula help|Marking and corrections|What you got right|What needs correction|Where you went wrong)\s*:?[ \t]*/gim;
+  text = text.replace(headingPattern, (_match, before, heading) => `${before === "." ? "." : ""}\n\n**${heading}:**\n`);
+
+  const stepsHeader = /\*\*Steps to take:\*\*[ \t]*\n?/i.exec(text);
+  if (stepsHeader) {
+    const start = stepsHeader.index + stepsHeader[0].length;
+    const steps = text.slice(start)
+      .replace(/([.!?])\s*(\d{1,2}\.\s+(?=\())/g, "$1\n$2")
+      .replace(/\s+(\d{1,2}\.\s+(?=\(|[A-Z]))/g, "\n$1");
+    text = `${text.slice(0, start)}${steps}`;
+  }
+  return text.replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function readBalanced(text, start, open = "(", close = ")") {
   if (text[start] !== open) return null;
   let depth = 0;
@@ -184,7 +208,7 @@ function lineSegments(line) {
 
 export function splitTextbookMath(value) {
   const mathTokens = [];
-  const normalizedValue = String(value || "")
+  const normalizedValue = normalizeTextbookLayout(value)
     .replace(/\\begin\s*aligned/g, "\\begin{aligned}")
     .replace(/\\end\s*aligned/g, "\\end{aligned}")
     .replace(/\\(\d+(?:\.\d+)?pt\])/g, "\\\\[$1")
@@ -245,13 +269,14 @@ export function ensureMathJax() {
     window.MathJax = {
       tex: { inlineMath: [["\\(", "\\)"], ["$", "$"]], displayMath: [["\\[", "\\]"], ["$$", "$$"]] },
       options: { skipHtmlTags: ["script", "noscript", "style", "textarea", "pre", "code"] },
-      svg: { fontCache: "local" },
+      output: { displayOverflow: "linebreak", linebreaks: { inline: true, width: "100%" } },
+      svg: { fontCache: "local", linebreaks: { inline: true, width: "100%" } },
     };
   }
   if (!mathJaxLoadPromise) {
     mathJaxLoadPromise = new Promise((resolve) => {
       const script = document.createElement("script");
-      script.src = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-svg.js";
+      script.src = "https://cdn.jsdelivr.net/npm/mathjax@4/tex-svg.js";
       script.async = true;
       script.onload = () => resolve(window.MathJax?.typesetPromise ? window.MathJax : null);
       script.onerror = () => resolve(null);
@@ -267,14 +292,90 @@ function escapeHtml(value) {
   }[character]));
 }
 
+function fallbackMathText(value) {
+  let text = String(value || "")
+    .replace(/\\begin\{(?:aligned|gathered|array)\}/g, "")
+    .replace(/\\end\{(?:aligned|gathered|array)\}/g, "")
+    .replace(/\\\\(?:\[[^\]]*\])?/g, "\n")
+    .replace(/\\(?:left|right)\b/g, "")
+    .replace(/\\[,;!]/g, " ")
+    .replace(/\\(?:quad|qquad)\b/g, " ")
+    .replace(/\\(?:dfrac|tfrac|frac)\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "($1)/($2)");
+  for (let pass = 0; pass < 5; pass += 1) {
+    const next = text.replace(/\\(?:dfrac|tfrac|frac)\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, "($1)/($2)");
+    if (next === text) break;
+    text = next;
+  }
+  const superscript = { "0": "⁰", "1": "¹", "2": "²", "3": "³", "4": "⁴", "5": "⁵", "6": "⁶", "7": "⁷", "8": "⁸", "9": "⁹", "+": "⁺", "-": "⁻", "(": "⁽", ")": "⁾" };
+  const subscript = { "0": "₀", "1": "₁", "2": "₂", "3": "₃", "4": "₄", "5": "₅", "6": "₆", "7": "₇", "8": "₈", "9": "₉", "+": "₊", "-": "₋", "i": "ᵢ", "n": "ₙ" };
+  text = text
+    .replace(/\^\{([^{}]+)\}/g, (_match, script) => [...script].map((character) => superscript[character] || character).join(""))
+    .replace(/_\{([^{}]+)\}/g, (_match, script) => [...script].map((character) => subscript[character] || character).join(""))
+    .replace(/\^([0-9+-]+)/g, (_match, script) => [...script].map((character) => superscript[character] || character).join(""))
+    .replace(/_([0-9]+)/g, (_match, script) => [...script].map((character) => subscript[character] || character).join(""))
+    .replace(/\\(?:text|mathrm|mathbf|operatorname)\s*\{([^{}]*)\}/g, "$1")
+    .replace(/\\(?:Rightarrow|Longrightarrow)\b/g, " ⇒ ").replace(/\\(?:Leftrightarrow|Longleftrightarrow)\b/g, " ⇔ ").replace(/\\(?:to|mapsto)\b/g, " → ")
+    .replace(/\\(?:neq|ne)\b/g, " ≠ ").replace(/\\(?:leq|le)\b/g, " ≤ ").replace(/\\(?:geq|ge)\b/g, " ≥ ").replace(/\\approx\b/g, " ≈ ")
+    .replace(/\\pm\b/g, " ± ").replace(/\\times\b/g, " × ").replace(/\\cdot\b/g, " · ").replace(/\\div\b/g, " ÷ ")
+    .replace(/\\sqrt\s*\{([^{}]*)\}/g, "√($1)").replace(/\\pi\b/g, "π").replace(/\\theta\b/g, "θ")
+    .replace(/\\(?:infty)\b/g, "∞").replace(/\\(?:angle)\b/g, "∠")
+    .replace(/\\(?:sin|cos|tan|log|ln|lim)\b/g, (_match) => _match.slice(1))
+    .replace(/\\[A-Za-z]+/g, "")
+    .replace(/[{}]/g, "")
+    .replace(/&/g, " ")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\s*([=<>+\-])\s*/g, " $1 ")
+    .replace(/\n{3,}/g, "\n\n");
+  return text.trim();
+}
+
+export function textbookMathFallbackText(value) {
+  return fallbackMathText(value);
+}
+
+function applyTextbookMarkup(target, markup) {
+  const paragraphs = markup.split(/\n\s*\n+/).map((block) => block.trim()).filter(Boolean);
+  target.innerHTML = paragraphs.map((block) => {
+    const lines = block.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+    if (!lines.length) return "";
+    const heading = lines[0].match(/^\*\*(.+?)\*\*:?$/);
+    if (heading) {
+      const title = `<strong class="textbook-response-heading">${escapeHtml(heading[1].replace(/:$/, ""))}</strong>`;
+      const rest = lines.slice(1).map((line) => escapeHtml(line).replace(/\*\*([\s\S]+?)\*\*/g, "<strong>$1</strong>")).join("<br>");
+      return `<span class="textbook-response-section">${title}${rest ? `<span class="textbook-response-content">${rest}</span>` : ""}</span>`;
+    }
+    if (lines.every((line) => /^(?:[-*•]|\d+[.)])\s+/.test(line))) {
+      const ordered = /^\d+[.)]/.test(lines[0]);
+      const items = lines.map((line, index) => {
+        const content = line.replace(/^(?:[-*•]|\d+[.)])\s+/, "");
+        return `<span class="textbook-response-list-item">${ordered ? `${index + 1}.` : "•"} ${escapeHtml(content).replace(/\*\*([\s\S]+?)\*\*/g, "<strong>$1</strong>")}</span>`;
+      }).join("");
+      return `<span class="textbook-response-list">${items}</span>`;
+    }
+    const safeLines = lines.map((line) => escapeHtml(line).replace(/\*\*([\s\S]+?)\*\*/g, "<strong>$1</strong>"));
+    return `<span class="textbook-response-paragraph">${safeLines.join("<br>")}</span>`;
+  }).join("");
+}
+
+function renderPlainMathFallback(target, markup) {
+  const plain = markup.replace(/\\\[([\s\S]*?)\\\]|\\\(([\s\S]*?)\\\)|\$\$([\s\S]*?)\$\$|\$([^$\n]+)\$/g,
+    (_match, display, inline, displayDollar, inlineDollar) => fallbackMathText(display ?? inline ?? displayDollar ?? inlineDollar));
+  applyTextbookMarkup(target, plain);
+  target.classList.add("textbook-math-fallback-active");
+}
+
 export function renderTextbookMath(target, value) {
   const markup = textbookMathMarkup(value);
   window.MathJax?.typesetClear?.([target]);
-  target.innerHTML = escapeHtml(markup).replace(/\r?\n/g, "<br>");
+  target.classList.remove("textbook-math-fallback-active");
+  applyTextbookMarkup(target, markup);
   if (!containsTextbookMath(markup)) return;
   ensureMathJax().then((mathJax) => {
-    if (!mathJax) return;
+    if (!mathJax) {
+      renderPlainMathFallback(target, markup);
+      return;
+    }
     mathJax.typesetClear?.([target]);
     return mathJax.typesetPromise([target]);
-  }).catch(() => {});
+  }).catch(() => renderPlainMathFallback(target, markup));
 }

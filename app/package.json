@@ -2,9 +2,10 @@
   "name": "sharpertime-web-app",
   "private": true,
   "scripts": {
-    "build": "npm run build:modern && npm run build:legacy",
+    "build": "npm run build:modern && npm run build:legacy && npm run stamp:release",
     "build:modern": "esbuild app.js --bundle --format=esm --target=es2020 --minify --outfile=app.bundle.js",
     "build:legacy": "esbuild app.js --bundle --format=iife --target=chrome60 --minify --outfile=legacy-app.js",
+    "stamp:release": "node stamp-release.mjs",
     "test": "node --test ../tests/realtime-tutor.test.mjs"
   },
   "devDependencies": {
